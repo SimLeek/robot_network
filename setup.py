@@ -1,47 +1,13 @@
 from setuptools import setup, find_packages
+from setuptools.command.install import install
+from setuptools.command.develop import develop
+from setuptools.command.egg_info import egg_info
 import os
 import subprocess
 import sys
-import distro
-def in_venv():
-    return sys.prefix != sys.base_prefix
 
-def is_arch():
-    return 'Arch' in distro.name()
-
-if is_arch() and not in_venv():
-    raise SystemError("Cannot pip install ZMQ with custom build options on a system level")
-
-def build_pyzmq():
-    # Check if the required environment variables are set
-    if 'ZMQ_PREFIX' not in os.environ:
-        os.environ['ZMQ_DRAFT_API'] = 'bundled'
-
-    # Set up draft API environment variables
-    os.environ['ZMQ_DRAFT_API'] = '1'
-
-    # Optional: Set rpath if needed (depends on installation)
-    if os.environ['ZMQ_DRAFT_API']!='bundled':
-        os.environ['LDFLAGS'] = f"{os.environ.get('LDFLAGS', '')} -Wl,-rpath,{os.environ['ZMQ_PREFIX']}/lib"
-
-    # Install pyzmq from source with draft support
-    try:
-        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-v', 'pyzmq', '--no-binary', 'pyzmq'])
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to install pyzmq: {e}")
-        sys.exit(1)
-
-def uninstall_zmq():
-    import subprocess
-    subprocess.check_call(["python", "-m", "pip", "uninstall", "-y", 'zmq'])
-
-try:
-    import zmq
-    if not zmq.has('draft'):
-        uninstall_zmq()
-        build_pyzmq()
-except ImportError:
-    build_pyzmq()
+if 'BUILT_FROM_SH' not in os.environ or not os.environ['BUILT_FROM_SH']:
+    raise SystemError("pip can't check for a valid ZMQ install. Install by running the install.sh file instead.")
 
 # Setup configuration for the package
 setup(
@@ -56,6 +22,5 @@ setup(
             'server=server:main',  # Assumes you have a main function in server.py
             'client=client:main',  # Assumes you have a main function in client.py
         ],
-    },
+    }
 )
-
