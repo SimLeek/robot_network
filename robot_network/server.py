@@ -17,11 +17,11 @@ dish = ctx.socket(zmq.DISH)
 dish.rcvtimeo = 1000  # Timeout for receiving messages
 
 # Bind the Dish socket to the UDP port and join a group
-dish.bind(f'udp://*:9998')  # Listen on all interfaces
+dish.bind(f'udp://239.0.0.1:9998')  # Listen on all interfaces
 dish.join('discovery')  # Join the multicast group for discovery
 
 # Connect the Radio socket to the same port (broadcast address)
-radio.connect(f'udp://192.168.0.*:9999')  # Multicast address for IPv6
+radio.connect(f'udp://239.0.0.1:9999')  # Multicast address for IPv6
 
 # Function to send a ping to all clients
 def send_ping():

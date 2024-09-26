@@ -18,11 +18,11 @@ dish = context.socket(zmq.DISH)
 dish.rcvtimeo = 1000
 
 # Bind the Dish socket to the UDP port and join the multicast group
-dish.bind(f'udp://*:9999')  # Listen on all interfaces
+dish.bind(f'udp://239.0.0.1:9999')  # Listen on all interfaces
 dish.join('discovery')  # Join the multicast group for discovery
 
 # Connect the Radio socket for sending responses to the server
-radio.connect(f'udp://192.168.0.*:9998')  # Multicast address for IPv6
+radio.connect(f'udp://239.0.0.1:9998')  # Multicast address for IPv6
 
 # Main loop for discovery and communication
 while True:
