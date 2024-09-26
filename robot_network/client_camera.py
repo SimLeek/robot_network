@@ -36,7 +36,6 @@ local_ip = get_local_ip()
 # Main loop for discovery and communication
 server_ip = None
 
-cam = camera.CameraPack()
 while True:
     try:
         # Try to receive a ping from the server
@@ -50,11 +49,10 @@ while True:
             print(f"Discovered server IP: {server_ip}")
 
         # Respond to the server with the client's IP address
-        #response_message = f"PING_RESPONSE from client: {local_ip}"
-        response_message = cam.get_packed_frame()
-        radio.send(response_message, group='discovery')
+        response_message = f"PING_RESPONSE from client: {local_ip}"
+        radio.send(response_message.encode('utf-8'), group='discovery')
         print(f"Responded: {response_message}")
-        time.sleep(1.0/120)  # limit 120 fps
+
         # After responding, break and prepare for direct communication
         break
     except zmq.Again:
@@ -66,7 +64,9 @@ radio.close()
 
 # Create new unicast sockets for direct communication
 unicast_radio = ctx.socket(zmq.RADIO)
+unicast_radio.setsockopt(zmq.LINGER, 0)
 unicast_dish = ctx.socket(zmq.DISH)
+unicast_dish.setsockopt(zmq.LINGER, 0)
 unicast_dish.rcvtimeo = 1000
 
 # Bind the client's unicast dish socket and connect the radio to the server's IP
@@ -76,7 +76,7 @@ unicast_radio.connect(f'udp://{server_ip}:9998')
 
 
 print(f"Starting unicast communication with server at {server_ip}...")
-
+cam = camera.CameraPack()
 while True:
     try:
         # Receive direct messages from the server
@@ -85,12 +85,21 @@ while True:
         print(f"Received direct message: {direct_message}")
     except zmq.Again:
         print('No direct message yet')
-        time.sleep(1)
+        #time.sleep(1)
 
     # Send direct messages to the server
-    direct_message = f"Direct message from client"
-    unicast_radio.send(direct_message.encode('utf-8'), group='direct')
-    print(f"Sent: {direct_message}")
+    direct_message = cam.get_packed_frame()
+    parts = []
+    for i in range(0,len(direct_message), 4096):
+        parts.append(direct_message[i:i+4096])
+    for p in parts[:-1]:
+        unicast_radio.send(b'm'+p, group='direct')  # send more doesn't work either I guess
+    unicast_radio.send(b'd'+parts[-1], group='direct')
+    #direct_message = f"Direct message from client"
+    #unicast_radio.send_multipart(parts, group='direct')
+    print(f"Sent frame")
+    time.sleep(1.0 / 120)  # limit 120 fps
+
 
 unicast_dish.close()
 unicast_radio.close()
