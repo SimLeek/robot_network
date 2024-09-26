@@ -5,24 +5,24 @@ import time
 
 # Constants
 INTERFACE = "wlp0s20f0u2"
-MULTICAST_GROUP = f'ff02::1%{INTERFACE}'  # Link-local all-nodes multicast address
+MULTICAST_GROUP = f'192.168.0.*'  # Link-local all-nodes multicast address
 PORT = 9999
 
 # Initialize ZeroMQ context and socket for receiving pings (multicast)
 context = zmq.Context()
 radio = context.socket(zmq.RADIO)
-radio.setsockopt( zmq.IPV6, True )
+#radio.setsockopt( zmq.IPV6, True )
 
 dish = context.socket(zmq.DISH)
-dish.setsockopt( zmq.IPV6, True )
+#dish.setsockopt( zmq.IPV6, True )
 dish.rcvtimeo = 1000
 
 # Bind the Dish socket to the UDP port and join the multicast group
-dish.bind(f'udp://[ff02::1%{INTERFACE}]:9999')  # Listen on all interfaces
+dish.bind(f'udp://*:9999')  # Listen on all interfaces
 dish.join('discovery')  # Join the multicast group for discovery
 
 # Connect the Radio socket for sending responses to the server
-radio.connect(f'udp://[ff02::1%{INTERFACE}]:9998')  # Multicast address for IPv6
+radio.connect(f'udp://192.168.0.*:9998')  # Multicast address for IPv6
 
 # Main loop for discovery and communication
 while True:
