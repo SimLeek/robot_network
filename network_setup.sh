@@ -24,7 +24,9 @@ enable_ipv6() {
 # Function to install and configure UFW firewall
 setup_firewall() {
     echo "Installing UFW (Uncomplicated Firewall)..."
-    sudo pacman -Syu ufw --noconfirm
+    if [[ "$(pacman -Qi ufw)" -eq 1 ]]; then
+      sudo pacman -Syu ufw --noconfirm
+    fi
 
     echo "Enabling UFW..."
     sudo systemctl enable ufw

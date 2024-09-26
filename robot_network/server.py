@@ -4,6 +4,8 @@ import zmq
 import time
 
 # Initialize ZeroMQ context
+INTERFACE = "wlp0s20f0u2"
+
 ctx = zmq.Context.instance()
 
 # Create a Radio socket to send discovery messages
@@ -15,11 +17,11 @@ dish.setsockopt( zmq.IPV6, True )
 dish.rcvtimeo = 1000  # Timeout for receiving messages
 
 # Bind the Dish socket to the UDP port and join a group
-dish.bind('udp://*:9998')  # Listen on all interfaces
+dish.bind(f'udp://[ff02::1%{INTERFACE}]:9998')  # Listen on all interfaces
 dish.join('discovery')  # Join the multicast group for discovery
 
 # Connect the Radio socket to the same port (broadcast address)
-radio.connect('udp://[ff02::1]:9999')  # Multicast address for IPv6
+radio.connect(f'udp://[ff02::1%{INTERFACE}]:9999')  # Multicast address for IPv6
 
 # Function to send a ping to all clients
 def send_ping():
