@@ -21,7 +21,7 @@ dish.bind('udp://*:9999')  # Listen on all interfaces
 dish.join('discovery')  # Join the multicast group for discovery
 
 # Connect the Radio socket for sending responses to the server
-radio.connect('udp://[ff02::1]:9999')  # Multicast address for IPv6
+radio.connect('udp://[ff02::1]:9998')  # Multicast address for IPv6
 
 # Main loop for discovery and communication
 while True:

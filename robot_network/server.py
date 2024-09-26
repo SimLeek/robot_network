@@ -15,7 +15,7 @@ dish.setsockopt( zmq.IPV6, True )
 dish.rcvtimeo = 1000  # Timeout for receiving messages
 
 # Bind the Dish socket to the UDP port and join a group
-dish.bind('udp://*:9999')  # Listen on all interfaces
+dish.bind('udp://*:9998')  # Listen on all interfaces
 dish.join('discovery')  # Join the multicast group for discovery
 
 # Connect the Radio socket to the same port (broadcast address)

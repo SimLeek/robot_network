@@ -34,6 +34,8 @@ setup_firewall() {
     echo "Allowing traffic on port 9999 (UDP and TCP)..."
     sudo ufw allow 9999/udp
     sudo ufw allow 9999/tcp
+    sudo ufw allow 9998/udp
+    sudo ufw allow 9998/tcp
 
     # Enable the firewall if it's not already enabled
     echo "Enabling the firewall..."
