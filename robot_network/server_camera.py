@@ -68,7 +68,11 @@ radio.close()
 
 # Create new unicast sockets for direct communication
 unicast_radio = ctx.socket(zmq.RADIO)
+unicast_radio.setsockopt(zmq.SNDBUF, 2**15)
+unicast_radio.setsockopt(zmq.LINGER, 0)
 unicast_dish = ctx.socket(zmq.DISH)
+unicast_dish.setsockopt(zmq.RCVBUF, 2**15)
+unicast_dish.setsockopt(zmq.LINGER, 0)
 unicast_dish.rcvtimeo = 1000
 
 # Bind the server's unicast dish socket and connect the radio to the client's IP
@@ -89,9 +93,19 @@ while True:
         try:
             # Receive direct messages from the client
             msg = unicast_dish.recv(copy=False)
+            msg_bytes = []
+            msg_bytes.append(msg.bytes[1:])
+            while msg.bytes[0]==ord(b'm'):  # snd more doesn't work for udp
+                msg = unicast_dish.recv(copy=False)
+                msg_bytes.append(msg.bytes[1:])
+            msg = b''.join(msg_bytes)
             width, height, jpg_bytes, test_variable = camera.CameraPack.unpack_frame(msg)
             img = camera.CameraPack.to_cv2_image(jpg_bytes)
-            cv2.imshow('Camera Stream', img)
+            try:
+                if img and img.size>0:
+                    cv2.imshow('Camera Stream', img)
+            except cv2.error as e:
+                print(f"OpenCV error: {e}")
             if cv2.waitKey(1) == 27:  # Press 'ESC' to exit
                 break
 
@@ -99,7 +113,7 @@ while True:
             print(f"Received direct message: {test_variable}")
         except zmq.Again:
             print('No direct message yet')
-            time.sleep(1)
+            time.sleep(1.0/120)
     except KeyboardInterrupt:
         break
 

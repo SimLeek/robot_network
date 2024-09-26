@@ -44,28 +44,38 @@ class CameraPack:
         # Start unpacking the data
         offset = 0
 
-        # Unpack width (4 bytes unsigned int)
-        width = struct.unpack_from('!I', packed_data, offset)[0]
-        offset += 4
+        try:
+            # Unpack width (4 bytes unsigned int)
+            width = struct.unpack_from('!I', packed_data, offset)[0]
+            offset += 4
 
-        # Unpack height (4 bytes unsigned int)
-        height = struct.unpack_from('!I', packed_data, offset)[0]
-        offset += 4
+            # Unpack height (4 bytes unsigned int)
+            height = struct.unpack_from('!I', packed_data, offset)[0]
+            offset += 4
+        except struct.error:
+            width=0
+            height=0
 
-        # Unpack frame length (8 bytes unsigned int)
-        frame_length = struct.unpack_from('!Q', packed_data, offset)[0]
-        offset += 8
+        try:
+            # Unpack frame length (8 bytes unsigned int)
+            frame_length = struct.unpack_from('!Q', packed_data, offset)[0]
+            offset += 8
 
-        # Unpack frame bytes
-        jpg_bytes = packed_data[offset:offset + frame_length]
-        offset += frame_length
+            # Unpack frame bytes
+            jpg_bytes = packed_data[offset:offset + frame_length]
+            offset += frame_length
+        except struct.error:
+            jpg_bytes = b''
 
-        # Unpack test variable length (8 bytes unsigned int)
-        test_var_length = struct.unpack_from('!Q', packed_data, offset)[0]
-        offset += 8
+        try:
+            # Unpack test variable length (8 bytes unsigned int)
+            test_var_length = struct.unpack_from('!Q', packed_data, offset)[0]
+            offset += 8
 
-        # Unpack test variable
-        test_variable = packed_data[offset:offset + test_var_length]
+            # Unpack test variable
+            test_variable = packed_data[offset:offset + test_var_length]
+        except (struct.error, OverflowError):
+            test_variable = b''
 
         return width, height, jpg_bytes, test_variable
 
