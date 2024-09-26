@@ -1,30 +1,40 @@
-# b.py: Response script that listens and responds to pings from peers using IPv6 multicast
-
 import zmq
 import time
+import socket
 
-# Constants
-INTERFACE = "wlp0s20f0u2"
-MULTICAST_GROUP = f'192.168.0.*'  # Link-local all-nodes multicast address
-PORT = 9999
 
-# Initialize ZeroMQ context and socket for receiving pings (multicast)
-context = zmq.Context()
-radio = context.socket(zmq.RADIO)
-#radio.setsockopt( zmq.IPV6, True )
+# Get the local IPv4 address of the client
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # Connect to a remote server to get the local IP (this won't actually send data)
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    finally:
+        s.close()
 
-dish = context.socket(zmq.DISH)
-#dish.setsockopt( zmq.IPV6, True )
+
+# Initialize ZeroMQ context
+ctx = zmq.Context()
+
+# Create a Radio socket to send responses to the server
+radio = ctx.socket(zmq.RADIO)
+# Create a Dish socket to listen for pings from the server
+dish = ctx.socket(zmq.DISH)
 dish.rcvtimeo = 1000
 
 # Bind the Dish socket to the UDP port and join the multicast group
-dish.bind(f'udp://239.0.0.1:9999')  # Listen on all interfaces
+dish.bind(f'udp://239.0.0.1:9999')  # Listen on multicast group
 dish.join('discovery')  # Join the multicast group for discovery
 
 # Connect the Radio socket for sending responses to the server
-radio.connect(f'udp://239.0.0.1:9998')  # Multicast address for IPv6
+radio.connect(f'udp://239.0.0.1:9998')
+
+# Get the local IPv4 address of the client
+local_ip = get_local_ip()
 
 # Main loop for discovery and communication
+server_ip = None
 while True:
     try:
         # Try to receive a ping from the server
@@ -32,8 +42,13 @@ while True:
         server_message = msg.bytes.decode('utf-8')
         print(f"Received {msg.group}: {server_message}")
 
-        # Respond to the server after receiving a ping
-        response_message = f"PING_RESPONSE from client"
+        # Parse the server's IP address from the ping message
+        if "PING from server" in server_message:
+            server_ip = server_message.split(":")[-1].strip()
+            print(f"Discovered server IP: {server_ip}")
+
+        # Respond to the server with the client's IP address
+        response_message = f"PING_RESPONSE from client: {local_ip}"
         radio.send(response_message.encode('utf-8'), group='discovery')
         print(f"Responded: {response_message}")
 
@@ -42,20 +57,38 @@ while True:
     except zmq.Again:
         print('No ping received from server')
 
-# Direct communication after discovery
-print(f"Server discovered, starting direct communication...")
-dish.join('direct')
+# Close the multicast sockets
+dish.close()
+radio.close()
+
+# Create new unicast sockets for direct communication
+unicast_radio = ctx.socket(zmq.RADIO)
+unicast_dish = ctx.socket(zmq.DISH)
+unicast_dish.rcvtimeo = 1000
+
+# Bind the client's unicast dish socket and connect the radio to the server's IP
+unicast_dish.bind(f'udp://*:9999')
+unicast_dish.join('direct')
+unicast_radio.connect(f'udp://{server_ip}:9998')
+
+
+print(f"Starting unicast communication with server at {server_ip}...")
 
 while True:
     try:
-        # Listen for direct messages from the server
-        msg = dish.recv(copy=False)
+        # Receive direct messages from the server
+        msg = unicast_dish.recv(copy=False)
         direct_message = msg.bytes.decode('utf-8')
         print(f"Received direct message: {direct_message}")
     except zmq.Again:
         print('No direct message yet')
         time.sleep(1)
 
-dish.close()
-radio.close()
+    # Send direct messages to the server
+    direct_message = f"Direct message from client"
+    unicast_radio.send(direct_message.encode('utf-8'), group='direct')
+    print(f"Sent: {direct_message}")
+
+unicast_dish.close()
+unicast_radio.close()
 ctx.term()
