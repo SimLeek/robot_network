@@ -5,7 +5,7 @@ import camera
 import cv2
 import subprocess
 import pathlib
-
+import os
 current_path = pathlib.Path(__file__).parent.resolve()
 
 def get_local_ip():
@@ -86,61 +86,127 @@ def set_hotspot(wifi_obj:WifiSetupInfo, use_nmcli=True):
     if use_nmcli:
         try:
             result = subprocess.run("nmcli --get-values GENERAL.DEVICE,GENERAL.TYPE device show | sed '/^wifi/!{h;d;};x'", shell=True, check=True, capture_output=True, text=True)
-            devices = result.stdout.split('\n')
+            devices = list(filter(None, result.stdout.split('\n')))
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Getting wifi devices with nmcli failed: {e.stderr}")
 
-        try:
-            result = subprocess.run(f'nmcli device modify {devices[-1]}/ ipv4.address {wifi_obj.server_ip} ipv4.method manual', shell=True, check=True, capture_output=True, text=True)
+        '''try:
+            result = subprocess.run(f'nmcli device modify {devices[0]} ipv4.address {wifi_obj.server_ip} ipv4.method manual', shell=True, check=True, capture_output=True, text=True)
             print(result.stdout)
         except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Could not set wifi ip: {e.stderr}")
+            raise RuntimeError(f"Could not set wifi ip: {e.stderr}")'''
+
+        '''try:
+            result = subprocess.run(f'nmcli radio wifi off ifname {devices[0]}', shell=True, check=True, capture_output=True, text=True)
+            print(result.stdout)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Could not set wifi ip: {e.stderr}")'''
     else:
         try:
-            result = subprocess.run(f'ifconfig {devices[-1]} down', shell=True, check=True, capture_output=True, text=True)
+            result = subprocess.run(f'ifconfig {devices[0]} down', shell=True, check=True, capture_output=True, text=True)
             print(result.stdout)
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Could not bring down wifi device: {e.stderr}")
 
         try:
-            result = subprocess.run(f'ifconfig {devices[-1]} {wifi_obj.server_ip}/24', shell=True, check=True, capture_output=True, text=True)
+            result = subprocess.run(f'ifconfig {devices[0]} {wifi_obj.server_ip}/24', shell=True, check=True, capture_output=True, text=True)
             print(result.stdout)
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Could not set fixed ip for wifi device: {e.stderr}")
 
         try:
-            result = subprocess.run(f'ifconfig {devices[-1]} up', shell=True, check=True, capture_output=True, text=True)
+            result = subprocess.run(f'ifconfig {devices[0]} up', shell=True, check=True, capture_output=True, text=True)
             print(result.stdout)
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Could not bring up wifi device: {e.stderr}")
 
     try:
-        result = subprocess.run(f'sudo lnxrouter -n --ap {devices[-1]} {wifi_obj.ssid} -p {wifi_obj.password}', shell=True, check=True, capture_output=True, text=True)
+        command = f"nmcli device wifi hotspot ifname {devices[0]} ssid {wifi_obj.ssid} password {wifi_obj.password}"
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
         print(result.stdout)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Setting wifi to access point failed: {e.stderr}")
 
+    try:
+        command = f"nmcli dev set {devices[0]} managed no"
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"nmcli could not stop managing the wifi device: {e.stderr}")
+
+    try:
+        command = f"iw dev | grep -Po '^\sInterface\s\K.*$'"
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        result = None
+
+
+    if result is not None and 'ah0' not in result.stdout:
+        try:
+            command = f"iw phy phy0 interface add ah0 type ibss"
+            result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+            print(result.stdout)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"ncould not create iw ibss: {e.stderr}")
+
+    try:
+        command = f"ifconfig {devices[0]} down"
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"could not join ibss: {e.stderr}")
+
+    try:
+        command = f"ifconfig ah0 up"
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"could not join ibss: {e.stderr}")
+
+    try:
+        command = f"iw dev {devices[0]} ibss join {wifi_obj.ssid}"
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"could not join ibss: {e.stderr}")
+
 
 def unset_hotspot(use_nmcli=True):
     try:
-        result = subprocess.run(f'sudo lnxrouter --stop 0', shell=True, check=True, capture_output=True, text=True)
+        command = f"iw dev ah0 ibss leave"
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
         print(result.stdout)
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Could not stop lnxrouter: {e.stderr}")
+        raise RuntimeError(f"could not join ibss: {e.stderr}")
+
+    try:
+        command = f"ifconfig ah0 down"
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"could not join ibss: {e.stderr}")
 
     if use_nmcli:
         try:
             result = subprocess.run("nmcli --get-values GENERAL.DEVICE,GENERAL.TYPE device show | sed '/^wifi/!{h;d;};x'", shell=True, check=True, capture_output=True, text=True)
-            devices = result.stdout.split('\n')
+            devices = list(filter(None, result.stdout.split('\n')))
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Getting wifi devices with nmcli failed: {e.stderr}")
 
-        # go back to dhcp
         try:
-            result = subprocess.run(f'nmcli device modify {devices[-1]}/ ipv4.address "" ipv4.method auto', shell=True, check=True, capture_output=True, text=True)
+            command = f"ifconfig {devices[0]} up"
+            result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
             print(result.stdout)
         except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Could not set wifi ip: {e.stderr}")
+            raise RuntimeError(f"could not join ibss: {e.stderr}")
+
+        try:
+            command = f"nmcli dev set {devices[0]} managed yes"
+            result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+            print(result.stdout)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"nmcli could not start managing the wifi device: {e.stderr}")
 
 
 def unicast_communication(ctx, local_ip, client_ip):
@@ -215,16 +281,21 @@ def run_server():
     dish.close()
     radio.close()
 
-    wifi_obj = WifiSetupInfo("robot_wifi", local_ip, client_ip)
+    wifi_obj = WifiSetupInfo("robot_wifi", "192.168.2.1", "192.168.2.2")
 
     lazy_pirate_send_con_info(ctx, wifi_obj, local_ip, client_ip)
 
-    set_hotspot(wifi_obj)
+    hotspot_process = None
+    try:
+        hotspot_process = set_hotspot(wifi_obj)
 
-    unicast_communication(ctx, wifi_obj.server_ip, wifi_obj.client_ip)
-
-    unset_hotspot()
-    ctx.term()
+        unicast_communication(ctx, wifi_obj.server_ip, wifi_obj.client_ip)
+    finally:
+        if hotspot_process is not None:
+            hotspot_process.terminate()
+            #hotspot_process.kill()
+        unset_hotspot()
+        ctx.term()
 
 
 if __name__ == "__main__":
