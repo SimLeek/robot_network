@@ -120,7 +120,7 @@ def set_hotspot(wifi_obj:WifiSetupInfo, use_nmcli=True):
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Could not bring up wifi device: {e.stderr}")
 
-    try:
+    '''try:
         command = f"nmcli device wifi hotspot ifname {devices[0]} ssid {wifi_obj.ssid} password {wifi_obj.password}"
         result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
         print(result.stdout)
@@ -132,74 +132,42 @@ def set_hotspot(wifi_obj:WifiSetupInfo, use_nmcli=True):
         result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
         print(result.stdout)
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"nmcli could not stop managing the wifi device: {e.stderr}")
+        raise RuntimeError(f"nmcli could not stop managing the wifi device: {e.stderr}")'''
+
+    prefix=24
 
     try:
-        command = f"iw dev | grep -Po '^\sInterface\s\K.*$'"
-        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-        print(result.stdout)
-    except subprocess.CalledProcessError as e:
-        result = None
-
-
-    if result is not None and 'ah0' not in result.stdout:
-        try:
-            command = f"iw phy phy0 interface add ah0 type ibss"
+        if result is not None and result.stdout:
+            commands = [f"nmcli con delete {wifi_obj.ssid}"]
+        else:
+            commands = []
+        commands.extend([
+            f"nmcli con add type wifi ifname {devices[0]} con-name {wifi_obj.ssid} autoconnect yes ssid {wifi_obj.ssid}",
+            f"nmcli con modify {wifi_obj.ssid} 802-11-wireless.mode adhoc ipv4.addresses {wifi_obj.server_ip}/{prefix} ipv4.method manual ipv6.method ignore",
+            #f"nmcli con modify {wifi_obj.ssid} 802-11-wireless-security.key-mgmt none",  # No security (open network)
+            # f"nmcli con modify {wifi_obj.ssid} 802-11-wireless.channel 6", # Set a specific channel to avoid auto-selection issues
+            #f"nmcli con modify {wifi_obj.ssid} wifi-sec.key-mgmt wpa-psk",
+            #f"nmcli con modify {wifi_obj.ssid} wifi-sec.pmf disable",
+            #f"nmcli con modify {wifi_obj.ssid} 802-11-wireless-security.pairwise ccmp",
+            #f"nmcli con modify {wifi_obj.ssid} 802-11-wireless-security.group ccmp",
+            #f"nmcli con modify {wifi_obj.ssid} 802-11-wireless-security.proto rsn",
+            #f"nmcli con modify {wifi_obj.ssid} wifi-sec.psk {wifi_obj.password}",
+            f"nmcli con up {wifi_obj.ssid}",
+        ])
+        for command in commands:
             result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
             print(result.stdout)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"ncould not create iw ibss: {e.stderr}")
-
-    try:
-        command = f"ifconfig {devices[0]} down"
-        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-        print(result.stdout)
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"could not join ibss: {e.stderr}")
-
-    try:
-        command = f"ifconfig ah0 up"
-        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-        print(result.stdout)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"could not join ibss: {e.stderr}")
-
-    try:
-        command = f"iw dev {devices[0]} ibss join {wifi_obj.ssid}"
-        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-        print(result.stdout)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"could not join ibss: {e.stderr}")
+        raise RuntimeError(f"Setting wifi to access point failed: {e.stderr}")
 
 
 def unset_hotspot(use_nmcli=True):
-    try:
-        command = f"iw dev ah0 ibss leave"
-        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-        print(result.stdout)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"could not join ibss: {e.stderr}")
-
-    try:
-        command = f"ifconfig ah0 down"
-        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-        print(result.stdout)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"could not join ibss: {e.stderr}")
-
     if use_nmcli:
         try:
             result = subprocess.run("nmcli --get-values GENERAL.DEVICE,GENERAL.TYPE device show | sed '/^wifi/!{h;d;};x'", shell=True, check=True, capture_output=True, text=True)
             devices = list(filter(None, result.stdout.split('\n')))
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Getting wifi devices with nmcli failed: {e.stderr}")
-
-        try:
-            command = f"ifconfig {devices[0]} up"
-            result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-            print(result.stdout)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"could not join ibss: {e.stderr}")
 
         try:
             command = f"nmcli dev set {devices[0]} managed yes"
