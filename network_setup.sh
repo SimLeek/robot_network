@@ -25,7 +25,22 @@ enable_ipv6() {
 setup_firewall() {
     echo "Installing UFW (Uncomplicated Firewall)..."
     if [[ "$(pacman -Qi ufw)" -eq 1 ]]; then
-      sudo pacman -Syu ufw --noconfirm
+      sudo pacman -S ufw --noconfirm
+    fi
+    if [[ "$(pacman -Qi procps)" -eq 1 ]]; then
+      sudo pacman -S procps --noconfirm
+    fi
+    if [[ "$(pacman -Qi iproute2)" -eq 1 ]]; then
+      sudo pacman -S iproute2 --noconfirm
+    fi
+    if [[ "$(pacman -Qi dnsmasq)" -eq 1 ]]; then
+      sudo pacman -S dnsmasq --noconfirm
+    fi
+    if [[ "$(pacman -Qi iptables)" -eq 1 ]]; then
+      sudo pacman -S iptables --noconfirm
+    fi
+    if [[ "$(pacman -Qi iw)" -eq 1 ]]; then
+      sudo pacman -S iw --noconfirm
     fi
 
     echo "Enabling UFW..."

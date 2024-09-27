@@ -51,26 +51,29 @@ def unicast_communication(ctx, local_ip, server_ip):
     cam = camera.CameraPack()
     while True:
         try:
-            # Receive direct messages from the server
-            msg = unicast_dish.recv(copy=False)
-            direct_message = msg.bytes.decode('utf-8')
-            print(f"Received direct message: {direct_message}")
-        except zmq.Again:
-            print('No direct message yet')
-            #time.sleep(1)
+            try:
+                # Receive direct messages from the server
+                msg = unicast_dish.recv(copy=False)
+                direct_message = msg.bytes.decode('utf-8')
+                print(f"Received direct message: {direct_message}")
+            except zmq.Again:
+                print('No direct message yet')
+                #time.sleep(1)
 
-        # Send direct messages to the server
-        direct_message = cam.get_packed_frame()
-        parts = []
-        for i in range(0,len(direct_message), 4096):
-            parts.append(direct_message[i:i+4096])
-        for p in parts[:-1]:
-            unicast_radio.send(b'm'+p, group='direct')  # send more doesn't work either I guess
-        unicast_radio.send(b'd'+parts[-1], group='direct')
-        #direct_message = f"Direct message from client"
-        #unicast_radio.send_multipart(parts, group='direct')
-        print(f"Sent frame")
-        time.sleep(1.0 / 120)  # limit 120 fps
+            # Send direct messages to the server
+            direct_message = cam.get_packed_frame()
+            parts = []
+            for i in range(0,len(direct_message), 4096):
+                parts.append(direct_message[i:i+4096])
+            for p in parts[:-1]:
+                unicast_radio.send(b'm'+p, group='direct')  # send more doesn't work either I guess
+            unicast_radio.send(b'd'+parts[-1], group='direct')
+            #direct_message = f"Direct message from client"
+            #unicast_radio.send_multipart(parts, group='direct')
+            print(f"Sent frame")
+            time.sleep(1.0 / 120)  # limit 120 fps
+        except KeyboardInterrupt:
+            break
 
 
     unicast_dish.close()
