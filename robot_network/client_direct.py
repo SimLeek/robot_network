@@ -100,31 +100,51 @@ def connect_hotspot(wifi_obj, use_nmcli=True):
             result = subprocess.run(
                 "nmcli --get-values GENERAL.DEVICE,GENERAL.TYPE device show | sed '/^wifi/!{h;d;};x'", shell=True,
                 check=True, capture_output=True, text=True)
-            devices = result.stdout.split('\n')
+            devices = list(filter(None, result.stdout.split('\n')))
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Getting wifi devices with nmcli failed: {e.stderr}")
 
-        try:
-            result = subprocess.run(f'nmcli device modify {devices[-1]}/ ipv4.address {wifi_obj.client_ip} ipv4.method manual', shell=True, check=True, capture_output=True, text=True)
+        '''try:
+            result = subprocess.run(f'nmcli device modify {devices[0]} ipv4.address {wifi_obj.client_ip} ipv4.method manual', shell=True, check=True, capture_output=True, text=True)
             print(result.stdout)
         except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Could not set wifi ip: {e.stderr}")
+            raise RuntimeError(f"Could not set wifi ip: {e.stderr}")'''
+
+        '''try:
+            while True:
+                result = subprocess.run(f"nmcli -t -f SSID device wifi list ifname {devices[0]}", shell=True, check=True, capture_output=True, text=True)
+                print(f"Scan results:\n{result.stdout}")
+                if wifi_obj.ssid in result.stdout:
+                    break
+                time.sleep(0.5)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Could not list wifi access points: {e.stderr}")'''
 
         try:
-            while True:
-                result = subprocess.run(f"nmcli -t -f SSID device wifi list ifname {devices[-1]}", shell=True, check=True, capture_output=True, text=True)
-                if wifi_obj.ssid in result:
-                    break
+            command = f"nmcli connection show | grep {wifi_obj.ssid}"
+            result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+            print(result.stdout)
         except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Could not list wifi access points: {e.stderr}")
+            result = None  # empty grep
+
+        prefix = 24
 
         try:
-            while True:
-                result = subprocess.run(f"nmcli device wifi connect {wifi_obj.ssid} password {wifi_obj.password} ifname {devices[-1]}", shell=True, check=True, capture_output=True, text=True)
-                if wifi_obj.ssid in result:
-                    break
+            if result is not None and result.stdout:
+                commands = [f"nmcli con delete {wifi_obj.ssid}"]
+            else:
+                commands = []
+            commands.extend([
+                f"nmcli con add type wifi ifname {devices[0]} con-name {wifi_obj.ssid} autoconnect yes ssid {wifi_obj.ssid}",
+                f"nmcli con modify {wifi_obj.ssid} 802-11-wireless.mode adhoc ipv4.addresses {wifi_obj.client_ip}/{prefix} ipv4.method manual ipv6.method ignore",
+                f"nmcli con up {wifi_obj.ssid}"
+            ])
+            for command in commands:
+                result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+                print(result.stdout)
         except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Could not connect to robot wifi server: {e.stderr}")
+            raise RuntimeError(f"Connecting to the robot ad hoc server failed: {e.stderr}")
+
     else:
         raise NotImplementedError('nmcli only for now')
 
@@ -132,13 +152,13 @@ def unset_hotspot(use_nmcli=True):
     if use_nmcli:
         try:
             result = subprocess.run("nmcli --get-values GENERAL.DEVICE,GENERAL.TYPE device show | sed '/^wifi/!{h;d;};x'", shell=True, check=True, capture_output=True, text=True)
-            devices = result.stdout.split('\n')
+            devices = list(filter(None, result.stdout.split('\n')))
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Getting wifi devices with nmcli failed: {e.stderr}")
 
         # go back to dhcp
         try:
-            result = subprocess.run(f'nmcli device modify {devices[-1]}/ ipv4.address "" ipv4.method auto', shell=True, check=True, capture_output=True, text=True)
+            result = subprocess.run(f'nmcli device modify {devices[0]} ipv4.address "" ipv4.method auto', shell=True, check=True, capture_output=True, text=True)
             print(result.stdout)
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Could not set wifi ip: {e.stderr}")
@@ -207,12 +227,14 @@ def run_client():
 
     wifi_obj = lazy_pirate_recv_con_info(ctx, local_ip, server_ip)
 
-    connect_hotspot(wifi_obj)
+    try:
+        connect_hotspot(wifi_obj)
 
-    unicast_communication(ctx, wifi_obj.client_ip, wifi_obj.server_ip)
+        unicast_communication(ctx, wifi_obj.client_ip, wifi_obj.server_ip)
 
-    unset_hotspot()
-    ctx.term()
+    finally:
+        unset_hotspot()
+        ctx.term()
 
 if __name__ == '__main__':
     run_client()
