@@ -5,8 +5,10 @@ import camera
 import cv2
 import subprocess
 import pathlib
-import os
-current_path = pathlib.Path(__file__).parent.resolve()
+import struct
+
+file_path = pathlib.Path(__file__).parent.resolve()
+
 
 def get_local_ip():
     """Get the local IPv4 address of the server."""
@@ -18,9 +20,16 @@ def get_local_ip():
         s.close()
 
 
-def discovery_phase(radio, dish, local_ip):
+def discovery_phase(ctx, local_ip):
     """Send pings to clients and discover their IP address."""
-    client_ip = None
+    radio = ctx.socket(zmq.RADIO)
+    dish = ctx.socket(zmq.DISH)
+    dish.rcvtimeo = 1000
+
+    dish.bind("udp://239.0.0.1:9998")
+    dish.join("discovery")
+    radio.connect("udp://239.0.0.1:9999")
+
     while True:
         message = f"PING from server: {local_ip}"
         radio.send(message.encode("utf-8"), group="discovery")
@@ -35,11 +44,18 @@ def discovery_phase(radio, dish, local_ip):
             if "PING_RESPONSE from client" in client_message:
                 client_ip = client_message.split(":")[-1].strip()
                 print(f"Discovered client IP: {client_ip}")
-                return client_ip
+                break
         except zmq.Again:
             print("No client response yet")
 
+    dish.close()
+    radio.close()
+
+    return client_ip
+
+
 class WifiSetupInfo:
+    """Wifi info buffer object. Needs to be the same on both sides."""
     def __init__(self, ssid, server_ip, client_ip):
         self.ssid = ssid
         self.server_ip = server_ip
@@ -49,12 +65,11 @@ class WifiSetupInfo:
         #  https://cryptography.io/en/latest/hazmat/primitives/asymmetric/ec/#cryptography.hazmat.primitives.asymmetric.ec.ECDH
 
 
-import struct
 def pack_obj(obj):
+    """Pack any object into a byte string for sending over a network."""
     class_name = obj.__class__.__name__
     obj_dict = obj.__dict__
 
-    # Prepare the message
     message = struct.pack('!I', len(class_name))
     message += class_name.encode('utf-8')
     for key, value in obj_dict.items():
@@ -65,8 +80,8 @@ def pack_obj(obj):
         message += struct.pack('!I', len(value_encoded))
         message += value_encoded
 
-    # Send the entire message at once
     return message
+
 
 def lazy_pirate_send_con_info(ctx, obj, local_ip, client_ip):
     """Lazy pirate server pattern sending direct connection info."""
@@ -81,60 +96,39 @@ def lazy_pirate_send_con_info(ctx, obj, local_ip, client_ip):
 
     server.close()
 
-def set_hotspot(wifi_obj:WifiSetupInfo, use_nmcli=True):
-    devices = []
-    if use_nmcli:
-        try:
-            result = subprocess.run("nmcli --get-values GENERAL.DEVICE,GENERAL.TYPE device show | sed '/^wifi/!{h;d;};x'", shell=True, check=True, capture_output=True, text=True)
-            devices = list(filter(None, result.stdout.split('\n')))
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Getting wifi devices with nmcli failed: {e.stderr}")
 
-        '''try:
-            result = subprocess.run(f'nmcli device modify {devices[0]} ipv4.address {wifi_obj.server_ip} ipv4.method manual', shell=True, check=True, capture_output=True, text=True)
-            print(result.stdout)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Could not set wifi ip: {e.stderr}")'''
-
-        '''try:
-            result = subprocess.run(f'nmcli radio wifi off ifname {devices[0]}', shell=True, check=True, capture_output=True, text=True)
-            print(result.stdout)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Could not set wifi ip: {e.stderr}")'''
-    else:
-        try:
-            result = subprocess.run(f'ifconfig {devices[0]} down', shell=True, check=True, capture_output=True, text=True)
-            print(result.stdout)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Could not bring down wifi device: {e.stderr}")
-
-        try:
-            result = subprocess.run(f'ifconfig {devices[0]} {wifi_obj.server_ip}/24', shell=True, check=True, capture_output=True, text=True)
-            print(result.stdout)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Could not set fixed ip for wifi device: {e.stderr}")
-
-        try:
-            result = subprocess.run(f'ifconfig {devices[0]} up', shell=True, check=True, capture_output=True, text=True)
-            print(result.stdout)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Could not bring up wifi device: {e.stderr}")
-
-    '''try:
-        command = f"nmcli device wifi hotspot ifname {devices[0]} ssid {wifi_obj.ssid} password {wifi_obj.password}"
-        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-        print(result.stdout)
+def get_connection_info():
+    """Get wifi devices for ad hoc and current network for resetting on end."""
+    try:
+        result = subprocess.run(
+            "nmcli --get-values GENERAL.DEVICE,GENERAL.TYPE device show | sed '/^wifi/!{h;d;};x'", shell=True,
+            check=True, capture_output=True, text=True)
+        devices = list(filter(None, result.stdout.split('\n')))
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Setting wifi to access point failed: {e.stderr}")
+        raise RuntimeError(f"Getting wifi devices with nmcli failed: {e.stderr}")
 
     try:
-        command = f"nmcli dev set {devices[0]} managed no"
-        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-        print(result.stdout)
+        current_connection = subprocess.run(
+            f"nmcli -t -f GENERAL.CONNECTION device show {devices[0]} | grep -oP 'GENERAL.CONNECTION:\K\w+'", shell=True,
+            check=True, capture_output=True, text=True)
+        devices = list(filter(None, result.stdout.split('\n')))
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"nmcli could not stop managing the wifi device: {e.stderr}")'''
+        raise RuntimeError(f"Getting wifi devices with nmcli failed: {e.stderr}")
 
-    prefix=24
+    return devices, current_connection
+
+def set_hotspot(wifi_obj: WifiSetupInfo, devices):
+    """Set up an adhoc hotspot that matches the wifi_obj."""
+
+    try:
+        result = subprocess.run(
+            "nmcli -t -f connection.id con show {wifi_obj.ssid}", shell=True,
+            check=True, capture_output=True, text=True)
+        devices = list(filter(None, result.stdout.split('\n')))
+    except subprocess.CalledProcessError as _:
+        result = None  # connection doesn't exist returns exit code 10
+
+    prefix = 24
 
     try:
         if result is not None and result.stdout:
@@ -144,14 +138,6 @@ def set_hotspot(wifi_obj:WifiSetupInfo, use_nmcli=True):
         commands.extend([
             f"nmcli con add type wifi ifname {devices[0]} con-name {wifi_obj.ssid} autoconnect yes ssid {wifi_obj.ssid}",
             f"nmcli con modify {wifi_obj.ssid} 802-11-wireless.mode adhoc ipv4.addresses {wifi_obj.server_ip}/{prefix} ipv4.method manual ipv6.method ignore",
-            #f"nmcli con modify {wifi_obj.ssid} 802-11-wireless-security.key-mgmt none",  # No security (open network)
-            # f"nmcli con modify {wifi_obj.ssid} 802-11-wireless.channel 6", # Set a specific channel to avoid auto-selection issues
-            #f"nmcli con modify {wifi_obj.ssid} wifi-sec.key-mgmt wpa-psk",
-            #f"nmcli con modify {wifi_obj.ssid} wifi-sec.pmf disable",
-            #f"nmcli con modify {wifi_obj.ssid} 802-11-wireless-security.pairwise ccmp",
-            #f"nmcli con modify {wifi_obj.ssid} 802-11-wireless-security.group ccmp",
-            #f"nmcli con modify {wifi_obj.ssid} 802-11-wireless-security.proto rsn",
-            #f"nmcli con modify {wifi_obj.ssid} wifi-sec.psk {wifi_obj.password}",
             f"nmcli con up {wifi_obj.ssid}",
         ])
         for command in commands:
@@ -161,39 +147,23 @@ def set_hotspot(wifi_obj:WifiSetupInfo, use_nmcli=True):
         raise RuntimeError(f"Setting wifi to access point failed: {e.stderr}")
 
 
-def unset_hotspot(use_nmcli=True):
-    if use_nmcli:
-        try:
-            result = subprocess.run("nmcli --get-values GENERAL.DEVICE,GENERAL.TYPE device show | sed '/^wifi/!{h;d;};x'", shell=True, check=True, capture_output=True, text=True)
-            devices = list(filter(None, result.stdout.split('\n')))
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Getting wifi devices with nmcli failed: {e.stderr}")
+def unset_hotspot(devices, wifi_obj, prior_connection):
+    try:
+        command = f"nmcli con down {wifi_obj.ssid}"
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"nmcli could shut down the adhoc connection: {e.stderr}")
 
-        try:
-            command = f"nmcli dev set {devices[0]} managed yes"
-            result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-            print(result.stdout)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"nmcli could not start managing the wifi device: {e.stderr}")
+    try:
+        command = f"nmcli con up {prior_connection}"
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"nmcli could bring up the adhoc connection: {e.stderr}")
 
 
-def unicast_communication(ctx, local_ip, client_ip):
-    """Start unicast communication between server and client."""
-    unicast_radio = ctx.socket(zmq.RADIO)
-    unicast_radio.setsockopt(zmq.SNDBUF, 2**15)
-    unicast_radio.setsockopt(zmq.LINGER, 0)
-
-    unicast_dish = ctx.socket(zmq.DISH)
-    unicast_dish.setsockopt(zmq.RCVBUF, 2**15)
-    unicast_dish.setsockopt(zmq.LINGER, 0)
-    unicast_dish.rcvtimeo = 1000
-
-    unicast_dish.bind(f"udp://{local_ip}:9998")
-    unicast_dish.join("direct")
-    unicast_radio.connect(f"udp://{client_ip}:9999")
-
-    print(f"Starting unicast communication with client at {client_ip}...")
-
+def cv_communication(unicast_radio, unicast_dish):
     while True:
         try:
             direct_message = f"Direct message from server"
@@ -227,42 +197,47 @@ def unicast_communication(ctx, local_ip, client_ip):
         except KeyboardInterrupt:
             break
 
+def unicast_communication(ctx, local_ip, client_ip, callback_loop):
+    """Start unicast communication between server and client."""
+    unicast_radio = ctx.socket(zmq.RADIO)
+    unicast_radio.setsockopt(zmq.SNDBUF, 2 ** 15)
+    unicast_radio.setsockopt(zmq.LINGER, 0)
+
+    unicast_dish = ctx.socket(zmq.DISH)
+    unicast_dish.setsockopt(zmq.RCVBUF, 2 ** 15)
+    unicast_dish.setsockopt(zmq.LINGER, 0)
+    unicast_dish.rcvtimeo = 1000
+
+    unicast_dish.bind(f"udp://{local_ip}:9998")
+    unicast_dish.join("direct")
+    unicast_radio.connect(f"udp://{client_ip}:9999")
+
+    print(f"Starting unicast communication with client at {client_ip}...")
+
+    callback_loop(unicast_radio, unicast_dish)
+
     unicast_dish.close()
     unicast_radio.close()
 
-def run_server():
+
+def run_server(callback_loop=cv_communication):
     """Main function to run the server."""
     ctx = zmq.Context.instance()
 
-    # Discovery Phase
-    radio = ctx.socket(zmq.RADIO)
-    dish = ctx.socket(zmq.DISH)
-    dish.rcvtimeo = 1000
-
-    dish.bind("udp://239.0.0.1:9998")
-    dish.join("discovery")
-    radio.connect("udp://239.0.0.1:9999")
-
     local_ip = get_local_ip()
-    client_ip = discovery_phase(radio, dish, local_ip)
-
-    dish.close()
-    radio.close()
+    client_ip = discovery_phase(ctx, local_ip)
 
     wifi_obj = WifiSetupInfo("robot_wifi", "192.168.2.1", "192.168.2.2")
 
     lazy_pirate_send_con_info(ctx, wifi_obj, local_ip, client_ip)
 
-    hotspot_process = None
-    try:
-        hotspot_process = set_hotspot(wifi_obj)
+    devices, current_connection = get_connection_info()
 
-        unicast_communication(ctx, wifi_obj.server_ip, wifi_obj.client_ip)
+    try:
+        set_hotspot(wifi_obj, devices)
+        unicast_communication(ctx, wifi_obj.server_ip, wifi_obj.client_ip, callback_loop)
     finally:
-        if hotspot_process is not None:
-            hotspot_process.terminate()
-            #hotspot_process.kill()
-        unset_hotspot()
+        unset_hotspot(devices, wifi_obj, current_connection)
         ctx.term()
 
 
