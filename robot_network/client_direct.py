@@ -4,6 +4,9 @@ import socket
 import camera
 import subprocess
 
+from robot_network.buffers.buffer_handling import unpack_obj
+
+
 def get_local_ip():
     """Get the local IPv4 address of the client."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -38,32 +41,6 @@ def discovery_phase(radio, dish, local_ip):
             print('No ping received from server')
     return server_ip
 
-import struct
-def unpack_obj(message):
-    # Unpack the message
-    offset = 0
-    class_name_len = struct.unpack_from('!I', message, offset)[0]
-    offset += 4
-    class_name = message[offset:offset + class_name_len].decode('utf-8')
-    offset += class_name_len
-
-    obj_dict = {}
-    while offset < len(message):
-        key_len = struct.unpack_from('!I', message, offset)[0]
-        offset += 4
-        key = message[offset:offset + key_len].decode('utf-8')
-        offset += key_len
-        value_len = struct.unpack_from('!I', message, offset)[0]
-        offset += 4
-        value = message[offset:offset + value_len].decode('utf-8')
-        offset += value_len
-        obj_dict[key] = value
-
-    received_obj = type(class_name, (), {})()
-    for key, value in obj_dict.items():
-        setattr(received_obj, key, value)
-
-    return received_obj
 
 def lazy_pirate_recv_con_info(ctx, local_ip, server_ip, timeout=2500, retries=10):
     """Lazy pirate client pattern requesting direct connection info."""
