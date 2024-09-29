@@ -1,10 +1,5 @@
 from setuptools import setup, find_packages
-from setuptools.command.install import install
-from setuptools.command.develop import develop
-from setuptools.command.egg_info import egg_info
 import os
-import subprocess
-import sys
 
 if 'BUILT_FROM_SH' not in os.environ or not os.environ['BUILT_FROM_SH']:
     raise SystemError("pip can't check for a valid ZMQ install. Install by running the install.sh file instead.")

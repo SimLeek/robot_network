@@ -1,4 +1,4 @@
-from robot_network.buffers.buffer_objects import *  # needed for handling classes
+from robonet.buffers.buffer_objects import *  # needed for handling classes
 
 
 # Packing Function

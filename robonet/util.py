@@ -24,7 +24,7 @@ def get_connection_info():
 
     try:
         current_connection = subprocess.run(
-            f"nmcli -t -f GENERAL.CONNECTION device show {devices[0]} | grep -oP 'GENERAL.CONNECTION:\K\w+'",
+            f"nmcli -t -f GENERAL.CONNECTION device show {devices[0]} | grep -oP 'GENERAL.CONNECTION:\\K\\w+'",
             shell=True,
             check=True, capture_output=True, text=True)
         devices = list(filter(None, result.stdout.split('\n')))

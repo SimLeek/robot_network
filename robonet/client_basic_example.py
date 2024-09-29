@@ -74,20 +74,23 @@ unicast_radio.connect(f'udp://{server_ip}:9998')
 
 print(f"Starting unicast communication with server at {server_ip}...")
 
-while True:
-    try:
-        # Receive direct messages from the server
-        msg = unicast_dish.recv(copy=False)
-        direct_message = msg.bytes.decode('utf-8')
-        print(f"Received direct message: {direct_message}")
-    except zmq.Again:
-        print('No direct message yet')
-        time.sleep(1)
+try:
+    while True:
+        try:
+            # Receive direct messages from the server
+            msg = unicast_dish.recv(copy=False)
+            direct_message = msg.bytes.decode('utf-8')
+            print(f"Received direct message: {direct_message}")
+        except zmq.Again:
+            print('No direct message yet')
+            time.sleep(1)
 
-    # Send direct messages to the server
-    direct_message = f"Direct message from client"
-    unicast_radio.send(direct_message.encode('utf-8'), group='direct')
-    print(f"Sent: {direct_message}")
+        # Send direct messages to the server
+        direct_message = f"Direct message from client"
+        unicast_radio.send(direct_message.encode('utf-8'), group='direct')
+        print(f"Sent: {direct_message}")
+except KeyboardInterrupt:
+    pass
 
 unicast_dish.close()
 unicast_radio.close()

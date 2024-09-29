@@ -2,14 +2,17 @@ import time
 import struct
 import zmq
 
+
 class WifiSetupInfo:
     def __init__(self, ssid, server_ip, client_ip):
         self.ssid = ssid
         self.server_ip = server_ip
         self.client_ip = client_ip
 
+
 class TinyHandshakeStateMachine:
     """Handshake class for sending small objects without crc"""
+
     def __init__(self, radio, dish, timeout=10):
         self.radio = radio
         self.dish = dish
@@ -48,22 +51,22 @@ class TinyHandshakeStateMachine:
                     offset = 0
                     class_name_len = struct.unpack_from('!I', message, offset)[0]
                     offset += 4
-                    class_name = message[offset:offset+class_name_len].decode('utf-8')
+                    class_name = message[offset:offset + class_name_len].decode('utf-8')
                     offset += class_name_len
 
                     obj_dict = {}
                     while offset < len(message):
                         key_len = struct.unpack_from('!I', message, offset)[0]
                         offset += 4
-                        key = message[offset:offset+key_len].decode('utf-8')
+                        key = message[offset:offset + key_len].decode('utf-8')
                         offset += key_len
                         value_len = struct.unpack_from('!I', message, offset)[0]
                         offset += 4
-                        value = message[offset:offset+value_len].decode('utf-8')
+                        value = message[offset:offset + value_len].decode('utf-8')
                         offset += value_len
                         obj_dict[key] = value
 
-                    if offset!=len(message):  # offsets weren't correct or we receveid more data than we should've
+                    if offset != len(message):  # offsets weren't correct or we receveid more data than we should've
                         self.state = "SEND_NACK"
                     else:
                         # Create object
@@ -123,6 +126,7 @@ class TinyHandshakeStateMachine:
                     return
                 time.sleep(0.01)
 
+
 class ServerTinyHandshakeStateMachine(TinyHandshakeStateMachine):
     def __init__(self, radio, dish, obj, timeout=10):
         super().__init__(radio, dish, timeout)
@@ -152,6 +156,7 @@ class ServerTinyHandshakeStateMachine(TinyHandshakeStateMachine):
         elif self.state == "HANDSHAKE_COMPLETE":
             self.handshake_complete = True
 
+
 class ClientTinyHandshakeStateMachine(TinyHandshakeStateMachine):
     def transition(self):
         if self.state == "INIT":
@@ -169,11 +174,13 @@ class ClientTinyHandshakeStateMachine(TinyHandshakeStateMachine):
         elif self.state == "HANDSHAKE_COMPLETE":
             self.handshake_complete = True
 
+
 def run_handshake(state_machine):
     while not state_machine.handshake_complete:
         state_machine.transition()
         time.sleep(0.01)
     return state_machine.obj
+
 
 # Example usage
 if __name__ == '__main__':

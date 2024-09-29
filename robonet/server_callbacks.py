@@ -3,7 +3,7 @@ import time
 import cv2
 import zmq
 
-from robot_network import camera
+from robonet import camera
 
 
 def display_mjpg_cv(unicast_radio, unicast_dish):

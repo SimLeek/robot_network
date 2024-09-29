@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
-from robot_network.buffers.buffer_handling import pack_obj, unpack_obj
-from robot_network.buffers.buffer_objects import WifiSetupInfo, CamFrame, AudioBuffer, HumidityWaterBuffer, \
+from robonet.buffers.buffer_handling import pack_obj, unpack_obj
+from robonet.buffers.buffer_objects import WifiSetupInfo, CamFrame, AudioBuffer, HumidityWaterBuffer, \
     TemperatureMonitorBuffer, IMUBuffer, TensorBuffer
 
 
@@ -39,7 +39,7 @@ class TestBufferObjects(unittest.TestCase):
         self.assertEqual(original.sample_rate, unpacked.sample_rate)
 
     def test_tensor_buffer(self):
-        audio_data = [np.random.rand(1000).astype(np.float32).reshape([10,10,10]) for _ in range(2)]  # Stereo audio
+        audio_data = [np.random.rand(1000).astype(np.float32).reshape([10, 10, 10]) for _ in range(2)]  # Stereo audio
         original = TensorBuffer(tensors=audio_data)
         packed = pack_obj(original)
         unpacked = unpack_obj(packed)

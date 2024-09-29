@@ -1,9 +1,9 @@
 import zmq
 import subprocess
 
-from robot_network.buffers.buffer_handling import unpack_obj
-from robot_network.client_callbacks import transmit_cam_mjpg
-from robot_network.util import get_local_ip, switch_connections, get_connection_info
+from robonet.buffers.buffer_handling import unpack_obj
+from robonet.client_callbacks import transmit_cam_mjpg
+from robonet.util import get_local_ip, switch_connections, get_connection_info
 
 
 class AdHocClient(object):
@@ -82,7 +82,7 @@ class AdHocClient(object):
             command = f"nmcli connection show | grep {wifi_obj.ssid}"
             result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
             print(result.stdout)
-        except subprocess.CalledProcessError as e:
+        except subprocess.CalledProcessError as _:
             result = None  # empty grep
 
         prefix = 24

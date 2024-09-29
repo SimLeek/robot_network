@@ -1,12 +1,11 @@
 import zmq
 import time
 import subprocess
-import pathlib
 
-from robot_network.buffers.buffer_objects import WifiSetupInfo
-from robot_network.buffers.buffer_handling import pack_obj
-from robot_network.server_callbacks import display_mjpg_cv
-from robot_network.util import get_local_ip, switch_connections, get_connection_info
+from robonet.buffers.buffer_objects import WifiSetupInfo
+from robonet.buffers.buffer_handling import pack_obj
+from robonet.server_callbacks import display_mjpg_cv
+from robonet.util import get_local_ip, switch_connections, get_connection_info
 
 
 class AdHocServer(object):
@@ -52,7 +51,7 @@ class AdHocServer(object):
         server = ctx.socket(zmq.REP)
         server.bind(f"tcp://{local_ip}:9998")
 
-        request = server.recv()
+        _ = server.recv()
         response = pack_obj(obj)
         server.send(response)
 
@@ -113,7 +112,7 @@ class AdHocServer(object):
         ctx = zmq.Context.instance()
 
         local_ip = get_local_ip()
-        client_ip = AdHocServer._discovery_phase(ctx, local_ip)
+        _ = AdHocServer._discovery_phase(ctx, local_ip)
 
         wifi_obj = WifiSetupInfo("robot_wifi", "192.168.2.1", "192.168.2.2")
         AdHocServer._lazy_pirate_send_con_info(ctx, wifi_obj, local_ip)

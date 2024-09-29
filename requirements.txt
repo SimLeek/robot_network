@@ -1,0 +1,5 @@
+numpy~=2.1.1
+opencv-python~=4.10.0.84
+PyV4L2Cam~=0.0.2
+pyzmq~=26.2.0
+setuptools~=75.1.0

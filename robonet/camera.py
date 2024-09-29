@@ -5,6 +5,7 @@ import struct
 import cv2
 import numpy as np
 
+
 class CameraPack:
     def __init__(self, device='/dev/video0', width=320, height=240):
         self.camera = Camera(device, width, height)
@@ -53,8 +54,8 @@ class CameraPack:
             height = struct.unpack_from('!I', packed_data, offset)[0]
             offset += 4
         except struct.error:
-            width=0
-            height=0
+            width = 0
+            height = 0
 
         try:
             # Unpack frame length (8 bytes unsigned int)
@@ -84,8 +85,9 @@ class CameraPack:
         image = cv2.imdecode(np.frombuffer(jpg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
         return image
 
-if __name__=='__main__':
+
+if __name__ == '__main__':
     cam = CameraPack()
     while True:
         print(cam.get_packed_frame())
-        time.sleep(1.0/120)
+        time.sleep(1.0 / 120)

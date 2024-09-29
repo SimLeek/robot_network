@@ -5,11 +5,11 @@ import numpy.typing as npt
 
 
 class WifiSetupInfo:
-    """Wifi info buffer object. Needs to be the same on both sides."""
+    """Wi-Fi info buffer object. Needs to be the same on both sides."""
 
     type_list = [str]  # Only string types in WifiSetupInfo
 
-    def __init__(self, ssid: str, server_ip: str, client_ip: str, password:str="example_password"):
+    def __init__(self, ssid: str, server_ip: str, client_ip: str, password: str = "example_password"):
         self.ssid = ssid
         self.server_ip = server_ip
         self.client_ip = client_ip
@@ -35,10 +35,11 @@ class WifiSetupInfo:
         else:
             raise TypeError("Unsupported type for WifiSetupInfo")
 
+
 class TensorBuffer:
     type_list = [List[npt.NDArray]]
 
-    def __init__(self, tensors:List[npt.NDArray]):
+    def __init__(self, tensors: List[npt.NDArray]):
         self.tensors = tensors
 
     @staticmethod
@@ -79,7 +80,6 @@ class TensorBuffer:
             raise TypeError("Unsupported type for AudioBuffer")
 
 
-
 # Define the CamFrame class
 class CamFrame:
     """Camera frame alongside other info."""
@@ -114,7 +114,7 @@ class CamFrame:
             shape = struct.unpack_from(f'!{shape_len}I', data, offset)
             offset += 4 * shape_len
             flat_size = np.prod(shape)
-            flat_data = np.frombuffer(data[offset:offset+flat_size], dtype=np.uint8)
+            flat_data = np.frombuffer(data[offset:offset + flat_size], dtype=np.uint8)
             offset += flat_size
             value = flat_data.reshape(shape)
             return value, offset
@@ -146,7 +146,7 @@ class AudioBuffer:
                 flat_data = v.flatten()
                 shape_packed = struct.pack(f'!{len(shape)}I', *shape)
                 data_packed = flat_data.tobytes()
-                channel_bytes.extend([struct.pack('!I', len(shape)) , shape_packed , data_packed])
+                channel_bytes.extend([struct.pack('!I', len(shape)), shape_packed, data_packed])
             return num_channels + b''.join(channel_bytes)
         elif type_index == 1:
             return struct.pack('!I', value)
@@ -166,7 +166,7 @@ class AudioBuffer:
                 shape = struct.unpack_from(f'!{shape_len}I', data, offset)
                 offset += 4 * shape_len
                 flat_size = np.prod(shape)
-                flat_data = data[offset:offset+flat_size*4]
+                flat_data = data[offset:offset + flat_size * 4]
                 offset += 4 * flat_size
                 value_arrays.append(np.frombuffer(flat_data, dtype=np.float32).reshape(shape))
             return value_arrays, offset
@@ -268,7 +268,7 @@ class IMUBuffer:
             raise TypeError(f"Unsupported type for {IMUBuffer.__name__}")
 
     @staticmethod
-    def unpack_type(data, offset, type_index) -> Tuple[Optional[Tuple[float, float, float]], int]:
+    def unpack_type(data, offset, type_index):
         """Unpack some sensor data."""
         if type_index == 0:
             length = struct.unpack_from('!I', data, offset)[0]

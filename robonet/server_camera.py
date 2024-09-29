@@ -17,7 +17,6 @@ def get_local_ip():
 
 def discovery_phase(radio, dish, local_ip):
     """Send pings to clients and discover their IP address."""
-    client_ip = None
     while True:
         message = f"PING from server: {local_ip}"
         radio.send(message.encode("utf-8"), group="discovery")

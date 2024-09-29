@@ -3,6 +3,7 @@ import time
 import socket
 import camera
 
+
 def get_local_ip():
     """Get the local IPv4 address of the client."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -11,6 +12,7 @@ def get_local_ip():
         return s.getsockname()[0]
     finally:
         s.close()
+
 
 def discovery_phase(radio, dish, local_ip):
     """Listen for pings from the server and respond with the client's IP."""
@@ -37,6 +39,7 @@ def discovery_phase(radio, dish, local_ip):
             print('No ping received from server')
     return server_ip
 
+
 def unicast_communication(ctx, local_ip, server_ip):
     """Start unicast communication between client and server."""
     unicast_radio = ctx.socket(zmq.RADIO)
@@ -58,26 +61,26 @@ def unicast_communication(ctx, local_ip, server_ip):
                 print(f"Received direct message: {direct_message}")
             except zmq.Again:
                 print('No direct message yet')
-                #time.sleep(1)
+                # time.sleep(1)
 
             # Send direct messages to the server
             direct_message = cam.get_packed_frame()
             parts = []
-            for i in range(0,len(direct_message), 4096):
-                parts.append(direct_message[i:i+4096])
+            for i in range(0, len(direct_message), 4096):
+                parts.append(direct_message[i:i + 4096])
             for p in parts[:-1]:
-                unicast_radio.send(b'm'+p, group='direct')  # send more doesn't work either I guess
-            unicast_radio.send(b'd'+parts[-1], group='direct')
-            #direct_message = f"Direct message from client"
-            #unicast_radio.send_multipart(parts, group='direct')
+                unicast_radio.send(b'm' + p, group='direct')  # send more doesn't work either I guess
+            unicast_radio.send(b'd' + parts[-1], group='direct')
+            # direct_message = f"Direct message from client"
+            # unicast_radio.send_multipart(parts, group='direct')
             print(f"Sent frame")
             time.sleep(1.0 / 120)  # limit 120 fps
         except KeyboardInterrupt:
             break
 
-
     unicast_dish.close()
     unicast_radio.close()
+
 
 def run_client():
     """Main function to run the client."""
@@ -103,6 +106,7 @@ def run_client():
     unicast_communication(ctx, local_ip, server_ip)
 
     ctx.term()
+
 
 if __name__ == '__main__':
     run_client()
