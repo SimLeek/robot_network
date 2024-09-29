@@ -1,28 +1,16 @@
 import zmq
 import time
-import socket
 import subprocess
 import pathlib
 
 from robot_network.buffers.buffer_objects import WifiSetupInfo
 from robot_network.buffers.buffer_handling import pack_obj
 from robot_network.server_callbacks import display_mjpg_cv
-
-file_path = pathlib.Path(__file__).parent.resolve()
-
-
-
-def get_local_ip():
-    """Get the local IPv4 address of the server."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    finally:
-        s.close()
+from robot_network.util import get_local_ip, switch_connections, get_connection_info
 
 
 class AdHocServer(object):
+    """Searches for a robot, transmits ad hoc connection info, then switches to the ad hoc connection as server"""
 
     @staticmethod
     def _discovery_phase(ctx, local_ip):
@@ -59,12 +47,10 @@ class AdHocServer(object):
         return client_ip
 
     @staticmethod
-    def _lazy_pirate_send_con_info(ctx, obj, local_ip, client_ip):
+    def _lazy_pirate_send_con_info(ctx, obj, local_ip):
         """Lazy pirate server pattern sending direct connection info."""
         server = ctx.socket(zmq.REP)
         server.bind(f"tcp://{local_ip}:9998")
-
-        print(f"Starting unicast communication with client at {client_ip}...")
 
         request = server.recv()
         response = pack_obj(obj)
@@ -73,29 +59,8 @@ class AdHocServer(object):
         server.close()
 
     @staticmethod
-    def _get_connection_info():
-        """Get wifi devices for ad hoc and current network for resetting on end."""
-        try:
-            result = subprocess.run(
-                "nmcli --get-values GENERAL.DEVICE,GENERAL.TYPE device show | sed '/^wifi/!{h;d;};x'", shell=True,
-                check=True, capture_output=True, text=True)
-            devices = list(filter(None, result.stdout.split('\n')))
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Getting wifi devices with nmcli failed: {e.stderr}")
-
-        try:
-            current_connection = subprocess.run(
-                f"nmcli -t -f GENERAL.CONNECTION device show {devices[0]} | grep -oP 'GENERAL.CONNECTION:\K\w+'", shell=True,
-                check=True, capture_output=True, text=True)
-            devices = list(filter(None, result.stdout.split('\n')))
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Getting wifi devices with nmcli failed: {e.stderr}")
-
-        return devices, current_connection
-
-    @staticmethod
     def _set_hotspot(wifi_obj: WifiSetupInfo, devices):
-        """Set up an adhoc hotspot that matches the wifi_obj."""
+        """Set up an adhoc_pair hotspot that matches the wifi_obj."""
 
         try:
             result = subprocess.run(
@@ -114,7 +79,7 @@ class AdHocServer(object):
                 commands = []
             commands.extend([
                 f"nmcli con add type wifi ifname {devices[0]} con-name {wifi_obj.ssid} autoconnect yes ssid {wifi_obj.ssid}",
-                f"nmcli con modify {wifi_obj.ssid} 802-11-wireless.mode adhoc ipv4.addresses {wifi_obj.server_ip}/{prefix} ipv4.method manual ipv6.method ignore",
+                f"nmcli con modify {wifi_obj.ssid} 802-11-wireless.mode adhoc_pair ipv4.addresses {wifi_obj.server_ip}/{prefix} ipv4.method manual ipv6.method ignore",
                 f"nmcli con up {wifi_obj.ssid}",
             ])
             for command in commands:
@@ -124,31 +89,11 @@ class AdHocServer(object):
             raise RuntimeError(f"Setting wifi to access point failed: {e.stderr}")
 
     @staticmethod
-    def _unset_hotspot(devices, wifi_obj, prior_connection):
-        try:
-            command = f"nmcli con down {wifi_obj.ssid}"
-            result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-            print(result.stdout)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"nmcli could shut down the adhoc connection: {e.stderr}")
-
-        try:
-            command = f"nmcli con up {prior_connection}"
-            result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-            print(result.stdout)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"nmcli could bring up the adhoc connection: {e.stderr}")
-
-    @staticmethod
-
     def _unicast_communication(ctx, local_ip, client_ip, callback_loop):
         """Start unicast communication between server and client."""
         unicast_radio = ctx.socket(zmq.RADIO)
-        unicast_radio.setsockopt(zmq.SNDBUF, 2 ** 15)
         unicast_radio.setsockopt(zmq.LINGER, 0)
-
         unicast_dish = ctx.socket(zmq.DISH)
-        unicast_dish.setsockopt(zmq.RCVBUF, 2 ** 15)
         unicast_dish.setsockopt(zmq.LINGER, 0)
         unicast_dish.rcvtimeo = 1000
 
@@ -157,14 +102,13 @@ class AdHocServer(object):
         unicast_radio.connect(f"udp://{client_ip}:9999")
 
         print(f"Starting unicast communication with client at {client_ip}...")
-
         callback_loop(unicast_radio, unicast_dish)
 
         unicast_dish.close()
         unicast_radio.close()
 
     @staticmethod
-    def run(callback_loop=display_mjpg_cv):
+    def run(callback_loop):
         """Main function to run the server."""
         ctx = zmq.Context.instance()
 
@@ -172,18 +116,16 @@ class AdHocServer(object):
         client_ip = AdHocServer._discovery_phase(ctx, local_ip)
 
         wifi_obj = WifiSetupInfo("robot_wifi", "192.168.2.1", "192.168.2.2")
+        AdHocServer._lazy_pirate_send_con_info(ctx, wifi_obj, local_ip)
 
-        AdHocServer._lazy_pirate_send_con_info(ctx, wifi_obj, local_ip, client_ip)
-
-        devices, current_connection = AdHocServer._get_connection_info()
-
+        devices, current_connection = get_connection_info()
         try:
             AdHocServer._set_hotspot(wifi_obj, devices)
             AdHocServer._unicast_communication(ctx, wifi_obj.server_ip, wifi_obj.client_ip, callback_loop)
         finally:
-            AdHocServer._unset_hotspot(devices, wifi_obj, current_connection)
+            switch_connections(wifi_obj.ssid, current_connection)
             ctx.term()
 
 
 if __name__ == "__main__":
-    AdHocServer.run()
+    AdHocServer.run(display_mjpg_cv)
