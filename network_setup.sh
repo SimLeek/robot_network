@@ -21,26 +21,47 @@ enable_ipv6() {
     fi
 }
 
+echo "Detecting OS..."
+if [[ -f /etc/arch-release ]]; then
+    OS="Arch"
+elif [[ -f /etc/debian_version ]]; then
+    OS="Debian"
+else
+    echo "Unsupported OS. Exiting..."
+    exit 1
+fi
+
+echo "OS detected: $OS"
+
+install_package_arch() {
+    package_name=$1
+    if [[ "$(pacman -Qi "$package_name" > /dev/null 2>&1; echo $?)" -ne 0 ]]; then
+        echo "Installing $package_name on Arch Linux..."
+        sudo pacman -S "$package_name" --noconfirm
+    else
+        echo "$package_name is already installed."
+    fi
+}
+
+install_package_debian() {
+    package_name=$1
+    if [[ "$(dpkg -l | grep "$package_name" > /dev/null 2>&1; echo $?)" -ne 0 ]]; then
+        echo "Installing $package_name on Raspberry Pi (Debian-based)..."
+        sudo apt-get install "$package_name" -y
+    else
+        echo "$package_name is already installed."
+    fi
+}
+
 # Function to install and configure UFW firewall
 setup_firewall() {
     echo "Installing UFW (Uncomplicated Firewall)..."
-    if [[ "$(pacman -Qi ufw)" -eq 1 ]]; then
-      sudo pacman -S ufw --noconfirm
-    fi
-    if [[ "$(pacman -Qi procps)" -eq 1 ]]; then
-      sudo pacman -S procps --noconfirm
-    fi
-    if [[ "$(pacman -Qi iproute2)" -eq 1 ]]; then
-      sudo pacman -S iproute2 --noconfirm
-    fi
-    if [[ "$(pacman -Qi dnsmasq)" -eq 1 ]]; then
-      sudo pacman -S dnsmasq --noconfirm
-    fi
-    if [[ "$(pacman -Qi iptables)" -eq 1 ]]; then
-      sudo pacman -S iptables --noconfirm
-    fi
-    if [[ "$(pacman -Qi iw)" -eq 1 ]]; then
-      sudo pacman -S iw --noconfirm
+    if [[ "$OS" == "Arch" ]]; then
+    install_package_arch ufw
+    install_package_arch networkmanager
+    elif [[ "$OS" == "Debian" ]]; then
+    install_package_debian ufw
+    install_package_debian network-manager
     fi
 
     echo "Enabling UFW..."
