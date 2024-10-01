@@ -1,4 +1,4 @@
-import camera
+from robonet import camera
 import zmq
 import time
 
