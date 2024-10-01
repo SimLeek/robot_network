@@ -10,7 +10,11 @@ setup(
     version='0.1',
     packages=find_packages(),
     install_requires=[
-        # Add any other dependencies your project may require here
+        'numpy',
+        'opencv-python~=4.10.0.84',
+        'Cython',
+        'PyV4L2Cam @ git+https://github.com/simleek/PyV4L2Cam.git',
+        # pyzmq... but dn't install from here
     ],
     entry_points={
         'console_scripts': [

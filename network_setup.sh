@@ -62,6 +62,7 @@ setup_firewall() {
     elif [[ "$OS" == "Debian" ]]; then
     install_package_debian ufw
     install_package_debian network-manager
+    install_package_debian libv4l-dev  # needed for python v4l camera library
     fi
 
     echo "Enabling UFW..."
