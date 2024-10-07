@@ -16,6 +16,6 @@ def run_client(callback):
 
 
 if __name__ == '__main__':
-    from robonet.client_callbacks import transmit_cam_mjpg
+    from robonet.transmit_callbacks import transmit_cam_mjpg
 
     run_client(transmit_cam_mjpg)

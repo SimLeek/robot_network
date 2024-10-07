@@ -7,7 +7,7 @@ from robonet.buffers.buffer_handling import unpack_obj
 from robonet.util import get_local_ip, switch_connections, get_connection_info, client_unicast_communication, client_udp_discovery
 
 
-def _lazy_pirate_recv_con_info(ctx, server_ip, timeout=2500, retries=10):
+def lazy_pirate_recv_con_info(ctx, server_ip, timeout=2500, retries=10):
     """Lazy pirate client pattern requesting direct connection info."""
     client = ctx.socket(zmq.REQ)
     client.connect(f"tcp://{server_ip}:9998")
@@ -35,7 +35,7 @@ def _lazy_pirate_recv_con_info(ctx, server_ip, timeout=2500, retries=10):
             client.connect(f"tcp://{server_ip}:9998")
             client.send(b'pls')
 
-def _connect_hotspot(wifi_obj, devices):
+def connect_hotspot(wifi_obj, devices):
     try:
         command = f"nmcli connection show | grep {wifi_obj.ssid}"
         result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
@@ -68,11 +68,11 @@ def run(callback_loop):
     local_ip = get_local_ip()
     server_ip = client_udp_discovery(ctx, local_ip)
 
-    wifi_obj = _lazy_pirate_recv_con_info(ctx, server_ip)
+    wifi_obj = lazy_pirate_recv_con_info(ctx, server_ip)
 
     devices, current_connection = get_connection_info()
     try:
-        _connect_hotspot(wifi_obj, devices)
+        connect_hotspot(wifi_obj, devices)
         client_unicast_communication(ctx, wifi_obj.client_ip, wifi_obj.server_ip, callback_loop)
 
     finally:
@@ -81,6 +81,6 @@ def run(callback_loop):
 
 
 if __name__ == '__main__':
-    from robonet.client_callbacks import transmit_cam_mjpg
+    from robonet.transmit_callbacks import transmit_cam_mjpg
 
     run(transmit_cam_mjpg)

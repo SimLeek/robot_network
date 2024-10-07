@@ -124,8 +124,10 @@ def server_unicast_communication(ctx, local_ip, client_ip, callback_loop):
         """Start unicast communication between server and client."""
         unicast_radio = ctx.socket(zmq.RADIO)
         unicast_radio.setsockopt(zmq.LINGER, 0)
+        unicast_radio.setsockopt(zmq.CONFLATE, 1)
         unicast_dish = ctx.socket(zmq.DISH)
         unicast_dish.setsockopt(zmq.LINGER, 0)
+        unicast_dish.setsockopt(zmq.CONFLATE, 1)
         unicast_dish.rcvtimeo = 1000
 
         unicast_dish.bind(f"udp://{local_ip}:9998")
@@ -142,8 +144,10 @@ def client_unicast_communication(ctx, local_ip, server_ip, callback_loop):
     """Start unicast communication between client and server."""
     unicast_radio = ctx.socket(zmq.RADIO)
     unicast_radio.setsockopt(zmq.LINGER, 0)
+    unicast_radio.setsockopt(zmq.CONFLATE, 1)
     unicast_dish = ctx.socket(zmq.DISH)
     unicast_dish.setsockopt(zmq.LINGER, 0)
+    unicast_dish.setsockopt(zmq.CONFLATE, 1)
     unicast_dish.rcvtimeo = 1000
 
     unicast_dish.bind(f'udp://{local_ip}:9999')
@@ -155,3 +159,64 @@ def client_unicast_communication(ctx, local_ip, server_ip, callback_loop):
 
     unicast_dish.close()
     unicast_radio.close()
+
+
+def send_burst(critical_section_lock, radio_socket, message_uid, message_parts, group='direct'):
+    with critical_section_lock:  # threads + asyncio...
+        if len(message_parts)>1:
+            # Send start part
+            start_part = b"\x01" + message_uid + message_parts[0]  # start_byte, uid_byte, rest_of_bytes
+            radio_socket.send(start_part, group=group)
+
+            # Send middle parts
+            for part in message_parts[1:-1]:
+                middle_part = b"\x02" + message_uid + part  # middle_byte, uid_byte, rest_of_bytes
+                radio_socket.send(middle_part, group=group)
+
+            # Send end part
+            end_part = b"\x03" + message_uid + message_parts[-1]  # end_byte, uid_byte, rest_of_bytes
+            radio_socket.send(end_part, group=group)
+        else:
+            full_part = b"\x04" + message_uid + message_parts[-1]  # end_byte, uid_byte, rest_of_bytes
+            radio_socket.send(full_part, group=group)
+
+async def receive_burst(critical_section_lock, dish_socket):
+    message_parts = []
+    message_uid = None
+    while True:
+        try:
+            async with critical_section_lock:  # receive a burst
+                part = await dish_socket.recv()
+
+                # Identify part type (start, middle, end)
+                part_type = part[0:1]
+                uid_byte = part[1:2]
+                payload = part[2:]
+
+                if part_type == b"\x01":  # start part
+                    message_uid = uid_byte
+                    message_parts = [payload]
+                elif part_type == b"\x02" and uid_byte == message_uid:  # middle part
+                    message_parts.append(payload)
+                elif part_type == b"\x03" and uid_byte == message_uid:  # end part
+                    message_parts.append(payload)
+                    # Reconstruct and process full message
+                    full_message = b''.join(message_parts)
+                    print(f"Received complete message with UID {message_uid}: {full_message}")
+                    return full_message, 0
+                elif part_type == b'\x04':
+                    message_uid = uid_byte
+                    message_parts = [payload]
+                    full_message = b''.join(message_parts)
+                    return full_message, 0
+                elif uid_byte != message_uid:
+                    print("message corrupted or alternative message interleaved. part will be appended to broken message output for error handling.")
+                    full_message = b''.join(message_parts)
+                    return full_message, part
+                else:
+                    print('start byte corrupted. Exiting.')
+                    full_message = b''.join(message_parts)
+                    return full_message, part
+        except zmq.error.Again:
+            print("No message received (timeout).")
+            await asyncio.sleep(0.01)

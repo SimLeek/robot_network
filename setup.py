@@ -6,7 +6,7 @@ if 'BUILT_FROM_SH' not in os.environ or not os.environ['BUILT_FROM_SH']:
 
 # Setup configuration for the package
 setup(
-    name='my_project',  # Change to your project name
+    name='robotnet',  # Change to your project name
     version='0.1',
     packages=find_packages(),
     install_requires=[

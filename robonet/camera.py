@@ -24,18 +24,11 @@ class CameraPack:
         """Pack the camera resolution, frame length, frame bytes, and test variable into a UDP message."""
         # Convert width, height, and frame_bytes length into byte format
         if jpg is not None:
-            width_bytes = struct.pack('!I', self.width)  # Width (4 bytes unsigned int)
-            height_bytes = struct.pack('!I', self.height)  # Height (4 bytes unsigned int)
             frame_length_bytes = struct.pack('!Q', len(jpg))  # Frame length (8 bytes unsigned int)
         else:
-            width_bytes = struct.pack('!I', 0)
-            height_bytes = struct.pack('!I', 0)
             frame_length_bytes = struct.pack('!Q', 0)
             jpg = b''
-        # Add the frame bytes and test_variable to the packet
-        test_var_length_bytes = struct.pack('!Q',
-                                            len(self.test_variable))  # Test variable length (8 bytes unsigned int)
-        packed_data = width_bytes + height_bytes + frame_length_bytes + jpg + test_var_length_bytes + self.test_variable
+        packed_data = frame_length_bytes + jpg
 
         return packed_data
 
@@ -44,19 +37,6 @@ class CameraPack:
         """Unpack the received data into its components."""
         # Start unpacking the data
         offset = 0
-
-        try:
-            # Unpack width (4 bytes unsigned int)
-            width = struct.unpack_from('!I', packed_data, offset)[0]
-            offset += 4
-
-            # Unpack height (4 bytes unsigned int)
-            height = struct.unpack_from('!I', packed_data, offset)[0]
-            offset += 4
-        except struct.error:
-            width = 0
-            height = 0
-
         try:
             # Unpack frame length (8 bytes unsigned int)
             frame_length = struct.unpack_from('!Q', packed_data, offset)[0]
@@ -68,17 +48,7 @@ class CameraPack:
         except struct.error:
             jpg_bytes = b''
 
-        try:
-            # Unpack test variable length (8 bytes unsigned int)
-            test_var_length = struct.unpack_from('!Q', packed_data, offset)[0]
-            offset += 8
-
-            # Unpack test variable
-            test_variable = packed_data[offset:offset + test_var_length]
-        except (struct.error, OverflowError):
-            test_variable = b''
-
-        return width, height, jpg_bytes, test_variable
+        return jpg_bytes
 
     @staticmethod
     def to_cv2_image(jpg_bytes):

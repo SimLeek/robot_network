@@ -33,8 +33,8 @@ class TestBufferObjects(unittest.TestCase):
         packed = pack_obj(original)
         unpacked = unpack_obj(packed)
 
-        self.assertEqual(len(original.audio_data), len(unpacked.audio_data))
-        for orig_channel, unpacked_channel in zip(original.audio_data, unpacked.audio_data):
+        self.assertEqual(len(original.fft_data), len(unpacked.fft_data))
+        for orig_channel, unpacked_channel in zip(original.fft_data, unpacked.fft_data):
             np.testing.assert_array_almost_equal(orig_channel, unpacked_channel)
         self.assertEqual(original.sample_rate, unpacked.sample_rate)
 

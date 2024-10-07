@@ -30,7 +30,10 @@ def unpack_obj(message):
     offset = 0
     class_name_len = struct.unpack_from('!I', message, offset)[0]
     offset += 4
-    class_name = message[offset:offset + class_name_len].decode('utf-8')
+    try:
+        class_name = message[offset:offset + class_name_len].decode('utf-8')
+    except UnicodeDecodeError:
+        print(f"Received non-utf class name: {message[offset:offset + class_name_len]}")
     offset += class_name_len
 
     # Check if class exists in the global scope
@@ -43,7 +46,12 @@ def unpack_obj(message):
     while offset < len(message):
         key_len = struct.unpack_from('!I', message, offset)[0]
         offset += 4
-        key = message[offset:offset + key_len].decode('utf-8')
+        try:
+            key = message[offset:offset + key_len].decode('utf-8')
+        except UnicodeDecodeError:
+            print(f"Received non-utf key name: {message[offset:offset + key_len]}")
+            offset += key_len
+            continue
         offset += key_len
 
         # Get the type index

@@ -9,7 +9,7 @@ from robonet.util import get_local_ip, switch_connections, get_connection_info, 
     server_unicast_communication
 
 
-def _lazy_pirate_send_con_info(ctx, obj, local_ip):
+def lazy_pirate_send_con_info(ctx, obj, local_ip):
     """Lazy pirate server pattern sending direct connection info."""
     server = ctx.socket(zmq.REP)
     server.bind(f"tcp://{local_ip}:9998")
@@ -21,7 +21,7 @@ def _lazy_pirate_send_con_info(ctx, obj, local_ip):
     server.close()
 
 
-def _set_hotspot(wifi_obj: WifiSetupInfo, devices):
+def set_hotspot(wifi_obj: WifiSetupInfo, devices):
     """Set up an adhoc_pair hotspot that matches the wifi_obj."""
 
     try:
@@ -59,11 +59,11 @@ def run(callback_loop):
     _ = server_udp_discovery(ctx, local_ip)
 
     wifi_obj = WifiSetupInfo("robot_wifi", "192.168.2.1", "192.168.2.2")
-    _lazy_pirate_send_con_info(ctx, wifi_obj, local_ip)
+    lazy_pirate_send_con_info(ctx, wifi_obj, local_ip)
 
     devices, current_connection = get_connection_info()
     try:
-        _set_hotspot(wifi_obj, devices)
+        set_hotspot(wifi_obj, devices)
         server_unicast_communication(ctx, wifi_obj.server_ip, wifi_obj.client_ip, callback_loop)
     finally:
         switch_connections(wifi_obj.ssid, current_connection)
@@ -71,6 +71,6 @@ def run(callback_loop):
 
 
 if __name__ == "__main__":
-    from robonet.server_callbacks import display_mjpg_cv
+    from robonet.receive_callbacks import display_mjpg_cv
 
     run(display_mjpg_cv)
