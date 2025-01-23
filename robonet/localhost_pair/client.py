@@ -1,15 +1,17 @@
 import zmq
 
 from robonet.util import get_local_ip, client_unicast_communication, client_udp_discovery
+import asyncio
 
 
 def run_client(callback):
     """Main function to run the client."""
     ctx = zmq.Context()
 
-    client_unicast_communication(ctx, '127.0.0.1', '127.0.0.1', callback)
+    asyncio.run(client_unicast_communication(ctx, '127.0.0.1', '127.0.0.1', callback))
 
     ctx.term()
+
 
 
 if __name__ == '__main__':

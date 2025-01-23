@@ -140,7 +140,7 @@ def server_unicast_communication(ctx, local_ip, client_ip, callback_loop):
         unicast_dish.close()
         unicast_radio.close()
 
-def client_unicast_communication(ctx, local_ip, server_ip, callback_loop):
+async def client_unicast_communication(ctx, local_ip, server_ip, callback_loop):
     """Start unicast communication between client and server."""
     unicast_radio = ctx.socket(zmq.RADIO)
     unicast_radio.setsockopt(zmq.LINGER, 0)
@@ -150,12 +150,12 @@ def client_unicast_communication(ctx, local_ip, server_ip, callback_loop):
     unicast_dish.setsockopt(zmq.CONFLATE, 1)
     unicast_dish.rcvtimeo = 1000
 
-    unicast_dish.bind(f'udp://{local_ip}:9999')
+    unicast_dish.bind(f'udp://{local_ip}:9998')
     unicast_dish.join('direct')
-    unicast_radio.connect(f'udp://{server_ip}:9998')
+    unicast_radio.connect(f'udp://{server_ip}:9999')
 
     print(f"Starting unicast communication with server at {server_ip}...")
-    callback_loop(unicast_radio, unicast_dish)
+    await callback_loop(unicast_radio, unicast_dish)
 
     unicast_dish.close()
     unicast_radio.close()
