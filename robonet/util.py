@@ -2,6 +2,14 @@ import socket
 import subprocess
 import time
 import zmq
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidTag
+import os
+import struct
+import asyncio
+from typing import Callable, Dict, List, Optional
+import zmq.asyncio
 
 def get_local_ip():
     """Get the local IPv4 address of the server."""
@@ -162,6 +170,8 @@ async def client_unicast_communication(ctx, local_ip, server_ip, callback_loop):
 
 
 def send_burst(critical_section_lock, radio_socket, message_uid, message_parts, group='direct'):
+    """Unencrypted Radio Send.
+    Use this only for internal communication, such as wired or radio within a faraday cage."""
     with critical_section_lock:  # threads + asyncio...
         if len(message_parts)>1:
             # Send start part
@@ -181,6 +191,8 @@ def send_burst(critical_section_lock, radio_socket, message_uid, message_parts, 
             radio_socket.send(full_part, group=group)
 
 async def receive_burst(critical_section_lock, dish_socket):
+    """Unencrypted Radio Receive.
+    Use this only for internal communication, such as wired or radio within a faraday cage."""
     message_parts = []
     message_uid = None
     while True:
@@ -220,3 +232,287 @@ async def receive_burst(critical_section_lock, dish_socket):
         except zmq.error.Again:
             print("No message received (timeout).")
             await asyncio.sleep(0.01)
+
+HEADER_FMT = '!BBHH'   # ctrl, uid, seq, total  → 6 bytes
+HEADER_SIZE = struct.calcsize(HEADER_FMT)  # 6
+
+
+def make_plain_hostname_block(hostname: str) -> bytes:
+    """Encode a hostname as raw UTF-8 (no encryption)."""
+    return hostname.encode('utf-8')
+
+
+def wrap_packet_with_plain_hostname(hostname: str, packet: bytes) -> bytes:
+    """Prepend a plain-text length-prefixed hostname block to a radio packet."""
+    block = make_plain_hostname_block(hostname)
+    return struct.pack('!H', len(block)) + block + packet
+
+
+
+# ---------------------------------------------------------------------------
+# PlainRadioEngine
+# ---------------------------------------------------------------------------
+
+class PlainRadioEngine:
+    """
+    Burst-sends and assembles multi-part unencrypted UDP messages.
+
+    Mirrors SecureRadioEngine exactly in public API; replace AESGCM
+    pack/unpack with bare struct operations.
+
+    ctrl values: 1=first, 2=middle, 3=last, 4=single
+    """
+
+    def __init__(self, blank_callback: Optional[Callable] = None, max_sessions:int = 1):
+        self.sessions: Dict[int, dict] = {}
+        self.completed_queue: asyncio.Queue = asyncio.Queue()
+        self.blank_callback = blank_callback or (
+            lambda _seq, _sz: b'\x00' * (_sz or 4096)
+        )
+        self.max_sessions = max_sessions
+
+    # ------------------------------------------------------------------
+    # Packing / unpacking individual wire parts
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _pack_part(ctrl: int, uid: int, seq: int, total: int,
+                   payload: bytes) -> bytes:
+        """Pack a single wire part — no nonce, no encryption."""
+        return struct.pack(HEADER_FMT, ctrl, uid, seq, total) + payload
+
+    @staticmethod
+    def _unpack_part(packet: bytes) -> Optional[dict]:
+        """Unpack a single wire part. Returns None on malformed input."""
+        if len(packet) < HEADER_SIZE:
+            return None
+        ctrl, uid, seq, total = struct.unpack(HEADER_FMT, packet[:HEADER_SIZE])
+        return {
+            'ctrl': ctrl,
+            'uid': uid,
+            'seq': seq,
+            'total': total,
+            'data': packet[HEADER_SIZE:],
+        }
+
+    # ------------------------------------------------------------------
+    # Session assembly (identical logic to SecureRadioEngine)
+    # ------------------------------------------------------------------
+
+    async def cleanup_loop(self, interval: float = 0.05, timeout: float = 0.05):
+        """Periodically flush stale incomplete sessions."""
+        while True:
+            await asyncio.sleep(interval)
+            now = time.time()
+            stale = [u for u, s in self.sessions.items()
+                     if now - s['last_seen'] > timeout]
+            for u in stale:
+                result = self._finalize(u)
+                if result:
+                    await self.completed_queue.put((result, u))
+
+    def _finalize(self, uid: int) -> Optional[tuple]:
+        session = self.sessions.pop(uid, None)
+        if not session or not session['parts']:
+            return None
+        parts = session['parts']
+        total = session['total']
+        host = session['host']
+        inferred_size = len(next(iter(parts.values())))
+        hi = (total - 1) if total > 0 else max(parts)
+        return host, b''.join(
+            parts.get(i, self.blank_callback(i, inferred_size))
+            for i in range(hi + 1)
+        )
+
+    def process_raw_packet(self, raw: bytes, hostname=None):
+        """
+        Unpack and accumulate one wire packet.
+        Returns (assembled_payload, uid) when a message is complete,
+        otherwise (None, None).
+
+        Mirrors SecureRadioEngine.process_raw_packet exactly.
+        """
+        p = self._unpack_part(raw)
+        if not p:
+            return None, None
+        uid, seq, total = p['uid'], p['seq'], p['total']
+        if uid not in self.sessions:
+            while len(self.sessions) >= self.max_sessions:
+                oldest = min(self.sessions, key=lambda u: self.sessions[u]['last_seen'])
+                del self.sessions[oldest]
+            self.sessions[uid] = {'parts': {}, 'last_seen': time.time(), 'total': total, 'host': hostname}
+        s = self.sessions[uid]
+        s['last_seen'] = time.time()
+        s['parts'][seq] = p['data']
+        if total > 0:
+            s['total'] = total
+        if p['ctrl'] == 4 or (s['total'] > 0 and len(s['parts']) == s['total']):
+            return self._finalize(uid), uid
+        return None, None
+
+    # ------------------------------------------------------------------
+    # Sending
+    # ------------------------------------------------------------------
+
+    def send_burst(self, lock, radio_socket, uid: int, parts: List[bytes],
+                   group: str = 'direct',
+                   hostname: Optional[str] = None):
+        """
+        Pack and send a multi-part burst.
+
+        If hostname is provided every packet is wrapped with a plain
+        length-prefixed hostname block so the receiver can identify the
+        sender without inspecting packet payload.
+
+        Mirrors SecureRadioEngine.send_burst; server_aesgcm parameter is
+        absent because there is nothing to encrypt.
+        """
+        total = len(parts)
+        with lock:
+            for idx, part in enumerate(parts):
+                ctrl = 4 if total == 1 else (
+                    1 if idx == 0 else (3 if idx == total - 1 else 2))
+                packet = self._pack_part(ctrl, uid, idx, total, part)
+                if hostname:
+                    packet = wrap_packet_with_plain_hostname(hostname, packet)
+                radio_socket.send(packet, group=group)
+
+# ---------------------------------------------------------------------------
+# Hostname envelope (client → server only)
+# ---------------------------------------------------------------------------
+
+def _make_hostname_block(server_aesgcm: AESGCM, hostname: str) -> bytes:
+    nonce = os.urandom(12)
+    ct = server_aesgcm.encrypt(nonce, hostname.encode('utf-8'), None)
+    return nonce + ct
+
+
+def wrap_packet_with_hostname(server_aesgcm: AESGCM, hostname: str, packet: bytes) -> bytes:
+    """Prepend a server-PSK-encrypted hostname block to a radio packet."""
+    block = _make_hostname_block(server_aesgcm, hostname)
+    return struct.pack('!H', len(block)) + block + packet
+
+
+# ---------------------------------------------------------------------------
+# Core radio engine
+# ---------------------------------------------------------------------------
+
+class SecureRadioEngine:
+    """
+    Burst-sends and assembles multi-part encrypted UDP messages.
+
+    Each part on the wire:
+        nonce(12) || AES-GCM(psk, ctrl(1)|uid(1)|seq(2)|total(2)||payload)
+
+    ctrl values: 1=first, 2=middle, 3=last, 4=single
+    """
+
+    def __init__(self, psk: bytes, blank_callback: Optional[Callable] = None, max_sessions:int=2):
+        self.aesgcm = AESGCM(psk)
+        self.sessions: Dict[int, dict] = {}
+        self.completed_queue: asyncio.Queue = asyncio.Queue()
+        self.blank_callback = blank_callback or (
+            lambda _seq, _sz: b'\x00' * (_sz or 4096)
+        )
+        self.max_sessions = max_sessions
+
+    # ------------------------------------------------------------------
+    # Packing / unpacking individual wire parts
+    # ------------------------------------------------------------------
+
+    def _pack_part(self, ctrl: int, uid: int, seq: int, total: int,
+                   payload: bytes) -> bytes:
+        nonce = os.urandom(12)
+        header = struct.pack('!BBHH', ctrl, uid, seq, total)
+        return nonce + self.aesgcm.encrypt(nonce, header + payload, None)
+
+    def _unpack_part(self, packet: bytes) -> Optional[dict]:
+        if len(packet) < 28:
+            return None
+        try:
+            plain = self.aesgcm.decrypt(packet[:12], packet[12:], None)
+            ctrl, uid, seq, total = struct.unpack('!BBHH', plain[:6])
+            return {'ctrl': ctrl, 'uid': uid, 'seq': seq,
+                    'total': total, 'data': plain[6:]}
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------------
+    # Session assembly
+    # ------------------------------------------------------------------
+
+    async def cleanup_loop(self, interval: float = 0.05, timeout: float = 0.05):
+        """Periodically flush stale incomplete sessions."""
+        while True:
+            await asyncio.sleep(interval)
+            now = time.time()
+            stale = [u for u, s in self.sessions.items()
+                     if now - s['last_seen'] > timeout]
+            for u in stale:
+                payload = self._finalize(u)
+                if payload:
+                    await self.completed_queue.put((payload, u))
+
+    def _finalize(self, uid: int) -> Optional[bytes]:
+        session = self.sessions.pop(uid, None)
+        if not session or not session['parts']:
+            return None
+        parts = session['parts']
+        total = session['total']
+        host = session['host']
+        inferred_size = len(next(iter(parts.values())))
+        hi = (total - 1) if total > 0 else max(parts)
+        return host, b''.join(
+            parts.get(i, self.blank_callback(i, inferred_size))
+            for i in range(hi + 1)
+        )
+
+    def process_raw_packet(self, raw: bytes, hostname=None):
+        """
+        Decrypt and accumulate one wire packet.
+        Returns (assembled_payload, uid) when a message is complete,
+        otherwise (None, None).
+        """
+        p = self._unpack_part(raw)
+        if not p:
+            return None, None
+        uid, seq, total = p['uid'], p['seq'], p['total']
+        if uid not in self.sessions:
+            while len(self.sessions) >= self.max_sessions:
+                oldest = min(self.sessions, key=lambda u: self.sessions[u]['last_seen'])
+                del self.sessions[oldest]
+            self.sessions[uid] = {'parts': {}, 'last_seen': time.time(), 'total': total, 'host': hostname}
+        s = self.sessions[uid]
+        s['last_seen'] = time.time()
+        s['parts'][seq] = p['data']
+        if total > 0:
+            s['total'] = total
+        if p['ctrl'] == 4 or (s['total'] > 0 and len(s['parts']) == s['total']):
+            return self._finalize(uid), uid
+        return None, None
+
+    # ------------------------------------------------------------------
+    # Sending
+    # ------------------------------------------------------------------
+
+    def send_burst(self, lock, radio_socket, uid: int, parts: List[bytes],
+                   group: str = 'direct',
+                   server_aesgcm: Optional[AESGCM] = None,
+                   hostname: Optional[str] = None):
+        """
+        Encrypt and send a multi-part burst.
+
+        If server_aesgcm and hostname are provided, every packet is wrapped
+        with the server-PSK-encrypted hostname block so the receiver can
+        identify the sender without trying multiple data PSKs.
+        """
+        total = len(parts)
+        with lock:
+            for idx, part in enumerate(parts):
+                ctrl = 4 if total == 1 else (
+                    1 if idx == 0 else (3 if idx == total - 1 else 2))
+                packet = self._pack_part(ctrl, uid, idx, total, part)
+                if server_aesgcm and hostname:
+                    packet = wrap_packet_with_hostname(server_aesgcm, hostname, packet)
+                radio_socket.send(packet, group=group)

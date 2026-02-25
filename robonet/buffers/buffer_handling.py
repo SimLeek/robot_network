@@ -40,6 +40,7 @@ def unpack_obj(message):
     if class_name in globals():
         obj_class = globals()[class_name]
     else:
+        #print(f"Bad class name received: '{class_name}'")
         raise TypeError(f"Unknown class name: {class_name}")
 
     obj_dict = {}

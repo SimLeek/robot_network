@@ -32,4 +32,7 @@ fi
 
 export ZMQ_PREFIX=bundled
 export ZMQ_DRAFT_API=1
-pip install -v --pre pyzmq --no-binary pyzmq
+pip install --pre pyzmq \
+  --no-binary pyzmq \
+  --force-reinstall \
+  --config-settings="cmake.args=-DZMQ_BUILD_DRAFT_API=ON"

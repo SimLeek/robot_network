@@ -1,315 +1,454 @@
+"""
+buffer_objects.py
+
+All wire message types for robonet / crodec.
+
+Design
+------
+Every class inherits BufferBase and declares two class variables:
+
+    type_list     List of Python types, one per logical field category.
+                  The buffer_handling framework uses this to dispatch
+                  pack_type / unpack_type by type_index.
+
+    field_codecs  List of (pack_fn, unpack_fn) pairs, indexed the same
+                  way as type_list.  BufferBase.pack_type / unpack_type
+                  just index into this list — no per-class dispatch needed.
+
+Codec functions are plain module-level callables with signatures:
+    pack_fn(value)              -> bytes
+    unpack_fn(data, offset)     -> (value, new_offset)
+
+Parameterised codecs (e.g. for ndarray dtype) are created by the factory
+functions ndarray_codec() and ndarray_list_codec().
+"""
+
 import struct
-import numpy as np
 from typing import List, Optional, Tuple
+
+import numpy as np
 import numpy.typing as npt
 
 
-class WifiSetupInfo:
-    """Wi-Fi info buffer object. Needs to be the same on both sides."""
+# ============================================================
+# Primitive codec functions
+# ============================================================
 
-    type_list = [str]  # Only string types in WifiSetupInfo
+def _pack_uint32(v):
+    assert isinstance(v, (int, np.integer)) and 0 <= v <= 0xFFFFFFFF
+    return struct.pack('!I', v)
 
-    def __init__(self, ssid: str, server_ip: str, client_ip: str, password: str = "example_password"):
-        self.ssid = ssid
+def _unpack_uint32(d, o):
+    return struct.unpack_from('!I', d, o)[0], o + 4
+
+def _pack_float32(v):
+    assert isinstance(v, (int, float, np.floating))
+    return struct.pack('!f', v)
+
+def _unpack_float32(d, o):
+    return struct.unpack_from('!f', d, o)[0], o + 4
+
+def _pack_bool(v):
+    assert isinstance(v, (bool, np.bool_))
+    return struct.pack('!?', v)
+
+def _unpack_bool(d, o):
+    return struct.unpack_from('!?', d, o)[0], o + 1
+
+def _pack_str(v):
+    assert isinstance(v, str)
+    enc = v.encode('utf-8')
+    assert len(enc) <= 0xFFFFFFFF # Length must fit in uint32
+    return struct.pack('!I', len(enc)) + enc
+
+def _unpack_str(d, o):
+    n = struct.unpack_from('!I', d, o)[0]; o += 4
+    return d[o:o + n].decode('utf-8'), o + n
+
+def _pack_bytes(v):
+    assert isinstance(v, (bytes, bytearray))
+    assert len(v) <= 0xFFFFFFFF
+    return struct.pack('!I', len(v)) + v
+
+def _unpack_bytes(d, o):
+    n = struct.unpack_from('!I', d, o)[0]; o += 4
+    return d[o:o + n], o + n
+
+def _pack_uint32_list(v):
+    assert isinstance(v, (list, tuple))
+    assert isinstance(v[0], (int, np.integer))
+    return struct.pack('!I', len(v)) + b''.join(_pack_uint32(x) for x in v)
+
+def _unpack_uint32_list(d, o):
+    n = struct.unpack_from('!I', d, o)[0]; o += 4
+    vals = []
+    for _ in range(n):
+        val, o = _unpack_uint32(d, o)
+        vals.append(val)
+    return vals, o
+
+def _pack_float32_list(v):
+    assert isinstance(v, (list, tuple))
+    assert isinstance(v[0], (int, float, np.floating))
+    return struct.pack('!I', len(v)) + b''.join(_pack_float32(x) for x in v)
+
+def _unpack_float32_list(d, o):
+    n = struct.unpack_from('!I', d, o)[0]; o += 4
+    vals = []
+    for _ in range(n):
+        val, o = _unpack_float32(d, o)
+        vals.append(val)
+    return vals, o
+
+def _pack_opt_float3(v):
+    if v is None:
+        return struct.pack('!I', 0)
+    assert len(v) == 3
+    return struct.pack('!Ifff', 3, *v)
+
+def _unpack_opt_float3(d, o):
+    n = struct.unpack_from('!I', d, o)[0]; o += 4
+    if n == 0:
+        return None, o
+    assert n == 3, f"Expected 3 floats in opt_float3, got {n}"
+    return struct.unpack_from('!fff', d, o), o + 12
+
+
+# ============================================================
+# Parameterised ndarray codecs
+# ============================================================
+
+def ndarray_codec(dtype):
+    """
+    Returns (pack_fn, unpack_fn) for a single numpy array of *dtype*.
+    Wire format: ndim(4) | shape(4*ndim) | raw_bytes
+    """
+    itemsize = np.dtype(dtype).itemsize
+
+    def pack(v):
+        assert v.dtype == dtype
+        shape = v.shape
+        return (struct.pack('!I', len(shape))
+                + struct.pack(f'!{len(shape)}I', *shape)
+                + v.flatten().tobytes())
+
+    def unpack(d, o):
+        ndim = struct.unpack_from('!I', d, o)[0]
+        o += 4
+        shape = struct.unpack_from(f'!{ndim}I', d, o); o += 4 * ndim
+        nb = int(np.prod(shape)) * itemsize
+        # Truncate to valid multiple of itemsize in case of partial packet
+        nb = (nb // itemsize) * itemsize
+        new_arr = np.frombuffer(d[o:o + nb], dtype=dtype).reshape(shape)
+        new_o = o + nb
+        return new_arr, new_o
+
+    return pack, unpack
+
+
+def ndarray_list_codec(dtype):
+    """
+    Returns (pack_fn, unpack_fn) for a *list* of numpy arrays of *dtype*.
+    Wire format: count(4) | [ndim(4) | shape(4*ndim) | raw_bytes] × count
+    """
+    _pack_one, _unpack_one = ndarray_codec(dtype)
+
+    def pack(v):
+        for vi in v:
+            assert vi.dtype==dtype
+        return b''.join([struct.pack('!I', len(v))] + [_pack_one(a) for a in v])
+
+    def unpack(d, o):
+        n = struct.unpack_from('!I', d, o)[0]; o += 4
+        arrays = []
+        for _ in range(n):
+            arr, o = _unpack_one(d, o)
+            arrays.append(arr)
+        return arrays, o
+
+    return pack, unpack
+
+
+# Shared codec instances (reused across classes)
+_uint32        = (_pack_uint32,      _unpack_uint32)
+_float32       = (_pack_float32,     _unpack_float32)
+_bool_         = (_pack_bool,        _unpack_bool)
+_str_          = (_pack_str,         _unpack_str)
+_bytes_        = (_pack_bytes,       _unpack_bytes)
+_uint32_list   = (_pack_uint32_list, _unpack_uint32_list)
+_float32_list  = (_pack_float32_list,_unpack_float32_list)
+_opt_float3    = (_pack_opt_float3,  _unpack_opt_float3)
+
+_f32_arr       = ndarray_codec(np.float32)
+_u8_arr        = ndarray_codec(np.uint8)
+_c64_arr       = ndarray_codec(np.complex64)
+_f32_arr_list  = ndarray_list_codec(np.float32)
+_c64_arr_list  = ndarray_list_codec(np.complex64)
+_c128_arr_list  = ndarray_list_codec(np.complex128)
+
+
+# ============================================================
+# Base class
+# ============================================================
+
+class BufferBase:
+    """
+    Inherit from this and set:
+        type_list    — for the buffer_handling framework
+        field_codecs — list of (pack_fn, unpack_fn), same length as
+                       the number of distinct type_index values used.
+    """
+    type_list:    list = []
+    field_codecs: list = []
+
+    @classmethod
+    def pack_type(cls, value, type_index):
+        return cls.field_codecs[type_index][0](value)
+
+    @classmethod
+    def unpack_type(cls, data, offset, type_index):
+        return cls.field_codecs[type_index][1](data, offset)
+
+
+class _TriggerBase(BufferBase):
+    """No-payload trigger message."""
+    type_list    = []
+    field_codecs = []
+
+    def __init__(self): pass
+
+    @classmethod
+    def pack_type(cls, _value, _ti):   return b''
+
+    @classmethod
+    def unpack_type(cls, _d, offset, _ti): return None, offset
+
+
+# ============================================================
+# Network / Wi-Fi setup
+# ============================================================
+
+class WifiSetupInfo(BufferBase):
+    """Wi-Fi pairing info. All four fields are strings."""
+    type_list    = [str]
+    field_codecs = [_str_]
+
+    def __init__(self, ssid: str, server_ip: str, client_ip: str,
+                 password: str = 'example_password'):
+        self.ssid      = ssid
         self.server_ip = server_ip
         self.client_ip = client_ip
-        self.password = password
-
-    @staticmethod
-    def pack_type(value, type_index):
-        """Pack the value based on the type index (in this case, it's always a string)."""
-        if type_index == 0:  # String (str (s))
-            encoded_value = value.encode('utf-8')
-            return struct.pack('!I', len(encoded_value)) + encoded_value
-        else:
-            raise TypeError("Unsupported type for WifiSetupInfo")
-
-    @staticmethod
-    def unpack_type(data, offset, type_index):
-        """Unpack the value based on the type index (string in this case)."""
-        if type_index == 0:  # String (str)
-            value_len = struct.unpack_from('!I', data, offset)[0]
-            offset += 4
-            value = data[offset:offset + value_len].decode('utf-8')
-            return value, offset + value_len
-        else:
-            raise TypeError("Unsupported type for WifiSetupInfo")
+        self.password  = password
 
 
-class TensorBuffer:
-    type_list = [List[npt.NDArray]]
+# ============================================================
+# Video
+# ============================================================
+
+class CVCamFrame(BufferBase):
+    """Raw uint8 camera frame with brightness and exposure."""
+    type_list    = [np.ndarray, int]
+    field_codecs = [_u8_arr, _uint32]
+
+    def __init__(self, cv_image: np.ndarray, brightness: int, exposure: int):
+        self.cv_image   = cv_image
+        self.brightness = brightness
+        self.exposure   = exposure
+
+
+class MJpegCamFrame(BufferBase):
+    """MJPEG-compressed camera frame with brightness and exposure.
+
+    TODO: mjpeg has 8×8 FFTs — consider translating directly into image pyramids
+    on the GPU (parallelize the JPEG codec into GLSL/Vulkan).
+    """
+    type_list    = [bytes, int]
+    field_codecs = [_bytes_, _uint32]
+
+    def __init__(self, brightness: int, exposure: int, mjpeg: bytes):
+        self.brightness = brightness
+        self.exposure   = exposure
+        self.mjpeg      = mjpeg
+
+
+# ============================================================
+# Audio
+# ============================================================
+
+class AudioBuffer(BufferBase):
+    """Per-channel FFT audio sent from client mic to server.
+    Field 0 is a list of complex64 arrays (one per channel).
+    """
+    type_list    = [List[npt.NDArray[np.complex64]], int, float]
+    field_codecs = [_c128_arr_list, _uint32, _float32]
+
+    def __init__(self, sample_rate: int = 44800, samples_per_sec: float = 24.0,
+                 fft_data: List[npt.NDArray[np.complex64]] = None):
+        self.sample_rate     = sample_rate
+        self.samples_per_sec = samples_per_sec
+        self.fft_data        = fft_data or []
+
+
+class SoundNpEvent(BufferBase):
+    """Raw float32 audio arrays sent from server to client."""
+    type_list    = [List[npt.NDArray[np.float32]], int]
+    field_codecs = [_f32_arr_list, _uint32]
+
+    def __init__(self, arrays: List[npt.NDArray[np.float32]], sample_rate: int):
+        self.arrays      = arrays
+        self.sample_rate = sample_rate
+
+
+class SoundFFTEvent(BufferBase):
+    """Per-channel FFT audio sent from server to client."""
+    type_list    = [List[npt.NDArray[np.complex64]], int]
+    field_codecs = [_c64_arr_list, _uint32]
+
+    def __init__(self, fft_data: List[npt.NDArray[np.complex64]], sample_rate: int):
+        self.fft_data    = fft_data
+        self.sample_rate = sample_rate
+
+
+# ============================================================
+# General-purpose tensor
+# ============================================================
+
+class TensorBuffer(BufferBase):
+    """Generic list of float32 tensors."""
+    type_list    = [List[npt.NDArray]]
+    field_codecs = [_f32_arr_list]
 
     def __init__(self, tensors: List[npt.NDArray]):
         self.tensors = tensors
 
-    @staticmethod
-    def pack_type(value, type_index):
-        """Pack the value based on the type index."""
-        if type_index == 0:  # np.ndarray for audio data
-            i = len(value)
-            num_tensors = struct.pack('!I', i)
-            channel_bytes = []
-            for v in value:
-                shape = v.shape
-                flat_data = v.flatten()
-                shape_packed = struct.pack(f'!{len(shape)}I', *shape)
-                data_packed = flat_data.tobytes()
-                channel_bytes.extend([struct.pack('!I', len(shape)), shape_packed, data_packed])
-            return num_tensors + b''.join(channel_bytes)
-        else:
-            raise TypeError("Unsupported type for TensorBuffer")
 
-    @staticmethod
-    def unpack_type(data, offset, type_index):
-        """Unpack the value based on the type index."""
-        if type_index == 0:  # np.ndarray
-            num_tensors = struct.unpack_from('!I', data, offset)[0]
-            offset += 4
-            value_arrays = []
-            for i in range(num_tensors):
-                shape_len = struct.unpack_from('!I', data, offset)[0]
-                offset += 4
-                shape = struct.unpack_from(f'!{shape_len}I', data, offset)
-                offset += 4 * shape_len
-                flat_size = np.prod(shape)
-                flat_data = data[offset:offset + flat_size * 4]
-                offset += 4 * flat_size
-                value_arrays.append(np.frombuffer(flat_data, dtype=np.float32).reshape(shape))
-            return value_arrays, offset
-        else:
-            raise TypeError("Unsupported type for TensorBuffer")
+# ============================================================
+# Sensor buffers
+# ============================================================
 
-
-# Define the CamFrame class
-class CVCamFrame:
-    """Camera frame alongside other info."""
-
-    type_list = [np.ndarray, int]  # np.ndarray and int types in CamFrame
-
-    def __init__(self, cv_image: np.ndarray, brightness: int, exposure: int):
-        self.cv_image = cv_image
-        self.brightness = brightness
-        self.exposure = exposure
-
-    @staticmethod
-    def pack_type(value, type_index):
-        """Pack the value based on the type index."""
-        if type_index == 0:  # np.ndarray
-            shape = value.shape
-            flat_data = value.flatten()
-            shape_packed = struct.pack(f'!{len(shape)}I', *shape)
-            data_packed = flat_data.tobytes()
-            return struct.pack('!I', len(shape)) + shape_packed + data_packed
-        elif type_index == 1:  # Integer (int)
-            return struct.pack('!I', value)
-        else:
-            raise TypeError("Unsupported type for CamFrame")
-
-    @staticmethod
-    def unpack_type(data, offset, type_index):
-        """Unpack the value based on the type index."""
-        if type_index == 0:  # np.ndarray
-            shape_len = struct.unpack_from('!I', data, offset)[0]
-            offset += 4
-            shape = struct.unpack_from(f'!{shape_len}I', data, offset)
-            offset += 4 * shape_len
-            flat_size = np.prod(shape)
-            flat_data = np.frombuffer(data[offset:offset + flat_size], dtype=np.uint8)
-            offset += flat_size
-            value = flat_data.reshape(shape)
-            return value, offset
-        elif type_index == 1:  # Integer (int)
-            value = struct.unpack_from('!I', data, offset)[0]
-            return value, offset + 4
-        else:
-            raise TypeError("Unsupported type for CVCamFrame")
-
-class MJpegCamFrame:
-    """Camera frame alongside other info."""
-    # todo: mjpeg has 8x8 ffts, which should be easy to translate directly into image pyramids, potentially on the gpu
-    #  so parallelize 'opencv/modules/imgcodecs/src/grfmt_jpeg.cpp' into glsl and send the mjpeg directly into the glsl vulkan kernel
-    #  mjpegs are fairly standard in cameras, so until we're making camera FPGAs, it's the fastest method
-    type_list = [bytes, int]  # np.ndarray and int types in CamFrame
-
-    def __init__(self, brightness: int, exposure: int, mjpeg: bytes):
-        self.brightness = brightness
-        self.exposure = exposure
-        self.mjpeg = mjpeg
-
-    @staticmethod
-    def pack_type(value, type_index):
-        """Pack the value based on the type index."""
-        if type_index == 0:  # mjpeg is already in bytes format
-            mjpg_len = struct.pack('!I', len(value))
-            packed_bytes = mjpg_len + value
-            return packed_bytes
-        elif type_index == 1:  # Integer (int)
-            return struct.pack('!I', value)
-        else:
-            raise TypeError("Unsupported type for CamFrame")
-
-    @staticmethod
-    def unpack_type(data, offset, type_index):
-        """Unpack the value based on the type index."""
-        if type_index == 0:  # np.ndarray
-            bytes_len = struct.unpack_from('!I', data, offset)[0]
-            offset += 4
-            value = data[offset:offset+bytes_len]
-            offset = offset+bytes_len
-            return value, offset
-        elif type_index == 1:  # Integer (int)
-            value = struct.unpack_from('!I', data, offset)[0]
-            return value, offset + 4
-        else:
-            raise TypeError("Unsupported type for MJpegCamFrame")
-
-class AudioBuffer:
-    """Buffer class to handle packing and unpacking fft audio data"""
-
-    type_list = [List[npt.NDArray[np.complex64]], int]  # np.ndarray to store audio data
-
-    def __init__(self, sample_rate: int = 44800, samples_per_sec:int=24, fft_data: List[npt.NDArray[np.complex64]] = None):
-        self.sample_rate = sample_rate
-        self.samples_per_sec = samples_per_sec
-        self.fft_data = fft_data
-
-    @staticmethod
-    def pack_type(value, type_index):
-        """Pack the value based on the type index."""
-        if type_index == 0:  # np.ndarray for audio data
-            shape = value.shape
-            flat_data = value.flatten()
-            shape_packed = struct.pack(f'!{len(shape)}I', *shape)
-            data_packed = flat_data.tobytes()
-            channel_bytes = [struct.pack('!I', len(shape)), shape_packed, data_packed]
-            return b''.join(channel_bytes)
-        elif type_index == 1:
-            return struct.pack('!I', value)
-        else:
-            raise TypeError("Unsupported type for AudioBuffer")
-
-    @staticmethod
-    def unpack_type(data, offset, type_index):
-        """Unpack the value based on the type index."""
-        if type_index == 0:  # np.ndarray
-            shape_len = struct.unpack_from('!I', data, offset)[0]
-            offset += 4
-            shape = struct.unpack_from(f'!{shape_len}I', data, offset)
-            offset += 4 * shape_len
-            flat_size = np.prod(shape)
-            flat_data = data[offset:offset + flat_size * 8]
-            offset += 8 * flat_size
-            flat_data = flat_data[0:(len(flat_data)//8)*8]  # if we're missing data, truncate
-            value_arrays = np.frombuffer(flat_data, dtype=np.complex64).reshape(shape)
-            return value_arrays, offset
-        elif type_index == 1:  # Integer (int)
-            value = struct.unpack_from('!I', data, offset)[0]
-            return value, offset + 4
-        else:
-            raise TypeError("Unsupported type for AudioBuffer")
-
-
-class HumidityWaterBuffer:
-    """Buffer class to handle packing and unpacking humidity and water sensor data."""
-
-    type_list = [float, bool]  # Types: float for humidity, bool for water detection
+class HumidityWaterBuffer(BufferBase):
+    """Humidity (float) and water-detection (bool) sensor."""
+    type_list    = [float, bool]
+    field_codecs = [_float32, _bool_]
 
     def __init__(self, humidity: float, water_detected: bool):
-        self.humidity: float = humidity
-        self.water_detected: bool = water_detected
-
-    @staticmethod
-    def pack_type(value, type_index):
-        """Pack the value based on the type index (float or bool)."""
-        if type_index == 0:  # Float (humidity)
-            return struct.pack('!f', value)
-        elif type_index == 1:  # Boolean (water detection)
-            return struct.pack('!?', value)
-        else:
-            raise TypeError("Unsupported type for HumidityWaterBuffer")
-
-    @staticmethod
-    def unpack_type(data, offset, type_index):
-        """Unpack the value based on the type index (float or bool)."""
-        if type_index == 0:  # Float (humidity)
-            value = struct.unpack_from('!f', data, offset)[0]
-            return value, offset + 4
-        elif type_index == 1:  # Boolean (water detection)
-            value = struct.unpack_from('!?', data, offset)[0]
-            return value, offset + 1
-        else:
-            raise TypeError("Unsupported type for HumidityWaterBuffer")
+        self.humidity       = humidity
+        self.water_detected = water_detected
 
 
-class TemperatureMonitorBuffer:
-    """Buffer class to handle packing and unpacking temperature sensor data from multiple channels."""
-
-    type_list = [List[float]]  # Only a list of floats (for temperature readings)
+class TemperatureMonitorBuffer(BufferBase):
+    """Multi-channel temperature readings."""
+    type_list    = [List[float]]
+    field_codecs = [_float32_list]
 
     def __init__(self, temperature_readings: List[float]):
         self.temperature_readings = temperature_readings
 
-    @staticmethod
-    def pack_type(value, type_index):
-        """Pack the list of temperature readings."""
-        if type_index == 0:  # List of floats (temperatures)
-            packed_data = struct.pack('!I', len(value))  # Pack the list length
-            for temp in value:
-                packed_data += struct.pack('!f', temp)  # Pack each float in the list
-            return packed_data
-        else:
-            raise TypeError("Unsupported type for TemperatureMonitorBuffer")
 
-    @staticmethod
-    def unpack_type(data, offset, type_index):
-        """Unpack the list of temperature readings."""
-        if type_index == 0:  # List of floats (temperatures)
-            list_length = struct.unpack_from('!I', data, offset)[0]  # Unpack list length
-            offset += 4
-            temperatures = []
-            for _ in range(list_length):
-                temp = struct.unpack_from('!f', data, offset)[0]  # Unpack each float
-                temperatures.append(temp)
-                offset += 4
-            return temperatures, offset
-        else:
-            raise TypeError("Unsupported type for TemperatureMonitorBuffer")
+class IMUBuffer(BufferBase):
+    """Accelerometer, gyroscope, and magnetometer — each an optional (x,y,z)."""
+    type_list    = [Optional[Tuple[float, float, float]]]
+    field_codecs = [_opt_float3]
 
-
-class IMUBuffer:
-    """Buffer class to handle packing and unpacking accelerometer, gyroscope, and magnetometer data."""
-
-    type_list = [Optional[Tuple[float, float, float]]]  # All fields are Optional[Tuple[float, float, float]]
-
-    def __init__(self, accel_data: Optional[Tuple[float, float, float]] = None,
-                 gyro_data: Optional[Tuple[float, float, float]] = None,
-                 mag_data: Optional[Tuple[float, float, float]] = None):
+    def __init__(self,
+                 accel_data: Optional[Tuple[float, float, float]] = None,
+                 gyro_data:  Optional[Tuple[float, float, float]] = None,
+                 mag_data:   Optional[Tuple[float, float, float]] = None):
         self.accel_data = accel_data
-        self.gyro_data = gyro_data
-        self.mag_data = mag_data
+        self.gyro_data  = gyro_data
+        self.mag_data   = mag_data
 
-    @staticmethod
-    def pack_type(value, type_index) -> bytes:
-        """Pack some sensor data."""
-        if type_index == 0:  # pack optional tuple of 3 floats
-            if value is None:
-                return struct.pack('!I', 0)  # 0 means no data
-            else:
-                return struct.pack('!Ifff', 3, *value)  # 3 means tuple size, followed by the 3 float values
-        else:
-            raise TypeError(f"Unsupported type for {IMUBuffer.__name__}")
 
-    @staticmethod
-    def unpack_type(data, offset, type_index):
-        """Unpack some sensor data."""
-        if type_index == 0:
-            length = struct.unpack_from('!I', data, offset)[0]
-            offset += 4
-            if length == 0:
-                return None, offset  # No data
-            else:
-                value = struct.unpack_from('!fff', data, offset)
-                offset += 12
-                return value, offset
-        else:
-            raise TypeError(f"Unsupported type for {IMUBuffer.__name__}")
+# ============================================================
+# Desktop client — remote capture config (server → client)
+# ============================================================
+
+class SetInputCropRes(BufferBase):
+    type_list    = [int, int]
+    field_codecs = [_uint32, _uint32]
+
+    def __init__(self, width: int, height: int):
+        self.width = width; self.height = height
+
+
+class SetInputCropCenter(BufferBase):
+    type_list    = [int, int]
+    field_codecs = [_uint32, _uint32]
+
+    def __init__(self, x: int, y: int):
+        self.x = x; self.y = y
+
+
+class SetOutputCropRes(BufferBase):
+    type_list    = [int, int]
+    field_codecs = [_uint32, _uint32]
+
+    def __init__(self, width: int, height: int):
+        self.width = width; self.height = height
+
+
+class SetFFTLen(BufferBase):
+    type_list    = [int]
+    field_codecs = [_uint32]
+
+    def __init__(self, length: int):
+        self.length = length
+
+
+class SetInputMics(BufferBase):
+    type_list    = [List[int]]
+    field_codecs = [_uint32_list]
+
+    def __init__(self, mics: List[int]):
+        self.mics = mics
+
+
+class SetInputMicChannels(BufferBase):
+    type_list    = [int]
+    field_codecs = [_uint32]
+
+    def __init__(self, channels: int):
+        self.channels = channels
+
+
+# ============================================================
+# Desktop client — input events (server → client)
+# ============================================================
+
+class KeyEvent(BufferBase):
+    type_list    = [str]
+    field_codecs = [_str_]
+
+    def __init__(self, key: str):
+        self.key = key
+
+
+class MouseEvent(BufferBase):
+    """event_type: 0=move  1=click  2=scroll"""
+    type_list    = [int, int, int, int, int]
+    field_codecs = [_uint32] * 5
+
+    def __init__(self, event_type: int, x: int, y: int, button: int, delta: int):
+        self.event_type = event_type
+        self.x = x; self.y = y
+        self.button = button; self.delta = delta
+
+
+# ============================================================
+# Identification
+# ============================================================
+
+class WhoAreYou(BufferBase):
+    type_list    = [str]
+    field_codecs = [_str_]
+
+    def __init__(self, hostname: str = ''):
+        self.hostname = hostname
+
+
+# ============================================================
+# Triggers
+# ============================================================
+
+class StartTrigger(_TriggerBase): pass
+class StopTrigger(_TriggerBase):  pass
