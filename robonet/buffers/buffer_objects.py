@@ -442,9 +442,27 @@ class WhoAreYou(BufferBase):
     type_list    = [str]
     field_codecs = [_str_]
 
-    def __init__(self, hostname: str = ''):
-        self.hostname = hostname
+    def __init__(self, hostname: str = '', endpoint_type: str = 'unknown'):
+        # endpoint_type: 'desktop' | 'robot' | 'unknown'
+        self.hostname      = hostname
+        self.endpoint_type = endpoint_type
 
+class SudoRequest(BufferBase):
+    """Server → client: request a sudo password via the UI."""
+    type_list    = [str]
+    field_codecs = [_str_]
+
+    def __init__(self, command_description: str = ''):
+        self.command_description = command_description
+
+
+class SudoResponse(BufferBase):
+    """Client → server: password reply for a SudoRequest."""
+    type_list    = [str]
+    field_codecs = [_str_]
+
+    def __init__(self, password: str = ''):
+        self.password = password
 
 # ============================================================
 # Triggers

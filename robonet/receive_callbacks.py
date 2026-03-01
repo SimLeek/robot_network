@@ -166,11 +166,11 @@ class MessageHandler:
         self.reset()
         return False  # non-block
 
-def unwrap_plain_hostname_from_packet(raw: bytes):
+
+def unwrap_topic_from_plain_packet(raw: bytes):
     """
-    Strip the plain hostname prefix added by wrap_packet_with_plain_hostname.
-    Returns (hostname: str | None, remainder: bytes).
-    Returns (None, raw) if the packet is too short or malformed.
+    Strip the plain topic prefix added by wrap_packet_with_plain_topic.
+    Returns (topic: str | None, remainder: bytes).
     """
     if len(raw) < 2:
         return None, raw
@@ -178,43 +178,42 @@ def unwrap_plain_hostname_from_packet(raw: bytes):
     if len(raw) < 2 + block_len:
         return None, raw
     try:
-        hostname = raw[2:2 + block_len].decode('utf-8')
+        topic = raw[2:2 + block_len].decode('utf-8')
     except UnicodeDecodeError:
         return None, raw
-    return hostname, raw[2 + block_len:]
+    return topic, raw[2 + block_len:]
+
 
 def receive_objs(
-    obj_handlers: dict,
-    unpack_obj_func: Callable,
-    blank_callback: Optional[Callable] = None,
-    rcvtimeo: int = 10,
-    on_hostname: Optional[Callable[[str], None]] = None,
+        obj_handlers: dict,
+        unpack_obj_func: Callable,
+        blank_callback: Optional[Callable] = None,
+        rcvtimeo: int = 10,
+        topic: Optional[str] = None
 ):
     """
-    Returns a coroutine ``receive_some_obj(dish_socket)`` that continuously
-    reads from *dish_socket*, assembles multi-part messages, and dispatches
-    objects.
-
-    on_hostname: optional callback(hostname: str) called each time a sender
-                 is identified via the plain hostname prefix.
-
-    Mirrors receive_objs_encrypted; the only structural difference is that
-    there is no PSK / AESGCM argument.
+    Returns a coroutine that continuously reads from *dish_socket*,
+    assembles multi-part messages, and dispatches objects based on topic.
     """
 
     def _dispatch(payload: tuple):
-        hostname, data = payload
-        if on_hostname and hostname:
-            on_hostname(hostname)
+        # Mirroring the encrypted version: payload is (received_topic, data)
+        received_topic, data = payload
+
+        # Filter by topic if a specific one was requested
+        if topic is not None and received_topic != topic:
+            return
+
         try:
             obj = unpack_obj_func(data)
         except Exception as e:
             print(f"[radio] failed to unpack object: {type(e)} - {e}")
             return
+
         name = obj.__class__.__name__
         handler = obj_handlers.get(name)
         if handler:
-            handler(hostname, obj)
+            handler(received_topic, obj)
         else:
             print(f"[radio] unknown object type: {name}")
 
@@ -223,7 +222,6 @@ def receive_objs(
         asyncio.create_task(engine.cleanup_loop())
 
         while True:
-            # Drain the async-complete queue first (mirrors encrypted version)
             payload = None
             try:
                 payload, _uid = engine.completed_queue.get_nowait()
@@ -234,8 +232,14 @@ def receive_objs(
                 try:
                     msg = await dish_socket.recv(copy=False)
                     raw = msg.bytes
-                    hostname, raw = unwrap_plain_hostname_from_packet(raw)
-                    payload, _uid = engine.process_raw_packet(raw, hostname)
+
+                    # Strip the unencrypted topic prefix
+                    received_topic, raw = unwrap_topic_from_plain_packet(raw)
+
+                    # Process via engine (e.g. reassembly)
+                    payload, _uid = engine.process_raw_packet(raw, received_topic)
+
+                    # Dynamic timeout: if we got a partial packet, wait; else don't block
                     dish_socket.rcvtimeo = rcvtimeo if payload else 0
                 except zmq.Again:
                     await asyncio.sleep(0)
@@ -247,10 +251,10 @@ def receive_objs(
 
     return receive_some_obj
 
-def unwrap_hostname_from_packet(server_aesgcm: 'AESGCM', raw: bytes):
+def unwrap_topic_from_packet(server_aesgcm: 'AESGCM', raw: bytes):
     """
-    Strip and decrypt the hostname prefix.
-    Returns (hostname: str | None, remainder: bytes).
+    Strip and decrypt the topic prefix.
+    Returns (topic: str | None, remainder: bytes).
     Returns (None, raw) if decryption fails or packet is too short.
     """
     if len(raw) < 2:
@@ -261,8 +265,8 @@ def unwrap_hostname_from_packet(server_aesgcm: 'AESGCM', raw: bytes):
     block = raw[2:2 + block_len]
     rest = raw[2 + block_len:]
     try:
-        hostname = server_aesgcm.decrypt(block[:12], block[12:], None).decode('utf-8')
-        return hostname, rest
+        topic = server_aesgcm.decrypt(block[:12], block[12:], None).decode('utf-8')
+        return topic, rest
     except Exception:
         return None, raw  # wrong key or corrupted — pass raw through unchanged
 
@@ -273,21 +277,23 @@ def receive_objs_encrypted(
     blank_callback: Optional[Callable] = None,
     rcvtimeo: int = 10,
     server_psk: Optional[bytes] = None,
-    on_hostname: Optional[Callable[[str], None]] = None,
+    topic: Optional[str] = None
 ):
     """
     Returns a coroutine ``receive_some_obj(dish_socket)`` that continuously
     reads from *dish_socket*, decrypts, assembles, and dispatches objects.
 
-    server_psk:   if set, each packet has a hostname prefix encrypted with
+    server_psk:   if set, each packet has a topic prefix encrypted with
                   this key; the prefix is stripped before data decryption.
-    on_hostname:  optional callback(hostname: str) called each time a sender
-                  is identified.
     """
     server_aesgcm = AESGCM(server_psk) if server_psk else None
+    if topic is not None and server_aesgcm is None:
+        raise AssertionError("Will not be able to decrypt topics.")
 
     def _dispatch(payload: bytes):
-        hostname = payload[0]
+        received_topic = payload[0]
+        if topic is not None and received_topic!=topic:
+            return  # ignore noise
         try:
             obj = unpack_obj_func(payload[1])
         except Exception as e:
@@ -296,7 +302,7 @@ def receive_objs_encrypted(
         name = obj.__class__.__name__
         handler = obj_handlers.get(name)
         if handler:
-            handler(hostname, obj)  # handle specific sources differently
+            handler(received_topic, obj)  # handle specific sources differently
         else:
             print(f"[radio] unknown object type: {name}")
 
@@ -315,10 +321,10 @@ def receive_objs_encrypted(
                 try:
                     msg = await dish_socket.recv(copy=False)
                     raw = msg.bytes
-                    hostname = None
+                    topic = None
                     if server_aesgcm:
-                        hostname, raw = unwrap_hostname_from_packet(server_aesgcm, raw)
-                    payload, _uid = engine.process_raw_packet(raw, hostname)
+                        topic, raw = unwrap_topic_from_packet(server_aesgcm, raw)
+                    payload, _uid = engine.process_raw_packet(raw, topic)
                     dish_socket.rcvtimeo = rcvtimeo if payload else 0
                 except zmq.Again:
                     await asyncio.sleep(0)
