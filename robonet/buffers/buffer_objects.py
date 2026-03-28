@@ -22,7 +22,7 @@ Codec functions are plain module-level callables with signatures:
 Parameterised codecs (e.g. for ndarray dtype) are created by the factory
 functions ndarray_codec() and ndarray_list_codec().
 """
-
+import json
 import struct
 from typing import List, Optional, Tuple
 
@@ -180,6 +180,7 @@ _float32_list  = (_pack_float32_list,_unpack_float32_list)
 _opt_float3    = (_pack_opt_float3,  _unpack_opt_float3)
 
 _f32_arr       = ndarray_codec(np.float32)
+_u32_arr       = ndarray_codec(np.uint32)
 _u8_arr        = ndarray_codec(np.uint8)
 _c64_arr       = ndarray_codec(np.complex64)
 _f32_arr_list  = ndarray_list_codec(np.float32)
@@ -233,7 +234,7 @@ class WifiSetupInfo(BufferBase):
     type_list    = [str]
     field_codecs = [_str_]
 
-    def __init__(self, ssid: str, server_ip: str, client_ip: str,
+    def __init__(self, ssid: str, server_ip: str, client_ip: str = "",
                  password: str = 'example_password'):
         self.ssid      = ssid
         self.server_ip = server_ip
@@ -321,6 +322,14 @@ class TensorBuffer(BufferBase):
     def __init__(self, tensors: List[npt.NDArray]):
         self.tensors = tensors
 
+class SparseVectorBuffer(BufferBase):
+    """Generic list of float32 tensors."""
+    type_list    = [npt.NDArray[np.uint32], npt.NDArray[np.float32]]
+    field_codecs = [_u32_arr, _f32_arr]
+
+    def __init__(self, idx: npt.NDArray[np.uint32], val:npt.NDArray[np.float32]):
+        self.idx = idx
+        self.val = val
 
 # ============================================================
 # Sensor buffers
@@ -446,6 +455,76 @@ class WhoAreYou(BufferBase):
         # endpoint_type: 'desktop' | 'robot' | 'unknown'
         self.hostname      = hostname
         self.endpoint_type = endpoint_type
+
+class WhoAreYouAck(BufferBase):
+    type_list = [str]
+    field_codecs = [_str_]
+
+    def __init__(self, hostname: str = '', endpoint_type: str = 'unknown'):
+        self.hostname = hostname  # send their own hostname back so they know it's them
+        self.endpoint_type = endpoint_type  # send their own type in case there are multiple endpoints on this host
+
+class RobotCapabilities(BufferBase):  # noqa: F821
+    """
+    Robot → brain.  Describes all control axes and sensor streams.
+
+    json_axes: JSON list of axis descriptors:
+        [{"name": "forward",
+          "index": 0,
+          "description": "wheel forward / back",
+          "keys": [[87, 1.0], [83, -1.0]],
+          "neuron": 0,
+          "limit_lo": -1.0,
+          "limit_hi": 1.0}, ...]
+
+    json_streams: JSON list of stream descriptors:
+        [{"name": "camera",     "type": "mjpeg",
+          "width": 640,         "height": 480},
+         {"name": "microphone", "type": "audio_float32",
+          "sample_rate": 48000, "channels": 1}]
+    """
+    type_list = [str]
+    field_codecs = [_str_]  # noqa: F821
+
+    def __init__(self, json_axes: str = '[]', json_streams: str = '[]',
+                 hostname: str = '', endpoint_type: str = 'unknown') -> None:
+        self.json_axes = json_axes
+        self.json_streams = json_streams
+        self.hostname = hostname
+        self.endpoint_type = endpoint_type
+
+    @staticmethod
+    def build(axes: list, streams: list,
+              hostname: str = '', endpoint_type:str = 'unknown') -> 'RobotCapabilities':
+        return RobotCapabilities(
+            json_axes=json.dumps(axes),
+            json_streams=json.dumps(streams),
+            hostname=hostname,
+            endpoint_type=endpoint_type
+        )
+
+    def axes(self) -> list:
+        return json.loads(self.json_axes)
+
+    def streams(self) -> list:
+        return json.loads(self.json_streams)
+
+class RobotCapabilitiesAck(BufferBase):
+    type_list = [str]
+    field_codecs = [_str_]
+
+    def __init__(self, hostname: str = '', endpoint_type: str = 'unknown'):
+        self.hostname = hostname  # send their own hostname back so they know it's them
+        self.endpoint_type = endpoint_type  # send their own type in case there are multiple endpoints on this host
+
+class RobotStart(BufferBase):
+    type_list = [str]
+    field_codecs = [_str_]
+
+    def __init__(self, hostname: str = '', endpoint_type: str = 'unknown'):
+        self.hostname = hostname  # send their own hostname back so they know it's them
+        self.endpoint_type = endpoint_type  # send their own type in case there are multiple endpoints on this host
+
 
 class SudoRequest(BufferBase):
     """Server → client: request a sudo password via the UI."""

@@ -1,0 +1,102 @@
+2026-03-27 21:19:54,473 | INFO     | robonet              | === Robonet Logging Initialized (DEBUG/verbose) ===
+2026-03-27 21:19:54,474 | INFO     | root                 | Settings file not found at /home/simleek/.robobrain/settings.json — using defaults
+2026-03-27 21:21:35,073 | INFO     | robonet              | === Robonet Logging Initialized (DEBUG/verbose) ===
+2026-03-27 21:21:35,074 | INFO     | root                 | Settings file not found at /home/simleek/.robobrain/settings.json — using defaults
+2026-03-27 21:22:17,049 | INFO     | robonet              | === Robonet Logging Initialized (DEBUG/verbose) ===
+2026-03-27 21:22:17,050 | INFO     | root                 | Settings file not found at /home/simleek/.robobrain/settings.json — using defaults
+2026-03-27 21:22:43,131 | INFO     | robonet              | === Robonet Logging Initialized (DEBUG/verbose) ===
+2026-03-27 21:22:43,131 | INFO     | root                 | Settings file not found at /home/simleek/.robobrain/settings.json — using defaults
+2026-03-27 21:23:51,117 | INFO     | robonet              | === Robonet Logging Initialized (DEBUG/verbose) ===
+2026-03-27 21:23:51,124 | INFO     | root                 | Settings file not found at /home/simleek/.robobrain/settings.json — using defaults
+2026-03-27 21:25:16,552 | INFO     | robonet              | === Robonet Logging Initialized (DEBUG/verbose) ===
+2026-03-27 21:25:16,554 | INFO     | root                 | Settings file not found at /home/simleek/.robobrain/settings.json — using defaults
+2026-03-27 21:25:31,165 | INFO     | root                 | starting scanner
+2026-03-27 21:25:31,166 | INFO     | root                 | stopping scanner
+2026-03-27 21:25:31,907 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:32,908 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:33,911 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:34,913 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:35,919 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:36,921 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:37,922 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:38,930 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:39,689 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.103', hostname='beepi2', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:39,690 | INFO     | root                 | [radio] probing 192.168.0.103:9998
+2026-03-27 21:25:39,724 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.18', hostname='amazon-8923aeb4c', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:39,724 | INFO     | root                 | [radio] probing 192.168.0.18:9998
+2026-03-27 21:25:39,932 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:39,938 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.8', hostname='W1700K-W1700K2346005462', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:39,938 | INFO     | root                 | [radio] probing 192.168.0.8:9998
+2026-03-27 21:25:39,972 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.20', hostname='amazon-ef66a5394', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:39,973 | INFO     | root                 | [radio] probing 192.168.0.20:9998
+2026-03-27 21:25:40,012 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.1', hostname='_gateway', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:40,012 | INFO     | root                 | [radio] probing 192.168.0.1:9998
+2026-03-27 21:25:40,233 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.24', hostname='amazon-b1831323f', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:40,234 | INFO     | root                 | [radio] probing 192.168.0.24:9998
+2026-03-27 21:25:40,458 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.9', hostname='Galaxy-S22', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:40,459 | INFO     | root                 | [radio] probing 192.168.0.9:9998
+2026-03-27 21:25:40,664 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.11', hostname='AngesS10', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:40,665 | INFO     | root                 | [radio] probing 192.168.0.11:9998
+2026-03-27 21:25:40,701 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.15', hostname='', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:40,872 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.23', hostname='HP527DD1', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:40,873 | INFO     | root                 | [radio] probing 192.168.0.23:9998
+2026-03-27 21:25:40,890 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.31', hostname='SimLeekArchAI0', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:40,890 | INFO     | root                 | [radio] probing 192.168.0.31:9998
+2026-03-27 21:25:40,922 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.86', hostname='', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:40,945 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:41,051 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.87', hostname='2GIG-EDG-4A-DE', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:41,051 | INFO     | root                 | [radio] probing 192.168.0.87:9998
+2026-03-27 21:25:41,363 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.102', hostname='', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:41,373 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.200.131', hostname='SimLeekArchAI0', endpoint_type='unknown', last_seen=1774671939.6301177, reachable=False, axes=[], streams=[])
+2026-03-27 21:25:41,373 | INFO     | root                 | [radio] probing 192.168.200.131:9998
+2026-03-27 21:25:41,945 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:42,946 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:43,952 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:44,959 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:45,960 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:46,963 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:47,965 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:48,982 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:49,995 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:50,997 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:52,023 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:53,024 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:54,030 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:55,035 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:56,099 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:57,165 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:58,214 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:25:59,238 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:00,245 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:01,144 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.5', hostname='USLT023MSP', endpoint_type='unknown', last_seen=1774671960.5299206, reachable=False, axes=[], streams=[])
+2026-03-27 21:26:01,145 | INFO     | root                 | [radio] probing 192.168.0.5:9998
+2026-03-27 21:26:01,246 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:01,751 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.28', hostname='bjmiklos', endpoint_type='unknown', last_seen=1774671960.5299206, reachable=False, axes=[], streams=[])
+2026-03-27 21:26:01,751 | INFO     | root                 | [radio] probing 192.168.0.28:9998
+2026-03-27 21:26:02,247 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:02,994 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.51', hostname='LHTU02MQ43407QP', endpoint_type='unknown', last_seen=1774671960.5299206, reachable=False, axes=[], streams=[])
+2026-03-27 21:26:02,994 | INFO     | root                 | [radio] probing 192.168.0.51:9998
+2026-03-27 21:26:03,250 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:03,533 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.97', hostname='Mel', endpoint_type='unknown', last_seen=1774671960.5299206, reachable=False, axes=[], streams=[])
+2026-03-27 21:26:03,534 | INFO     | root                 | [radio] probing 192.168.0.97:9998
+2026-03-27 21:26:03,721 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.27', hostname='', endpoint_type='unknown', last_seen=1774671960.5299206, reachable=False, axes=[], streams=[])
+2026-03-27 21:26:04,238 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.47', hostname='AH976244', endpoint_type='unknown', last_seen=1774671960.5299206, reachable=False, axes=[], streams=[])
+2026-03-27 21:26:04,239 | INFO     | root                 | [radio] probing 192.168.0.47:9998
+2026-03-27 21:26:04,274 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:04,409 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.95', hostname='', endpoint_type='unknown', last_seen=1774671960.5299206, reachable=False, axes=[], streams=[])
+2026-03-27 21:26:04,579 | INFO     | root                 | endpoint found: Endpoint(ip='192.168.0.44', hostname='envoy', endpoint_type='unknown', last_seen=1774671960.5299206, reachable=False, axes=[], streams=[])
+2026-03-27 21:26:04,580 | INFO     | root                 | [radio] probing 192.168.0.44:9998
+2026-03-27 21:26:05,276 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:06,277 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:07,338 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:08,343 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:09,435 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:10,512 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:11,519 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:12,527 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:13,531 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:14,539 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:15,545 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:16,583 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:17,583 | INFO     | root                 | burst: <class 'robonet.buffers.buffer_objects.WhoAreYou'>
+2026-03-27 21:26:17,801 | INFO     | root                 | stopping scanner

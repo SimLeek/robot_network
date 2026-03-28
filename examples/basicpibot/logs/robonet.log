@@ -1,0 +1,6 @@
+2026-03-27 21:35:35,083 | INFO     | robonet              | === Robonet Logging Initialized (DEBUG/verbose) ===
+2026-03-27 21:36:01,494 | INFO     | robonet              | === Robonet Logging Initialized (DEBUG/verbose) ===
+2026-03-27 21:36:01,526 | INFO     | root                 | Settings file not found at /home/simleek/.robotar/settings.json — using defaults
+2026-03-27 21:36:39,604 | INFO     | robonet              | === Robonet Logging Initialized (DEBUG/verbose) ===
+2026-03-27 21:36:39,605 | INFO     | root                 | Settings file not found at /home/simleek/.robotar/settings.json — using defaults
+2026-03-27 21:36:42,307 | INFO     | root                 | listening on :9998 (server will discover us)
