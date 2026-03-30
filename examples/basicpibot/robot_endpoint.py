@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from robonet.buffers.buffer_objects import RobotCapabilities
 from robonet.util import get_local_ip
 
-from actual_robot import Robot, MoveCommand, ArmVelocity, ARM_JOINT_LIMITS
+from examples.basicpibot.actual_robot import Robot, MoveCommand, ArmVelocity, ARM_JOINT_LIMITS
 from robonet.endpoint.hardware_system import RobotHardware
 from robonet.endpoint.base import RobotNode
 from robonet.endpoint.radio_system import RobotRadio, HOSTNAME
@@ -61,19 +61,19 @@ class MicStream:
 
 def build_masterpi_capabilities(robot: Robot) -> RobotCapabilities:
     axes: list[Axis] = [
-        Axis("forward", 0, "wheel forward / back", [[ord("W"), 1.0], [ord("S"), -1.0]], 0),
-        Axis("strafe_right", 1, "wheel strafe left / right", [[ord("D"), 1.0], [ord("A"), -1.0]], 1),
-        Axis("turn_right", 2, "wheel yaw", [[ord("E"), 1.0], [ord("Q"), -1.0]], 2),
-        Axis("in_out", 3, "mecanum in / out", [[ord("R"), 1.0], [ord("F"), -1.0]], 3),
+        Axis("forward", 0, "wheel forward / back", [[ord("w"), 1.0], [ord("s"), -1.0]], 0),
+        Axis("strafe_right", 1, "wheel strafe left / right", [[ord("d"), 1.0], [ord("a"), -1.0]], 1),
+        Axis("turn_right", 2, "wheel yaw", [[ord("e"), 1.0], [ord("q"), -1.0]], 2),
+        Axis("in_out", 3, "mecanum in / out", [[ord("r"), 1.0], [ord("f"), -1.0]], 3),
     ]
 
     lims = [ARM_JOINT_LIMITS.get(x, (-1.0, 1.0)) for x in [6, 5, 4, 3, 1]]
     axes += [
-        Axis("yaw", 4, f"arm yaw. Limits: {lims[0]}", [[ord("L"), 1.0], [ord("J"), -1.0]], 4, 6, *lims[0]),
-        Axis("p1", 5, f"p1 pitch. Limits: {lims[1]}", [[ord("P"), 1.0], [ord(";"), -1.0]], 5, 5, *lims[1]),
-        Axis("p2", 6, f"p2 pitch. Limits: {lims[2]}", [[ord("U"), 1.0], [ord("O"), -1.0]], 6, 4, *lims[2]),
-        Axis("p3", 7, f"p3 pitch. Limits: {lims[3]}", [[ord("I"), 1.0], [ord("K"), -1.0]], 7, 3, *lims[3]),
-        Axis("grip", 8, f"grip. Limits: {lims[4]}", [[ord("N"), 1.0], [ord("M"), -1.0]], 8, 1, *lims[4]),
+        Axis("yaw", 4, f"arm yaw. Limits: {lims[0]}", [[ord("l"), 1.0], [ord("j"), -1.0]], 4, 6, *lims[0]),
+        Axis("p1", 5, f"p1 pitch. Limits: {lims[1]}", [[ord("p"), 1.0], [ord(";"), -1.0]], 5, 5, *lims[1]),
+        Axis("p2", 6, f"p2 pitch. Limits: {lims[2]}", [[ord("u"), 1.0], [ord("o"), -1.0]], 6, 4, *lims[2]),
+        Axis("p3", 7, f"p3 pitch. Limits: {lims[3]}", [[ord("i"), 1.0], [ord("k"), -1.0]], 7, 3, *lims[3]),
+        Axis("grip", 8, f"grip. Limits: {lims[4]}", [[ord("n"), 1.0], [ord("m"), -1.0]], 8, 1, *lims[4]),
     ]
 
     streams: list[Union[CamStream, MicStream]] = [

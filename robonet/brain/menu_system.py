@@ -120,6 +120,9 @@ class MenuSubSystem(SubSystem):
     def _connect(self, ep: 'Endpoint'):
         """Connect to ep: wire up radio and swap in the right SubSystem."""
         sm = self.root
+        if ep.ip is None:
+            self._menu.set_status(f'Could not connect to {ep.hostname or ep.ip} [{ep.endpoint_type}], no ip.')
+            return
         sm.radio.connect_to(ep.ip)
 
         self._connected = True
@@ -179,6 +182,7 @@ class MenuSubSystem(SubSystem):
     def mjpeg_handler(self, sm: 'ServerSystem'):
         #This is put in the menu since neither AI nor humans should be menu-less
         def handler(hostname: str, obj: MJpegCamFrame):
+            log.info(f"topic:{hostname}, obj:{type(obj)}")
             with self.screen_lock:
                 self.last_img = cv2.imdecode(np.frombuffer(obj.mjpeg, np.uint8), cv2.IMREAD_COLOR)
 

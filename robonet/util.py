@@ -382,7 +382,7 @@ class SecureRadioEngine:
     ctrl values: 1=first, 2=middle, 3=last, 4=single
     """
 
-    def __init__(self, psk: bytes, blank_callback: Optional[Callable] = None, max_sessions:int=2):
+    def __init__(self, psk: bytes, blank_callback: Optional[Callable] = None, max_sessions:int=16):
         self.aesgcm = AESGCM(psk)
         self.sessions: Dict[int, dict] = {}
         self.completed_queue: asyncio.Queue = asyncio.Queue()

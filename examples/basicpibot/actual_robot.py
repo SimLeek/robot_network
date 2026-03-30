@@ -91,8 +91,8 @@ AUDIO_CHUNK    = 2048
 # Camera config
 # ---------------------------------------------------------------------------
 CAMERA_DEVICE = '/dev/video0'
-CAMERA_WIDTH  = 640
-CAMERA_HEIGHT = 480
+CAMERA_WIDTH  = 320
+CAMERA_HEIGHT = 240
 
 
 # ===========================================================================

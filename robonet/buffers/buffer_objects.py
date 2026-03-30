@@ -451,10 +451,11 @@ class WhoAreYou(BufferBase):
     type_list    = [str]
     field_codecs = [_str_]
 
-    def __init__(self, hostname: str = '', endpoint_type: str = 'unknown'):
+    def __init__(self, hostname: str = '', endpoint_type: str = 'unknown', ip:str = ''):
         # endpoint_type: 'desktop' | 'robot' | 'unknown'
         self.hostname      = hostname
         self.endpoint_type = endpoint_type
+        self.ip = ip
 
 class WhoAreYouAck(BufferBase):
     type_list = [str]

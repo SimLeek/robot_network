@@ -8,7 +8,6 @@ from robonet import camera
 from robonet.buffers.buffer_handling import unpack_obj
 from robonet.buffers.buffer_objects import AudioBuffer
 
-from displayarray import display
 import asyncio
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import struct

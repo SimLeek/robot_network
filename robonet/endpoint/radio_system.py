@@ -90,6 +90,7 @@ class RobotRadio:
         self._dish.bind(f"udp://0.0.0.0:{our_port}")
         self._dish.join("direct")
         log.info("listening on :%d (server will discover us)", our_port)
+        self._uid=0
 
     def setup(self, parent: 'RobotNode'):
         self.root = parent
@@ -102,8 +103,9 @@ class RobotRadio:
     def burst(self, obj):
         data = pack_obj(obj)
         parts = [data[i: i + 4096] for i in range(0, len(data), 4096)]
+        self._uid = (self._uid + 1) % 256
         self._engine.send_burst(
-            self._radio_lock, self._radio, random.randint(0, 255), parts
+            self._radio_lock, self._radio, self._uid, parts
         )
 
     def is_streaming(self) -> bool:

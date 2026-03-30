@@ -77,7 +77,7 @@ class RobotSubSystem(SubSystem):
 
     def _unbind_keys(self):
         if self._root and self._root.displayer and self._kb_handle:
-            self._root.displayer.af_thru.unbind_keyboard(self._kb_handle)
+            self._root.displayer.af_thru.unbind_keyboard()
             self._kb_handle = None
 
     def _on_key_event(self, key, action, modifiers):

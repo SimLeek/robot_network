@@ -3,6 +3,7 @@
 import asyncio
 import platform
 import random
+import socket
 import subprocess
 import threading
 from enum import Enum
@@ -34,6 +35,7 @@ def check_wifi_connected_linux():
     else:
         return False
 
+HOSTNAME = socket.gethostname()
 
 def check_wifi_connected():
     os_name = platform.system()
@@ -72,6 +74,7 @@ class RadioSubSystem(SubSystem):
         self._their_port = settings["their_port"]
 
         self._endpoints: Dict[str, Endpoint] = {}
+        self.our_ip = None
 
         if settings["localhost_enabled"]:
             # this means the server is in a robot body, or self modification is enabled
@@ -115,6 +118,7 @@ class RadioSubSystem(SubSystem):
         self.root = None
 
         self._live_handlers: dict = {}
+        self._uid=0
 
     def setup(self, sm: 'ServerSystem'):
         self.root = sm
@@ -256,24 +260,41 @@ class RadioSubSystem(SubSystem):
         log.info(f"burst: {type(obj)}")
         data  = pack_obj(obj)
         parts = [data[i:i + 4096] for i in range(0, len(data), 4096)]
+        self._uid = (self._uid + 1) % 256
         self.engine.send_burst(self.radio_lock, self.radio,
-                               random.randint(0, 255), parts)
+                               self._uid, parts)
 
     def enrich_endpoint(self, identifier: str, hostname: str, endpoint_type: str):
         key = (hostname or identifier) + ':' + endpoint_type
+
         ep = self._endpoints.get(key)
-        if ep is not None:
-            ep.hostname      = hostname or ep.hostname
-            ep.endpoint_type = endpoint_type
-        else:
-            ep = Endpoint(ip=identifier, hostname=hostname,
-                          endpoint_type=endpoint_type, reachable=True)
-            self._endpoints[key] = ep
-        self.root.menu.set_endpoints(self._endpoints)
+        if ep is None:
+            for v in self._scanner.by_ip.values():
+                if v.hostname == hostname:  # only uid we have to start with
+                    #if v.endpoint_type != 'unknown' and v.endpoint_type != endpoint_type:
+                    #    ep = copy(v)
+                    ep = v  # should copy because immutable, probably
+                    break
+            if ep is None:
+                log.error("Could not find endpoint with IP. Cannot communicate. Must discard.")
+                return
+
+        #if ep is not None:
+        ep.hostname      = hostname or ep.hostname
+        ep.endpoint_type = endpoint_type
+        #else:
+        #    ep = Endpoint(ip=identifier, hostname=hostname,
+        #                  endpoint_type=endpoint_type, reachable=True)
+        self._endpoints[key] = ep
+        all_endpoints = self._endpoints | self._scanner.by_hostname | self._scanner.by_ip
+        self.root.menu.set_endpoints(all_endpoints)
 
     def on_endpoint_found(self, ep: Endpoint):
         print('found ep')
         #self._endpoints[ep.ip] = ep
+        if ep.hostname == HOSTNAME:
+            if '192.168.0' in ep.ip:  # ignore vnc ips
+                self.our_ip = ep.ip
         all_endpoints = self._endpoints | self._scanner.by_hostname | self._scanner.by_ip
         self.root.menu.set_endpoints(all_endpoints)
 
@@ -307,16 +328,28 @@ class RadioSubSystem(SubSystem):
                 ep.axes = obj.axes()
                 ep.streams = obj.streams()
             else:
+                # we need that IP address
+                for v in self._scanner.by_ip.values():
+                    if v.hostname == obj.hostname and v.endpoint_type == obj.endpoint_type:
+                        ep = v
+                        break
+                if ep is None:
+                    log.error("Could not find endpoint with IP. Cannot communicate. Must discard.")
+                    return
                 self.enrich_endpoint(hostname, obj.hostname, obj.endpoint_type)
-                ep = self._endpoints.get(obj.hostname + ':' + obj.endpoint_type)
+                #ep = self._endpoints.get(obj.hostname + ':' + obj.endpoint_type)
                 ep.axes = obj.axes()
                 ep.streams = obj.streams()
+            log.info(f"capabilities received: {ep.axes}, {ep.streams}")
+            self._endpoints[obj.hostname+':'+obj.endpoint_type] = ep  # ensure we have the axes and streams
+            all_endpoints = self._endpoints | self._scanner.by_hostname | self._scanner.by_ip
+            self.root.menu.set_endpoints(all_endpoints)
             self.burst(RobotCapabilitiesAck(hostname=obj.hostname, endpoint_type=obj.endpoint_type))
         return handler
 
     async def transmit_who_are_you(self):
         """Probe a specific endpoint that we want to connect to."""
-        probe = WhoAreYou('')
+        probe = WhoAreYou(ip=self.our_ip if self.our_ip else '')
         self.burst(probe)
 
     async def transmit_capabilities(self, hostname, typename):
