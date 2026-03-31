@@ -6,7 +6,7 @@ if typing.TYPE_CHECKING:
     from robonet.endpoint.radio_system import RobotRadio
 
 import asyncio
-from robonet.endpoint.logging_setup import setup_logging
+from robonet.logging_setup import setup_logging
 log = setup_logging()
 import robonet.endpoint.settings as settings_
 
