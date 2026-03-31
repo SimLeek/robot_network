@@ -12,6 +12,7 @@ from robonet.brain.util.action_factory import ActionFactory
 from robonet.brain.util.desktop_window_config import register_desktop_actions
 from robonet.brain.util.system_base import SubSystem
 from robonet.logging_setup import setup_logging
+import asyncio
 
 log = setup_logging()
 settings = settings_.get()
@@ -53,6 +54,10 @@ class ServerSystem:
 
     def swap_subsystem(self, new_sub: SubSystem):
         """Hot-swap the active endpoint SubSystem."""
+        if self.active_sub and hasattr(self.active_sub, '_tasks'):
+            for t in self.active_sub._tasks:
+                t.cancel()
+
         self.active_sub = new_sub
         new_sub.setup(self)
         self.radio.rebuild_handlers(self)
@@ -67,6 +72,8 @@ class ServerSystem:
             pass  # todo: add ai neuron or token controls
 
         new_sub.start()
+
+        new_sub._tasks = [asyncio.ensure_future(c) for c in new_sub.async_loops(self)]
         print(f"[ServerSystem] active SubSystem → {type(new_sub).__name__}")
 
     def register_default_human_controls(self, af: ActionFactory):

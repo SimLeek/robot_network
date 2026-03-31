@@ -38,7 +38,7 @@ def transmit_cam_mjpg_async(unicast_radio):
     while True:
         # Send direct messages to the server
         direct_message = cam.get_packed_frame()
-        direct_message = MJpegCamFrame(0, 0, direct_message)
+        direct_message = MJpegCamFrame(0, 0, cam.width, cam.height, direct_message)
         direct_message = pack_obj(direct_message)
         parts = []
         for i in range(0, len(direct_message), 4096):

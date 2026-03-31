@@ -28,9 +28,9 @@ class RobotHardware(abc.ABC):
         self._audio_queue: asyncio.Queue = asyncio.Queue(maxsize=4)
 
     # call these from the class that inherits this one
-    def enqueue_frame(self, jpeg: bytes):
+    def enqueue_frame(self, jpeg: bytes, w:int, h:int, encoding:str):
         if self.root.radio.is_streaming:
-            self.root.loop.call_soon_threadsafe(self._drop_put, self._frame_queue, jpeg)
+            self.root.loop.call_soon_threadsafe(self._drop_put, self._frame_queue, (jpeg, w, h, encoding))
 
     def enqueue_audio(self, chunk: np.ndarray):
         if not self.root.radio.is_streaming:
@@ -87,8 +87,8 @@ class RobotHardware(abc.ABC):
 
     async def _transmit_camera_loop(self):
         while True:
-            jpeg = await self._frame_queue.get()
-            self.root.radio.burst(MJpegCamFrame(brightness=0, exposure=0, mjpeg=jpeg))
+            jpeg, w, h, encoding = await self._frame_queue.get()
+            self.root.radio.burst(MJpegCamFrame(brightness=0, exposure=0, mjpeg=jpeg, w=w, h=h, format=encoding))
 
     async def _transmit_audio_loop(self):
         rate = self.mic_rate()

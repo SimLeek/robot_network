@@ -49,7 +49,7 @@ from typing import Callable, Dict, List, Optional
 import numpy as np
 import pyaudio
 
-from masterpi_core import Board, PacketFunction
+from examples.basicpibot.masterpi_core import Board, PacketFunction
 
 # ---------------------------------------------------------------------------
 # Timing
@@ -204,7 +204,7 @@ class Robot:
     """
 
     # Assign these before calling start():
-    on_frame: Optional[Callable[[np.ndarray], None]] = None  # (H,W,3) uint8 RGB
+    on_frame: Optional[Callable[[np.ndarray, int, int, str], None]] = None  # (H,W,3) uint8 RGB
     on_audio: Optional[Callable[[np.ndarray], None]] = None  # float32 [-1,1] chunk
 
     _MIN_MOVE_DURATION = 0.04  # seconds — below this the hw interpolator misbehaves
@@ -432,11 +432,11 @@ class Robot:
                     raw   = cam.get_frame()
                     if self.FRAME_TYPE == 'raw':
                         if self.on_frame:
-                            self.on_frame(raw)
+                            self.on_frame(raw, w, h, cam.pixel_format)
                     else:
                         frame = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3))
                         if self.on_frame:
-                            self.on_frame(frame)
+                            self.on_frame(frame, w, h, cam.pixel_format)
                 except CameraError as e:
                     print(f"[Robot] Camera frame error: {e}")
         finally:

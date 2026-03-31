@@ -144,7 +144,7 @@ class MasterPiHw(RobotHardware):
     async def start_streams(self):
         robot = self._robot
 
-        def on_frame(raw: bytes):
+        def on_frame(raw: bytes, w:int, h:int, encoding:str):
             self.enqueue_frame(raw)
 
         robot.on_frame = on_frame

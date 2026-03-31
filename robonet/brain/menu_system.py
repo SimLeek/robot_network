@@ -184,6 +184,15 @@ class MenuSubSystem(SubSystem):
         def handler(hostname: str, obj: MJpegCamFrame):
             log.info(f"topic:{hostname}, obj:{type(obj)}")
             with self.screen_lock:
-                self.last_img = cv2.imdecode(np.frombuffer(obj.mjpeg, np.uint8), cv2.IMREAD_COLOR)
+                if obj.encoding == 'mjpeg':
+                    img = cv2.imdecode(np.frombuffer(obj.mjpeg, np.uint8), cv2.IMREAD_COLOR)
+                else:
+                    img = np.frombuffer(obj.mjpeg, dtype=np.uint8).reshape((obj.h, obj.w, 3))
+                if obj.w>settings['ai_res'][0] or obj.h>settings['ai_res'][1]:
+                    resized_image = cv2.resize(image, settings['ai_res'], interpolation=cv2.INTER_NEAREST)
+                if img is None:
+                    log.error("Received bad image. Could not decode.")
+                else:
+                    self.last_img = img
 
         return handler

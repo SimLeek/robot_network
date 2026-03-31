@@ -11,8 +11,9 @@ setup(
     packages=find_packages(),
     install_requires=[
         'numpy',
-        'opencv-python~=4.10.0.84',
+        'opencv-python',
         'Cython',
+        "python-statemachine",
         'PyV4L2Cam @ git+https://github.com/simleek/PyV4L2Cam.git',
         # pyzmq... but dn't install from here
     ],

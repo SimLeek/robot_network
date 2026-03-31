@@ -263,13 +263,16 @@ class MJpegCamFrame(BufferBase):
     TODO: mjpeg has 8×8 FFTs — consider translating directly into image pyramids
     on the GPU (parallelize the JPEG codec into GLSL/Vulkan).
     """
-    type_list    = [bytes, int]
-    field_codecs = [_bytes_, _uint32]
+    type_list    = [bytes, int, str]
+    field_codecs = [_bytes_, _uint32, _str_]
 
-    def __init__(self, brightness: int, exposure: int, mjpeg: bytes):
+    def __init__(self, brightness: int, exposure: int, w:int, h:int, mjpeg: bytes, format:str='mjpeg'):
         self.brightness = brightness
         self.exposure   = exposure
+        self.w = w  # mostly for assertions
+        self.h = h
         self.mjpeg      = mjpeg
+        self.format = format
 
 
 # ============================================================

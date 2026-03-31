@@ -39,6 +39,7 @@ class RobotSubSystem(SubSystem):
         self._axis: Dict[int, float] = {}
         self._n_neurons = 0
         self._kb_handle = None             # for unbinding on teardown
+        self._tasks = []  # for startup and shutdown of co-routines
         self.handlers = {}
 
     def setup(self, root: 'ServerSystem'):
