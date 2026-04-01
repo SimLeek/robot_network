@@ -123,10 +123,10 @@ class MotorConfig:
 
     def to_legacy_list(self) -> List[List]:
         return [
-            [1,  self.m1],
-            [2,  self.m2],
-            [3, -self.m3],
-            [4, -self.m4],
+            [1,  self.m1*100.0],
+            [2,  self.m2*100.0],
+            [3, -self.m3*100.0],
+            [4, -self.m4*100.0],
         ]
 
 
@@ -423,8 +423,8 @@ class Robot:
         except CameraError as e:
             print(f"[Robot] Camera failed: {e}")
             return
-        if cam.pixel_format != 'RGB24':
-            print(f"[Robot] Warning: camera pixel format is {cam.pixel_format}, expected RGB24")
+        if cam.dest_pixel_format != 'RGB24':
+            print(f"[Robot] Warning: camera pixel format is {cam.dest_pixel_format}, expected RGB24")
         w, h = cam.width, cam.height
         try:
             while self._running:
@@ -432,11 +432,11 @@ class Robot:
                     raw   = cam.get_frame()
                     if self.FRAME_TYPE == 'raw':
                         if self.on_frame:
-                            self.on_frame(raw, w, h, cam.pixel_format)
+                            self.on_frame(raw, w, h, cam.dest_pixel_format)
                     else:
                         frame = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3))
                         if self.on_frame:
-                            self.on_frame(frame, w, h, cam.pixel_format)
+                            self.on_frame(frame, w, h, cam.dest_pixel_format)
                 except CameraError as e:
                     print(f"[Robot] Camera frame error: {e}")
         finally:

@@ -97,9 +97,10 @@ class RobotSubSystem(SubSystem):
         idx = []
         val = []
         for n, v in self._axis.items():
-            if n < self._n_neurons and abs(v)>self._val_thresh:
-                idx.append(n)
-                val.append(v)
+            # we actually do want to send 0 to stop the motors on key up
+            #if n < self._n_neurons and abs(v)>self._val_thresh:
+            idx.append(n)
+            val.append(v)
         if idx:
             idx = np.asarray(idx, dtype=np.uint32)
             val = np.asarray(val, dtype=np.float32)

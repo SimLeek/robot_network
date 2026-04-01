@@ -145,7 +145,7 @@ class MasterPiHw(RobotHardware):
         robot = self._robot
 
         def on_frame(raw: bytes, w:int, h:int, encoding:str):
-            self.enqueue_frame(raw)
+            self.enqueue_frame(raw, w, h, encoding)
 
         robot.on_frame = on_frame
         robot.on_audio = self.enqueue_audio
