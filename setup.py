@@ -13,6 +13,7 @@ setup(
         'numpy',
         'opencv-python',
         'Cython',
+        'PyGObject',
         "python-statemachine",
         'PyV4L2Cam @ git+https://github.com/simleek/PyV4L2Cam.git',
         # pyzmq... but dn't install from here

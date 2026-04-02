@@ -553,3 +553,43 @@ class SudoResponse(BufferBase):
 
 class StartTrigger(_TriggerBase): pass
 class StopTrigger(_TriggerBase):  pass
+
+
+class GstStreamInfo(BufferBase):
+    """
+    Sent by robot to describe its GStreamer pipeline.
+    Robot keeps sending until it receives GstStreamInfoAck.
+    """
+    type_list = [str, str, str, int, int, int, int, int, int, str]
+    field_codecs = [_str_, _str_, _str_, _uint32, _uint32, _uint32, _uint32, _uint32, _uint32, _str_]
+
+    def __init__(self,
+                 hostname: str,
+                 video_codec: str,  # 'h264' | 'h265' | 'vp8' | 'vp9' | ''
+                 audio_codec: str,  # 'opus' | 'aac'  | ''
+                 video_port: int,
+                 audio_port: int,
+                 width: int,
+                 height: int,
+                 fps: int,
+                 sample_rate: int,
+                 endpoint_type: str = 'robot'):
+        self.hostname = hostname
+        self.video_codec = video_codec
+        self.audio_codec = audio_codec
+        self.video_port = video_port
+        self.audio_port = audio_port
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.sample_rate = sample_rate
+        self.endpoint_type = endpoint_type
+
+
+class GstStreamInfoAck(BufferBase):
+    type_list = [str, str]
+    field_codecs = [_str_, _str_]
+
+    def __init__(self, hostname: str, endpoint_type: str = 'robot'):
+        self.hostname = hostname
+        self.endpoint_type = endpoint_type

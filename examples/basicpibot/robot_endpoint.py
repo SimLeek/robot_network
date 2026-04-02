@@ -10,17 +10,16 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
-from typing import Union
+from typing import Union, Optional
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from robonet.buffers.buffer_objects import RobotCapabilities
-from robonet.util import get_local_ip
-
-from examples.basicpibot.actual_robot import Robot, MoveCommand, ArmVelocity, ARM_JOINT_LIMITS
-from robonet.endpoint.hardware_system import RobotHardware
+import threading
+from examples.basicpibot.actual_robot import Robot, MoveCommand, ArmVelocity, ARM_JOINT_LIMITS, TICK_RATE
+from robonet.endpoint.hardware_system import CamMicSpkRobotHardware
 from robonet.endpoint.base import RobotNode
 from robonet.endpoint.radio_system import RobotRadio, HOSTNAME
 from robonet.endpoint.settings import get as get_settings
@@ -88,10 +87,17 @@ def build_masterpi_capabilities(robot: Robot) -> RobotCapabilities:
     )
 
 
-class MasterPiHw(RobotHardware):
+class MasterPiHw(CamMicSpkRobotHardware):
     def __init__(self):
         super().__init__()
         self._robot = Robot()
+
+    def setup(self, parent):
+        super().setup(parent)
+        # Hardware always needs to be running — serial, audio, position polling.
+        # This is independent of whether a server ever connects.
+        self._robot.start()
+        log.info('MasterPi hardware started')
 
     def build_capabilities(self) -> RobotCapabilities:
         return build_masterpi_capabilities(self._robot)
@@ -99,6 +105,21 @@ class MasterPiHw(RobotHardware):
     def halt(self):
         self._robot.stop_drive()
         self._robot.arm_stop()
+
+    def stop(self):
+        self._robot.on_frame = None
+        self._robot.on_audio = None
+        self._robot.stop()
+        super().stop()
+
+    def async_loops(self) -> list:
+        return [*super().async_loops(), self._arm_tick_loop()]
+
+    async def _arm_tick_loop(self):
+        dt = 1.0 / TICK_RATE
+        while True:
+            self._robot.arm_tick()
+            await asyncio.sleep(dt)
 
     def apply_tensor(self, idx_vec: np.ndarray, val_vec: np.ndarray):
         n = len(idx_vec)
@@ -134,27 +155,6 @@ class MasterPiHw(RobotHardware):
             self._robot.drive(MoveCommand(**mv_dict))
         if arm_dict:
             self._robot.arm_set_velocity(ArmVelocity(**arm_dict))
-
-    def _apply_speaker(self, chunk: np.ndarray):
-        self._robot.speak(chunk)
-
-    def _get_mic_rate(self) -> int:
-        return self._robot.mic_rate or 48000
-
-    async def start_streams(self):
-        robot = self._robot
-
-        def on_frame(raw: bytes, w:int, h:int, encoding:str):
-            self.enqueue_frame(raw, w, h, encoding)
-
-        robot.on_frame = on_frame
-        robot.on_audio = self.enqueue_audio
-        robot.start()
-        log.info("MasterPi streams started")
-
-    async def stop_streams(self):
-        self._robot.stop()
-        log.info("MasterPi streams stopped")
 
 
 if __name__ == '__main__':

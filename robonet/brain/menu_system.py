@@ -14,6 +14,9 @@ from robonet.brain.util.selection_menu import SelectionMenu, MenuVisState
 from robonet.brain.util.system_base import SubSystem
 from robonet.buffers.buffer_objects import MJpegCamFrame, RobotStart
 import robonet.brain.settings as settings_
+from robonet.gst_io.devices import get_first_mic_device, DeviceNotFoundError
+from robonet.gst_io.receiver import GstReceiver
+from robonet.gst_io.streamer import GstSender
 from robonet.logging_setup import setup_logging
 
 log = setup_logging()
@@ -49,7 +52,29 @@ class MenuSubSystem(SubSystem):
         self.root: 'ServerSystem' = None
         self.screen_lock = threading.Lock()
         self.last_img = np.zeros((self.out_res[1], self.out_res[0], 3), dtype=np.uint8)
+        self.last_audio = None
         self.handlers = None
+
+        # todo: move this all somewhere other than menu
+        mic = None
+        try:
+            mic = get_first_mic_device()
+        except DeviceNotFoundError:
+            log.error("Could not find a mic device. Will be starting without a mic.")
+
+        with open(settings["psk_file"], "rb") as f:
+            psk = f.read()
+
+        self._gst_sender = GstSender(psk=psk,
+                                     src_device=None,
+                                     mic_device=mic,
+                                     sample_rate=48000)
+        self._gst_receiver = GstReceiver(psk=psk,
+                                         recv_img_callback=self.on_img,
+                                         recv_audio_callback=self.on_audio
+                                         #direct_audio=False,  # <- gst will play received audio directly to speaker
+                                         #audio_output_device=speaker
+                                         )
 
     def set_endpoints(self, eps):
         self._menu.set_endpoints(eps)
@@ -59,15 +84,15 @@ class MenuSubSystem(SubSystem):
         self._menu.root = root
         #root.radio.on_endpoint_found = self._on_endpoint_found
         #root.radio.on_endpoint_lost = self._on_endpoint_lost
-        self.handlers = {
-            'MJpegCamFrame': self.mjpeg_handler(root)
-        }
+        self.handlers = self._gst_receiver.handlers | self._gst_sender.handlers
 
     def start(self):
         self._start_time = time.time()
 
     def stop(self):
         self.is_running = False
+        self._gst_receiver.stop()
+        self._gst_sender.stop()
 
     def register_default_human_controls(self, af: ActionFactory):
         print('regdef')
@@ -132,8 +157,17 @@ class MenuSubSystem(SubSystem):
         # Stop previous sub if any
         if sm.active_sub:
             sm.active_sub.stop()
+            # todo: put this somewhere else too
+            self._gst_sender.stop()
+            self._gst_receiver.stop()
 
         sm.radio.burst(RobotStart(hostname=ep.hostname, endpoint_type=ep.endpoint_type))
+
+        # todo: put this somewhere else too
+        self._gst_sender.setup(self.root, ep.ip)
+        self._gst_receiver.setup(self.root)
+        self._gst_sender.start()
+        self._gst_receiver.start()
 
         new_sub = RobotSubSystem(endpoint=ep)
         sm.swap_subsystem(new_sub)
@@ -170,6 +204,8 @@ class MenuSubSystem(SubSystem):
             img = self._menu.composite(self.last_img)
             if self.root.displayer is not None:
                 self.root.displayer.update_frame(img)
+                if self.last_audio is not None:
+                    self.root.displayer.update_audio(self.last_audio)
             if self.root.ai is not None:
                 self.root.ai.update_frame(img)
             t1 = time.time()
@@ -179,20 +215,22 @@ class MenuSubSystem(SubSystem):
     def async_loops(self, *args):
         return [self.timeout_loop(), self.send_frames_always()]
 
-    def mjpeg_handler(self, sm: 'ServerSystem'):
+    def on_img(self, img:np.ndarray):
         #This is put in the menu since neither AI nor humans should be menu-less
-        def handler(hostname: str, obj: MJpegCamFrame):
-            log.info(f"topic:{hostname}, obj:{type(obj)}")
-            with self.screen_lock:
-                if obj.format == 'MJPG':
-                    img = cv2.imdecode(np.frombuffer(obj.mjpeg, np.uint8), cv2.IMREAD_COLOR)
-                else:
-                    img = np.frombuffer(obj.mjpeg, dtype=np.uint8).reshape((obj.h, obj.w, 3))
-                if obj.w>settings['ai_res'][0] or obj.h>settings['ai_res'][1]:
-                    img = cv2.resize(image, settings['ai_res'], interpolation=cv2.INTER_NEAREST)
-                if img is None:
-                    log.error("Received bad image. Could not decode.")
-                else:
-                    self.last_img = img
+        log.info(f"gst img received")
+        with self.screen_lock:
+            #if obj.format == 'MJPG':
+            #    img = cv2.imdecode(np.frombuffer(obj.mjpeg, np.uint8), cv2.IMREAD_COLOR)
+            #else:
+            #    img = np.frombuffer(obj.mjpeg, dtype=np.uint8).reshape((obj.h, obj.w, 3))
+            #if obj.w>settings['ai_res'][0] or obj.h>settings['ai_res'][1]:
+            #    img = cv2.resize(image, settings['ai_res'], interpolation=cv2.INTER_NEAREST)
+            if img is None:
+                log.error("Received None image.")
+            else:
+                self.last_img = img
 
-        return handler
+    def on_audio(self, aud:np.ndarray):
+        log.info(f"gst aud received")
+        self.last_audio = aud
+

@@ -543,7 +543,7 @@ class Robot:
             prev_vel = self._active_vel[sid]
             in_flight = self._move_deadline[sid] > now
 
-            vel_changed = abs(vel - prev_vel) > _DEAD_BAND
+            vel_changed = abs(vel - prev_vel) > self._DEAD_BAND
 
             if not vel_changed and in_flight:
                 continue   # this joint is mid-move with unchanged intent — leave it alone
@@ -557,7 +557,7 @@ class Robot:
                 # Snap-stop: command current position, near-zero duration.
                 # This overwrites any in-flight move on the hardware side.
                 pulse = normalized_to_pulse(clamp(cur, lo, hi))
-                self._board.pwm_servo_set_position(_STOP_DURATION, [[sid, pulse]])
+                self._board.pwm_servo_set_position(self._STOP_DURATION, [[sid, pulse]])
                 self._move_deadline[sid] = 0.0
                 continue
 
@@ -568,7 +568,7 @@ class Robot:
                 continue   # already at (or past) the limit
 
             max_speed = ARM_JOINT_MAX_SPEED.get(sid, ARM_MAX_SPEED)
-            duration  = max(distance / (abs(vel) * max_speed), _MIN_MOVE_DURATION)
+            duration  = max(distance / (abs(vel) * max_speed), self._MIN_MOVE_DURATION)
 
             self._board.pwm_servo_set_position(duration, [[sid, normalized_to_pulse(target)]])
             self._move_deadline[sid] = now + duration

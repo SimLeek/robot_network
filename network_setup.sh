@@ -53,6 +53,33 @@ install_package_debian() {
     fi
 }
 
+setup_gst() {
+  if [[ "$OS" == "Arch" ]]; then
+    install_package_arch gstreamer
+    install_package_arch gst-plugins-base
+    install_package_arch gst-plugins-good
+    install_package_arch gst-plugins-bad
+    install_package_arch gst-plugins-ugly
+    install_package_arch gst-plugin-rsrtp
+    install_package_arch gst-python
+    install_package_arch python-gobject
+    install_package_arch libv4l
+  elif [[ "$OS" == "Debian" ]]; then
+    install_package_debian libgstreamer1.0-dev
+    install_package_debian libgstreamer-plugins-base1.0-dev
+    install_package_debian gstreamer1.0-plugins-base
+    install_package_debian gstreamer1.0-plugins-good
+    install_package_debian gstreamer1.0-plugins-bad
+    install_package_debian gstreamer1.0-plugins-ugly
+    install_package_debian gstreamer1.0-plugins-bad-apps
+    install_package_debian gstreamer1.0-python3-plugin-loader
+    install_package_debian gstreamer1.0-libav
+    install_package_debian gstreamer1.0-tools
+    install_package_debian python3-gst-1.0 python3-gi
+    install_package_debian libv4l-dev
+  fi
+}
+
 # Function to install and configure UFW firewall
 setup_firewall() {
     echo "Installing UFW (Uncomplicated Firewall)..."
@@ -76,6 +103,16 @@ setup_firewall() {
     sudo ufw allow 9998/udp
     sudo ufw allow 9998/tcp
 
+    echo "Allowing traffic on port 5600-5603 (GStreamer RTP and RTCP)..."
+    sudo ufw allow 5600/udp
+    sudo ufw allow 5600/tcp
+    sudo ufw allow 5601/udp
+    sudo ufw allow 5601/tcp
+    # RTCP runs on port+1 by convention (RFC 3550 §11)
+    sudo ufw allow 5602/udp
+    sudo ufw allow 5602/tcp
+    sudo ufw allow 5603/udp
+    sudo ufw allow 5603/tcp
     # Enable the firewall if it's not already enabled
     echo "Enabling the firewall..."
     sudo ufw enable
@@ -115,13 +152,9 @@ enable_multicast() {
 main() {
     echo "Starting network configuration script..."
 
-    # Step 1: Enable IPv6 if disabled
     enable_ipv6
-
-    # Step 2: Set up the firewall and allow port 9999
+    setup_gst
     setup_firewall
-
-    # Step 3: Ensure multicast is enabled on all network interfaces
     enable_multicast
 
     echo "Network configuration is complete."

@@ -92,6 +92,7 @@ class RobotRadio:
         log.info("listening on :%d (server will discover us)", our_port)
         self._uid=0
         self._radio_connected = False
+        self._server_ip = None
 
     def setup(self, parent: 'RobotNode'):
         self.root = parent
@@ -128,6 +129,8 @@ class RobotRadio:
         current = self._sm.current_state_value
 
         if not self._radio_connected and obj.ip:
+            self._server_ip = obj.ip
+            self.root.update_server_ip(obj.ip)
             self._radio.connect(f'udp://{obj.ip}:{settings["their_port"]}')
             self._radio_connected = True
             log.info(f"[radio] learned IP {obj.ip} from WhoAreYou")
@@ -187,7 +190,7 @@ class RobotRadio:
             return
         self._sm.chosen_received()
         log.info("robot start was for us")
-        self.root.loop.create_task(self.root.hardware.start_streams())
+        self.root.start()
 
     # ------------------------------------------------------------------
     # Watchdog  (radio concern: it knows the control timestamp)
@@ -204,7 +207,7 @@ class RobotRadio:
                     and time.monotonic() - self._last_ctrl > WATCHDOG_TIMEOUT
             ):
                 log.warning("watchdog timeout — halting")
-                self.root.hardware.halt()
+                self.root.stop()
                 self._radio_connected = False
                 self._sm.stop_received()  # allow discovery, and server should know to send a RobotStart request
 

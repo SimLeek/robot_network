@@ -20,6 +20,16 @@ class RobotNode:
         self.hardware = hardware
         self.loop = None
 
+    def update_server_ip(self, ip):
+        self.hardware.update_server_ip(ip)
+
+    def start(self):
+        self.hardware.start()
+
+    def stop(self):
+        self.hardware.stop()
+        self.hardware.halt()
+
     async def run(self):
         self.loop = asyncio.get_running_loop()
         self.radio.setup(self)
@@ -31,3 +41,5 @@ class RobotNode:
             )
         finally:
             self.radio.stop()
+            self.hardware.stop()
+            self.hardware.halt()
