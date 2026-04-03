@@ -276,6 +276,10 @@ class _VideoPipeline:
         if self._video_codec == 'h264':
             pay.set_property('config-interval', 1)
 
+        # SRTP key hash
+        key_hash = hashlib.sha256(self._srtp_key).hexdigest()[:16]
+        log.info(f'[gst] SRTP KEY HASH video send: {key_hash} (enc_name={self._enc_name})')
+
         srtp.set_property('key',        _srtp_buf(self._srtp_key))
         srtp.set_property('rtp-cipher', 'aes-128-icm')
         srtp.set_property('rtp-auth',   'hmac-sha1-80')
@@ -457,6 +461,10 @@ class _AudioPipeline:
                       'check gst-plugins-bad and gst-plugin-srtp are installed')
             return False
 
+        # SRTP key hash
+        key_hash = hashlib.sha256(self._srtp_key).hexdigest()[:16]
+        log.info(f'[gst] SRTP KEY HASH video send: {key_hash} (enc_name={self._enc_name})')
+
         src.set_property('device', self._mic_device)
         capsflt.set_property('caps', Gst.Caps.from_string(
             f'audio/x-raw,rate={self._sample_rate},channels=1'))
@@ -606,6 +614,10 @@ class GstSender:
         self._fps         = fps
         self._srtp_key    = _srtp_key_from_psk(psk)
         self._bitrate     = BITRATE_DEFAULT
+
+        # SRTP key hash (compare this on both sides)
+        key_hash = hashlib.sha256(self._srtp_key).hexdigest()[:16]
+        log.info(f'[gst] SRTP KEY HASH (sender init): {key_hash}')
 
         self._video_candidates = _video_encoder_candidates()
         self._audio_candidates = _audio_encoder_candidates()
