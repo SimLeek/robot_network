@@ -34,12 +34,10 @@ Usage:
     robot.stop()
 
 Dependencies:
-  pip install numpy pyaudio
   pip install git+https://github.com/simleek/PyV4L2Cam.git
   apt-get install libv4l-dev
 """
 
-import queue
 import struct
 import threading
 import time
@@ -47,7 +45,6 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
 import numpy as np
-import pyaudio
 
 from examples.basicpibot.masterpi_core import Board, PacketFunction
 
@@ -79,21 +76,6 @@ ARM_JOINT_LIMITS: Dict[int, tuple] = {
     5: (-0.25, 1.0),    # p1:   avoid self-intersection with back
     6: (-1.0,  1.0),    # yaw:  full range
 }
-
-# ---------------------------------------------------------------------------
-# Audio config
-# ---------------------------------------------------------------------------
-AUDIO_FORMAT   = pyaudio.paFloat32
-AUDIO_CHANNELS = 1
-AUDIO_CHUNK    = 2048
-
-# ---------------------------------------------------------------------------
-# Camera config
-# ---------------------------------------------------------------------------
-CAMERA_DEVICE = '/dev/video0'
-CAMERA_WIDTH  = 320
-CAMERA_HEIGHT = 240
-
 
 # ===========================================================================
 # Helpers
@@ -216,23 +198,9 @@ class Robot:
     def __init__(self,
                  serial_device: str = '/dev/ttyS0',
                  baudrate: int = 1_000_000,
-                 max_buzzer_time: float = 2.0,
-                 camera_device: str = CAMERA_DEVICE,
-                 camera_width: int = CAMERA_WIDTH,
-                 camera_height: int = CAMERA_HEIGHT,
-                 mic_device_index: Optional[int] = None,
-                 mic_rate: Optional[int] = None,
-                 speaker_device_index: Optional[int] = None,
-                 speaker_rate: int = 48000):
+                 max_buzzer_time: float = 2.0):
 
         self.max_buzzer_time   = max_buzzer_time
-        self._camera_device    = camera_device
-        self.camera_width     = camera_width
-        self.camera_height    = camera_height
-        self._mic_device_index = mic_device_index
-        self.mic_rate         = mic_rate
-        self._spk_device_index = speaker_device_index
-        self._spk_rate         = speaker_rate
 
         # --- Board ---
         self._board = Board(device=serial_device, baudrate=baudrate)
@@ -254,12 +222,6 @@ class Robot:
         self._board.parsers[PacketFunction.PACKET_FUNC_PWM_SERVO] = self._on_pwm_servo_packet
         self._board.parsers[PacketFunction.PACKET_FUNC_SYS]       = self._on_sys_packet
 
-        # --- Speaker queue ---
-        self._spk_queue   = queue.Queue(maxsize=8)
-
-        # Single shared PyAudio instance — multiple instances fight over ALSA
-        self._pa = self._init_pyaudio()
-
         # Background threads (started in start())
         self._running     = False
         self._threads: List[threading.Thread] = []
@@ -276,23 +238,6 @@ class Robot:
         self._threads.append(threading.Thread(
             target=self._hw_reader_loop, daemon=True, name='arm-hw-reader'))
 
-        # Camera
-        self._threads.append(threading.Thread(
-            target=self._camera_loop, daemon=True, name='camera'))
-
-        # Mic
-        mic_idx, mic_rate = self._resolve_mic()
-        self._mic_device_index = mic_idx
-        self.mic_rate         = mic_rate
-        self._threads.append(threading.Thread(
-            target=self._mic_loop, daemon=True, name='mic'))
-
-        # Speaker
-        spk_idx = self._resolve_speaker()
-        self._spk_device_index = spk_idx
-        self._threads.append(threading.Thread(
-            target=self._speaker_loop, daemon=True, name='speaker'))
-
         for t in self._threads:
             t.start()
 
@@ -301,75 +246,6 @@ class Robot:
         self._running = False
         self.arm_stop()
         self.stop_drive()
-        try:
-            self._pa.terminate()
-        except Exception:
-            pass
-
-    # -----------------------------------------------------------------------
-    # Audio device resolution (run before threads start, so errors surface early)
-    # -----------------------------------------------------------------------
-
-    def _init_pyaudio(self, retries: int = 5, delay: float = 1.0) -> pyaudio.PyAudio:
-        """
-        Initialize PyAudio with retries. ALSA on the Pi can report temporarily
-        inconsistent device state (especially after USB audio events), causing an
-        assertion failure inside pa_front.c on the first try.
-        """
-        last_exc = None
-        for attempt in range(retries):
-            try:
-                return pyaudio.PyAudio()
-            except Exception as e:
-                last_exc = e
-                print(f"[Robot] PyAudio init attempt {attempt+1}/{retries} failed: {e}")
-                time.sleep(delay)
-        raise RuntimeError(f"PyAudio failed to initialize after {retries} attempts") from last_exc
-
-    def _resolve_mic(self):
-        idx  = self._mic_device_index
-        rate = self.mic_rate
-        if idx is None:
-            best_vol, best_idx, best_rate = -1.0, None, 48000
-            for i in range(self._pa.get_device_count()):
-                dev = self._pa.get_device_info_by_index(i)
-                if dev['maxInputChannels'] == 0:
-                    continue
-                dev_rate = int(dev['defaultSampleRate'])
-                try:
-                    s = self._pa.open(format=pyaudio.paInt16, channels=1, rate=dev_rate,
-                                input=True, input_device_index=i,
-                                frames_per_buffer=AUDIO_CHUNK)
-                    raw  = s.read(AUDIO_CHUNK, exception_on_overflow=False)
-                    vol  = float(np.sqrt(np.mean(
-                               np.frombuffer(raw, dtype=np.int16).astype(np.float32) ** 2)))
-                    s.stop_stream(); s.close()
-                    if vol > best_vol:
-                        best_vol, best_idx, best_rate = vol, i, dev_rate
-                except Exception:
-                    pass
-            idx  = best_idx
-            rate = best_rate
-            if idx is not None:
-                name = self._pa.get_device_info_by_index(idx)['name']
-                print(f"[Robot] Mic auto-selected: {name} (index {idx})")
-            else:
-                print("[Robot] No mic found.")
-        elif rate is None:
-            rate = int(self._pa.get_device_info_by_index(idx)['defaultSampleRate'])
-        return idx, rate
-
-    def _resolve_speaker(self):
-        idx = self._spk_device_index
-        if idx is not None:
-            return idx
-        for i in range(self._pa.get_device_count()):
-            dev = self._pa.get_device_info_by_index(i)
-            if dev['maxOutputChannels'] > 0 and dev['maxInputChannels'] == 0:
-                print(f"[Robot] Speaker auto-selected: {dev['name']} (index {i})")
-                return i
-        print("[Robot] No speaker found.")
-        return None
 
     # -----------------------------------------------------------------------
     # Serial packet callbacks (called from Board.recv_task thread)
@@ -415,70 +291,6 @@ class Robot:
                 pass
             time.sleep(1.0 / (TICK_RATE * len(sids)))
 
-    def _camera_loop(self):
-        from PyV4L2Cam.camera import Camera
-        from PyV4L2Cam.exceptions import CameraError
-        try:
-            cam = Camera(self._camera_device, self.camera_width, self.camera_height)
-        except CameraError as e:
-            print(f"[Robot] Camera failed: {e}")
-            return
-        if cam.dest_pixel_format != 'RGB24':
-            print(f"[Robot] Warning: camera pixel format is {cam.dest_pixel_format}, expected RGB24")
-        w, h = cam.width, cam.height
-        try:
-            while self._running:
-                try:
-                    raw   = cam.get_frame()
-                    if self.FRAME_TYPE == 'raw':
-                        if self.on_frame:
-                            self.on_frame(raw, w, h, cam.dest_pixel_format)
-                    else:
-                        frame = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3))
-                        if self.on_frame:
-                            self.on_frame(frame, w, h, cam.dest_pixel_format)
-                except CameraError as e:
-                    print(f"[Robot] Camera frame error: {e}")
-        finally:
-            cam.close()
-
-    def _mic_loop(self):
-        if self._mic_device_index is None:
-            return
-        try:
-            stream = self._pa.open(format=AUDIO_FORMAT, channels=AUDIO_CHANNELS,
-                             rate=self.mic_rate, input=True,
-                             input_device_index=self._mic_device_index,
-                             frames_per_buffer=AUDIO_CHUNK)
-            while self._running:
-                raw   = stream.read(AUDIO_CHUNK, exception_on_overflow=False)
-                chunk = np.frombuffer(raw, dtype=np.float32).copy()
-                if self.on_audio:
-                    self.on_audio(chunk)
-            stream.stop_stream()
-            stream.close()
-        except Exception as e:
-            print(f"[Robot] Mic error: {e}")
-
-    def _speaker_loop(self):
-        if self._spk_device_index is None:
-            return
-        try:
-            stream = self._pa.open(format=AUDIO_FORMAT, channels=AUDIO_CHANNELS,
-                             rate=self._spk_rate, output=True,
-                             output_device_index=self._spk_device_index,
-                             frames_per_buffer=AUDIO_CHUNK)
-            while self._running:
-                try:
-                    chunk = self._spk_queue.get(timeout=0.1)
-                    stream.write(chunk.tobytes())
-                except queue.Empty:
-                    pass
-            stream.stop_stream()
-            stream.close()
-        except Exception as e:
-            print(f"[Robot] Speaker error: {e}")
-
     # -----------------------------------------------------------------------
     # Public API — outputs
     # -----------------------------------------------------------------------
@@ -507,22 +319,6 @@ class Robot:
             if reps == 0:
                 reps, on_t, off_t = 1, min(on_t, self.max_buzzer_time), 0.0
         self._board.set_buzzer(freq, on_t, off_t, reps)
-
-    def speak(self, chunk: np.ndarray):
-        """
-        Queue a float32 audio chunk for speaker playback. Non-blocking.
-        Drops oldest chunk if the queue is full.
-        """
-        chunk = chunk.astype(np.float32)
-        if self._spk_queue.full():
-            try:
-                self._spk_queue.get_nowait()
-            except queue.Empty:
-                pass
-        try:
-            self._spk_queue.put_nowait(chunk)
-        except queue.Full:
-            pass
 
     def arm_set_velocity(self, vel: ArmVelocity):
         """Set desired velocity for one or more joints."""
@@ -648,7 +444,6 @@ if __name__ == '__main__':
     robot = Robot()
 
     robot.on_frame = lambda f: None   # drop frames for this test
-    #robot.on_audio = robot.speak      # mic → speaker loopback
 
     robot.start()
     print(f"Battery: {robot.battery_v} V")
@@ -661,7 +456,6 @@ if __name__ == '__main__':
             robot.arm_tick_blocking()
         robot.arm_stop()
         print(f"Final pose: {robot.arm_get_pose()}")
-        print("Running mic→speaker loopback. Ctrl-C to stop.")
         while True:
             time.sleep(1.0)
     except KeyboardInterrupt:
