@@ -210,7 +210,9 @@ class _VideoRecvPipeline:
         def _srtpdec_sink_probe(pad, info):
             log.info(f'[gst-recv] ENCRYPTED buffer arrived at srtpdec sink (video)')
             return Gst.PadProbeReturn.OK
-        srtpdec.get_static_pad('sink').add_probe(
+        # Probing 'capsflt.src' because 'srtpdec.sink' is a Request Pad and doesn't exist yet.
+        # Data leaving capsflt is exactly what enters srtpdec.
+        capsflt.get_static_pad('src').add_probe(
             Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST,
             _srtpdec_sink_probe)
 
@@ -220,8 +222,8 @@ class _VideoRecvPipeline:
             return Gst.PadProbeReturn.OK
 
         def _add_post_probe(element, pad, _):
-            if pad.get_parent_element().get_name() == 'vdepay':
-                pad.add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, _post_srtp_probe)
+            # Only attach to the newly created source pad of srtpdec
+            pad.add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, _post_srtp_probe)
         srtpdec.connect('pad-added', _add_post_probe, None)
 
         # Existing pre-srtpdec probe (kept)
@@ -454,7 +456,9 @@ class _AudioRecvPipeline:
         def _srtpdec_sink_probe(pad, info):
             log.info(f'[gst-recv] ENCRYPTED buffer arrived at srtpdec sink (audio)')
             return Gst.PadProbeReturn.OK
-        srtpdec.get_static_pad('sink').add_probe(
+        # Probing 'capsflt.src' because 'srtpdec.sink' is a Request Pad and doesn't exist yet.
+        # Data leaving capsflt is exactly what enters srtpdec.
+        capsflt.get_static_pad('src').add_probe(
             Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST,
             _srtpdec_sink_probe)
 
@@ -463,8 +467,8 @@ class _AudioRecvPipeline:
             return Gst.PadProbeReturn.OK
 
         def _add_post_probe(element, pad, _):
-            if pad.get_parent_element().get_name() == 'adepay':
-                pad.add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, _post_srtp_probe)
+            # Only attach to the newly created source pad of srtpdec
+            pad.add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, _post_srtp_probe)
         srtpdec.connect('pad-added', _add_post_probe, None)
 
         def _packet_probe(pad, info):
