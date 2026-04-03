@@ -90,6 +90,11 @@ def _srtp_key_from_psk(psk: bytes) -> bytes:
     return hashlib.blake2b(psk, digest_size=30).digest()
 
 
+def _srtp_buf(key: bytes) -> Gst.Buffer:
+    """Same helper used on the sender side."""
+    return Gst.Buffer.new_wrapped(key)
+
+
 def _srtp_caps(pt: int, key: bytes) -> Gst.Caps:
     """
     Build the GstCaps required by srtpdec.
@@ -175,9 +180,12 @@ class _VideoRecvPipeline:
 
         src.link(capsflt)
         capsflt.link(srtpdec)
-        # srtpdec creates src pads dynamically (one per SSRC) when the first
-        # encrypted packet arrives — static link() at build time finds no pad
-        # and silently returns False.  Connect pad-added instead.
+
+        # set key directly on srtpdec
+        srtpdec.set_property('key',        _srtp_buf(self._srtp_key))
+        srtpdec.set_property('rtp-cipher', 'aes-128-icm')
+        srtpdec.set_property('rtp-auth',   'hmac-sha1-80')
+
         first_link_done = [False]
         def _on_srtpdec_pad(element, pad, downstream):
             if first_link_done[0]:
@@ -431,8 +439,12 @@ class _AudioRecvPipeline:
             p.add(el)
         src.link(capsflt)
         capsflt.link(srtpdec)
-        # Same dynamic-pad issue as the video pipeline — srtpdec src pads
-        # don't exist at build time.
+
+        # set key directly on srtpdec
+        srtpdec.set_property('key',        _srtp_buf(self._srtp_key))
+        srtpdec.set_property('rtp-cipher', 'aes-128-icm')
+        srtpdec.set_property('rtp-auth',   'hmac-sha1-80')
+
         first_link_done = [False]
         def _on_srtpdec_pad(element, pad, downstream):
             if first_link_done[0]:
