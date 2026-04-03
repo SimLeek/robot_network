@@ -75,9 +75,9 @@ def build_masterpi_capabilities(robot: Robot) -> RobotCapabilities:
         Axis("grip", 8, f"grip. Limits: {lims[4]}", [[ord("n"), 1.0], [ord("m"), -1.0]], 8, 1, *lims[4]),
     ]
 
-    streams: list[Union[CamStream, MicStream]] = [
-        CamStream("camera", "mjpeg", robot.camera_width, robot.camera_height),
-        MicStream("microphone", "audio_float32", robot.mic_rate or 48000, 1),
+    streams: list[Union[CamStream, MicStream]] = [  # this is now non-video and non-sound streams
+    #    CamStream("camera", "mjpeg", robot.camera_width, robot.camera_height),
+    #    MicStream("microphone", "audio_float32", robot.mic_rate or 48000, 1),
     ]
 
     return RobotCapabilities.build(
