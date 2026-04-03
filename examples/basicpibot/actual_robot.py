@@ -213,9 +213,17 @@ class Robot:
         self._active_vel: Dict[int, float] = {sid: 0.0 for sid in ARM_SERVO_IDS}
         self._move_deadline: Dict[int, float] = {sid: 0.0 for sid in ARM_SERVO_IDS}
         self._last_tick = time.monotonic()
-        self._pos_read_buildup = 1.0  # read initial
-        self._pos_read_trigger = 1.0/20
         self._hw_last_read: Dict[int, float] = {sid: 0.0 for sid in ARM_SERVO_IDS}
+
+        # Dead-reckoning: software position estimate derived from issued commands.
+        # Hardware reads (via _on_pwm_servo_packet) correct these when they arrive.
+        # This is the source of truth for cur inside arm_tick.
+        self._dr_pos:        Dict[int, float] = dict(self._arm_pos)
+        self._dr_start:      Dict[int, float] = dict(self._arm_pos)
+        self._dr_start_time: Dict[int, float] = {sid: 0.0 for sid in ARM_SERVO_IDS}
+        self._dr_target:     Dict[int, float] = dict(self._arm_pos)
+        # Accumulates sub-pulse motion so slow velocities still move the arm
+        self._step_accum:    Dict[int, float] = {sid: 0.0 for sid in ARM_SERVO_IDS}
 
         # --- Battery ---
         self._battery_mv: Optional[int] = None
@@ -266,8 +274,13 @@ class Robot:
             if cmd == 0x05 and sid in self._arm_pos:
                 corrected = pulse_to_normalized(info)
                 with self._pos_lock:
-                    self._arm_pos[sid] = corrected
-                    self._hw_last_read[sid] = time.monotonic()
+                    self._arm_pos[sid]       = corrected
+                    # Re-anchor dead reckoning to hardware truth.
+                    # dr_target is preserved so the arm keeps heading the right way.
+                    self._dr_pos[sid]        = corrected
+                    self._dr_start[sid]      = corrected
+                    self._dr_start_time[sid] = time.monotonic()
+                    self._hw_last_read[sid]  = time.monotonic()
             else:
                 try:
                     self._board.pwm_servo_queue.put_nowait(data)
@@ -332,53 +345,61 @@ class Robot:
         if dt is None:
             dt = now - self._last_tick
         self._last_tick = now
-        self._pos_read_buildup+=dt
-
-        with self._pos_lock:
-            if self._pos_read_buildup >= self._pos_read_trigger:
-                self._pos_read_buildup = 0.0
-                pos_snapshot = self._read_arm_pos_blocking()
-            else:
-                pos_snapshot = dict(self._arm_pos)
 
         for sid in ARM_SERVO_IDS:
-            vel      = self._arm_vel[sid]
-            prev_vel = self._active_vel[sid]
             in_flight = self._move_deadline[sid] > now
+            lo, hi    = ARM_JOINT_LIMITS.get(sid, (-1.0, 1.0))
 
-            vel_changed = abs(vel - prev_vel) > self._DEAD_BAND
+            # --- Update dead-reckoned position ---
+            # Interpolates between the last issued command's start and target.
+            # Hardware reads in _on_pwm_servo_packet re-anchor _dr_start to
+            # reality, so this stays honest without depending on read timing.
+            with self._pos_lock:
+                if in_flight:
+                    elapsed = now - self._dr_start_time[sid]
+                    frac    = min(elapsed / self._MIN_MOVE_DURATION, 1.0)
+                    self._dr_pos[sid] = (self._dr_start[sid]
+                                         + (self._dr_target[sid] - self._dr_start[sid]) * frac)
+                else:
+                    self._dr_pos[sid] = self._dr_target[sid]
+                cur = self._dr_pos[sid]
 
-            if not vel_changed and (in_flight or vel==0.0):
-                continue   # this joint is mid-move with unchanged intent — leave it alone
-
-            # --- intent changed or last move expired ---
-            self._active_vel[sid] = vel
-            lo, hi = ARM_JOINT_LIMITS.get(sid, (-1.0, 1.0))
-            cur    = pos_snapshot[sid]
+            vel = self._arm_vel[sid]
 
             if vel == 0.0:
-                # Snap-stop: command current position, near-zero duration.
-                # This overwrites any in-flight move on the hardware side.
-                if self._hw_last_read[sid] > 0.0:  # has received at least one hw read
-                    pulse = normalized_to_pulse(clamp(cur, lo, hi))
-                    self._board.pwm_servo_set_position(self._STOP_DURATION, [[sid, pulse]])
-                self._move_deadline[sid] = 0.0
-                continue
+                self._step_accum[sid] = 0.0
+                self._active_vel[sid] = 0.0
+                continue  # servo holds last commanded position naturally
 
-            # Move toward the appropriate limit
-            target   = hi if vel > 0 else lo
-            distance = abs(target - cur)
-            if distance < 0.001:
-                continue   # already at (or past) the limit
+            # Reset accumulator on direction reversal to avoid unwanted overshoot
+            prev_vel = self._active_vel[sid]
+            if prev_vel != 0.0 and (vel > 0) != (prev_vel > 0):
+                self._step_accum[sid] = 0.0
+            self._active_vel[sid] = vel
 
             max_speed = ARM_JOINT_MAX_SPEED.get(sid, ARM_MAX_SPEED)
-            duration  = max(distance / (abs(vel) * max_speed), self._MIN_MOVE_DURATION)
+            self._step_accum[sid] += vel * max_speed * dt
 
-            self._board.pwm_servo_set_position(duration, [[sid, normalized_to_pulse(target)]])
-            self._move_deadline[sid] = now + duration
+            if in_flight:
+                continue  # current step still executing; accumulate and wait
+
+            new_pos = clamp(cur + self._step_accum[sid], lo, hi)
+
+            # Enforce 1-pulse minimum: hardware ignores smaller moves entirely
+            if abs(normalized_to_pulse(new_pos) - normalized_to_pulse(cur)) < 1:
+                continue  # keep accumulating until we have a meaningful step
+
+            with self._pos_lock:
+                self._dr_start[sid]      = cur
+                self._dr_start_time[sid] = now
+                self._dr_target[sid]     = new_pos
+            self._board.pwm_servo_set_position(self._MIN_MOVE_DURATION,
+                                               [[sid, normalized_to_pulse(new_pos)]])
+            self._move_deadline[sid] = now + self._MIN_MOVE_DURATION
+            self._step_accum[sid]    = 0.0
 
         with self._pos_lock:
-            return ArmPose.from_servo_dict(dict(self._arm_pos))
+            return ArmPose.from_servo_dict(dict(self._dr_pos))
 
     def arm_tick_blocking(self) -> ArmPose:
         """Sleep to next 60 Hz boundary, then tick."""
