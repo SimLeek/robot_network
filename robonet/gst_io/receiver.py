@@ -198,6 +198,7 @@ class _VideoRecvPipeline:
                 while True:
                     res, pad = it.next()
                     if res != Gst.IteratorResult.OK:
+                        log.info(f"[gst-recv] audio sink pad res != Gst.IteratorResult.OK")
                         break
                     log.info(f"[gst-recv] video sink pad name: {pad.get_name()}")
                     if 'rtp_src' in pad.get_name():
@@ -205,6 +206,8 @@ class _VideoRecvPipeline:
                         break
                 if not sink_pad.is_linked():
                     log.warning(f'[gst-recv] video: no rtp_src pad found during request-key for SSRC {ssrc}')
+            else:
+                log.info(f"[gst-recv] video sink not linked or doesn't exist {sink_pad}")
             return caps
 
         srtpdec.connect('request-key', _on_video_request_key)
@@ -212,6 +215,7 @@ class _VideoRecvPipeline:
         # pad-added fires if the pad is created after request-key returns
         # (timing varies by GStreamer version).  One of the two handlers will win.
         def _on_video_pad_added(element, pad):
+            log.info(f"[gst-recv] audio pad added: {pad.get_name()}")
             if 'rtp_src' in pad.get_name():
                 _link_video_src_to_depay(element, pad)
         srtpdec.connect('pad-added', _on_video_pad_added)
@@ -268,6 +272,7 @@ class _VideoRecvPipeline:
 
         def _add_post_probe(element, pad, _):
             # Only attach to the newly created source pad of srtpdec
+            log.info(f'[gst-recv] Adding video post probe to detect decryption')
             pad.add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, _post_srtp_probe)
         srtpdec.connect('pad-added', _add_post_probe, None)
 
@@ -352,6 +357,8 @@ class _VideoRecvPipeline:
             log.warning(f'[gst-recv video] pipeline warning: {warn} | {dbg}')
         elif message.type == Gst.MessageType.EOS:
             log.warning('[gst-recv video] EOS received')
+        else:
+            log.info('[gst-recv audio] audio _on_bus_sync {message.type} received')
         return Gst.BusSyncReply.DROP
 
     def _pull_frame(self, sink, width, height) -> Gst.FlowReturn:
@@ -500,6 +507,7 @@ class _AudioRecvPipeline:
                 while True:
                     res, pad = it.next()
                     if res != Gst.IteratorResult.OK:
+                        log.info(f"[gst-recv] audio sink pad res != Gst.IteratorResult.OK")
                         break
                     log.info(f"[gst-recv] audio sink pad name: {pad.get_name()}")
                     if 'rtp_src' in pad.get_name():
@@ -507,11 +515,14 @@ class _AudioRecvPipeline:
                         break
                 if not sink_pad.is_linked():
                     log.warning(f'[gst-recv] audio: no rtp_src pad found during request-key for SSRC {ssrc}')
+            else:
+                log.info(f"[gst-recv] audio sink not linked or doesn't exist {sink_pad}")
             return caps
 
         srtpdec.connect('request-key', _on_audio_request_key)
 
         def _on_audio_pad_added(element, pad):
+            log.info(f"[gst-recv] audio pad added: {pad.get_name()}")
             if 'rtp_src' in pad.get_name():
                 _link_audio_src_to_depay(element, pad)
         srtpdec.connect('pad-added', _on_audio_pad_added)
@@ -551,6 +562,7 @@ class _AudioRecvPipeline:
 
         def _add_post_probe(element, pad, _):
             # Only attach to the newly created source pad of srtpdec
+            log.info(f'[gst-recv] Adding audio post probe to detect decryption')
             pad.add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, _post_srtp_probe)
         srtpdec.connect('pad-added', _add_post_probe, None)
 
@@ -631,6 +643,8 @@ class _AudioRecvPipeline:
             log.warning(f'[gst-recv audio] pipeline warning: {warn} | {dbg}')
         elif message.type == Gst.MessageType.EOS:
             log.warning('[gst-recv audio] EOS received')
+        else:
+            log.info('[gst-recv audio] audio _on_bus_sync {message.type} received')
         return Gst.BusSyncReply.DROP
 
     def _pull_chunk(self, sink) -> Gst.FlowReturn:
