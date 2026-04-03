@@ -210,6 +210,8 @@ class _VideoRecvPipeline:
             if sink_pad and not sink_pad.is_linked():
                 pad.link(sink_pad)
                 first_link_done[0] = True
+                log.info(
+                    f'[gst-recv] SUCCESS: Encrypted packets received and dynamic pad linked to {downstream.get_name()}!')
         srtpdec.connect('pad-added', _on_srtpdec_pad, depay)
 
         if codec in ('h264', 'h265'):
@@ -267,7 +269,11 @@ class _VideoRecvPipeline:
 
     def play(self):
         if self._pipeline:
-            self._pipeline.set_state(Gst.State.PLAYING)
+            ret = self._pipeline.set_state(Gst.State.PLAYING)
+            if ret == Gst.StateChangeReturn.FAILURE:
+                log.error(f'[{self.__class__.__name__}] Failed to transition to PLAYING state!')
+            else:
+                log.info(f'[{self.__class__.__name__}] successfully transitioned to PLAYING.')
 
     def stop(self):
         if self._pipeline:
@@ -372,6 +378,8 @@ class _AudioRecvPipeline:
             if sink_pad and not sink_pad.is_linked():
                 pad.link(sink_pad)
                 first_link_done[0] = True
+                log.info(
+                    f'[gst-recv] SUCCESS: Encrypted packets received and dynamic pad linked to {downstream.get_name()}!')
         srtpdec.connect('pad-added', _on_srtpdec_pad, depay)
         depay.link(dec)
         dec.link(conv)
@@ -418,7 +426,11 @@ class _AudioRecvPipeline:
 
     def play(self):
         if self._pipeline:
-            self._pipeline.set_state(Gst.State.PLAYING)
+            ret = self._pipeline.set_state(Gst.State.PLAYING)
+            if ret == Gst.StateChangeReturn.FAILURE:
+                log.error(f'[{self.__class__.__name__}] Failed to transition to PLAYING state!')
+            else:
+                log.info(f'[{self.__class__.__name__}] successfully transitioned to PLAYING.')
 
     def stop(self):
         if self._pipeline:

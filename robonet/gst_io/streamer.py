@@ -293,6 +293,9 @@ class _VideoPipeline:
         rtpbin.link_pads('send_rtp_src_0', srtp, 'rtp_sink_0')
         srtp.link_pads('rtp_src_0', sink, 'sink')
 
+        bus = p.get_bus()
+        bus.set_sync_handler(self._on_bus_sync, None)
+
         self._enc_elem = enc
         self._rtpbin   = rtpbin
         self._pipeline = p
@@ -310,12 +313,28 @@ class _VideoPipeline:
 
     def play(self):
         if self._pipeline:
-            self._pipeline.set_state(Gst.State.PLAYING)
+            ret = self._pipeline.set_state(Gst.State.PLAYING)
+            if ret == Gst.StateChangeReturn.FAILURE:
+                log.error(f'[{self.__class__.__name__}] Failed to transition to PLAYING state!')
+            else:
+                log.info(f'[{self.__class__.__name__}] successfully transitioned to PLAYING.')
 
     def stop(self):
         if self._pipeline:
             self._pipeline.set_state(Gst.State.NULL)
         self._pipeline = self._enc_elem = self._rtpbin = None
+
+    @staticmethod
+    def _on_bus_sync(bus, message, _data):
+        if message.type == Gst.MessageType.ERROR:
+            err, dbg = message.parse_error()
+            log.error(f'[gst-send] pipeline error: {err} | {dbg}')
+        elif message.type == Gst.MessageType.WARNING:
+            warn, dbg = message.parse_warning()
+            log.warning(f'[gst-send] pipeline warning: {warn} | {dbg}')
+        elif message.type == Gst.MessageType.EOS:
+            log.warning('[gst-send] EOS received')
+        return Gst.BusSyncReply.DROP
 
 
 class _AudioPipeline:
@@ -384,17 +403,35 @@ class _AudioPipeline:
         pay.link(srtp)
         srtp.link(sink)
 
+        bus = p.get_bus()
+        bus.set_sync_handler(self._on_bus_sync, None)
         self._pipeline = p
         return True
 
     def play(self):
         if self._pipeline:
-            self._pipeline.set_state(Gst.State.PLAYING)
+            ret = self._pipeline.set_state(Gst.State.PLAYING)
+            if ret == Gst.StateChangeReturn.FAILURE:
+                log.error(f'[{self.__class__.__name__}] Failed to transition to PLAYING state!')
+            else:
+                log.info(f'[{self.__class__.__name__}] successfully transitioned to PLAYING.')
 
     def stop(self):
         if self._pipeline:
             self._pipeline.set_state(Gst.State.NULL)
         self._pipeline = None
+
+    @staticmethod
+    def _on_bus_sync(bus, message, _data):
+        if message.type == Gst.MessageType.ERROR:
+            err, dbg = message.parse_error()
+            log.error(f'[gst-send] pipeline error: {err} | {dbg}')
+        elif message.type == Gst.MessageType.WARNING:
+            warn, dbg = message.parse_warning()
+            log.warning(f'[gst-send] pipeline warning: {warn} | {dbg}')
+        elif message.type == Gst.MessageType.EOS:
+            log.warning('[gst-send] EOS received')
+        return Gst.BusSyncReply.DROP
 
 
 class GstSender:
@@ -523,6 +560,7 @@ class GstSender:
         self._acked = True
 
         if self._venc_name and self._src_device and self._receiver_ip:
+            log.info(f'[gst] Video send routing to IP: {self._receiver_ip}:{VIDEO_PORT} from {self._src_device}')
             self._vpipe = _VideoPipeline(
                 self._src_device, self._venc_name, self._video_codec,
                 self._receiver_ip, self._srtp_key,
@@ -539,6 +577,7 @@ class GstSender:
                      f'server={self._receiver_ip!r})')
 
         if self._aenc_name and self._receiver_ip:
+            log.info(f'[gst] Audio send routing to IP: {self._receiver_ip}:{AUDIO_PORT} from {self._mic_device}')
             self._apipe = _AudioPipeline(
                 self._mic_device, self._aenc_name, self._audio_codec,
                 self._receiver_ip, self._srtp_key, self._sample_rate)

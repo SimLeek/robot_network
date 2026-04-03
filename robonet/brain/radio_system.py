@@ -257,7 +257,7 @@ class RadioSubSystem(SubSystem):
 
     def burst(self, obj):
         """Pack obj and send to all currently connected peers."""
-        log.info(f"burst: {type(obj)}")
+        #log.info(f"burst: {type(obj)}")
         data  = pack_obj(obj)
         parts = [data[i:i + 4096] for i in range(0, len(data), 4096)]
         self._uid = (self._uid + 1) % 256
