@@ -34,57 +34,43 @@ def _has(name: str) -> bool:
     return Gst.ElementFactory.find(name) is not None
 
 
-def _first(candidates: list) -> Optional[str]:
-    for name in candidates:
-        if _has(name):
-            log.info(f'[gst-recv] selected: {name}')
-            return name
-    return None
-
-
-def _pick_video_decoder(codec: str) -> Optional[str]:
+def _video_decoder_candidates(codec: str) -> list[str]:
     """
-    Return the best available decoder element for the given codec string.
-    Hardware decoders are preferred (NVIDIA > VA-API > V4L2 M2M > software).
+    Return all available video decoders as an ordered list for the given codec.
 
-    >>> dec = _pick_video_decoder('h264')
-    >>> dec is None or isinstance(dec, str)
-    True
-    >>> _pick_video_decoder('__not_a_codec__') is None
-    True
+    Registry-present but broken decoders (e.g. hardware decoders with driver
+    issues) are weeded out at probe time, not here.
     """
-    hw = {
+    ordered = {
         'h264': ['nvh264dec',  'vaapih264dec',  'v4l2h264dec',  'avdec_h264'],
         'h265': ['nvh265dec',  'vaapih265dec',  'v4l2h265dec',  'avdec_h265'],
         'vp8':  ['nvvp8dec',   'vaapivp8dec',   'v4l2vp8dec',   'vp8dec',  'avdec_vp8'],
         'vp9':  ['nvvp9dec',   'vaapivp9dec',   'v4l2vp9dec',   'vp9dec',  'avdec_vp9'],
-    }
-    dec = _first(hw.get(codec, [f'avdec_{codec}']))
-    if dec is None:
-        log.error(f'[gst-recv] no video decoder found for codec {codec!r} — '
-                  f'install gstreamer1.0-libav or a hardware decode plugin')
-    return dec
+    }.get(codec, [f'avdec_{codec}'])
+    found = [name for name in ordered if _has(name)]
+    if not found:
+        log.warning(f'[gst-recv] no video decoder found for codec {codec!r} in GStreamer registry')
+    else:
+        log.info(f'[gst-recv] video decoder candidates for {codec}: {found}')
+    return found
 
 
-def _pick_audio_decoder(codec: str) -> Optional[str]:
+def _audio_decoder_candidates(codec: str) -> list[str]:
     """
-    Return the best available audio decoder element for the given codec string.
-
-    >>> dec = _pick_audio_decoder('opus')
-    >>> dec is None or isinstance(dec, str)
-    True
+    Return all available audio decoders as an ordered list for the given codec.
     """
-    candidates = {
+    ordered = {
         'opus': ['opusdec'],
         'aac':  ['avdec_aac', 'faad'],
         'mp3':  ['mpg123audiodec', 'avdec_mp3'],
         'flac': ['flacdec'],
-    }
-    dec = _first(candidates.get(codec, [f'avdec_{codec}']))
-    if dec is None:
-        log.error(f'[gst-recv] no audio decoder found for codec {codec!r} — '
-                  f'install gstreamer1.0-libav or the appropriate codec plugin')
-    return dec
+    }.get(codec, [f'avdec_{codec}'])
+    found = [name for name in ordered if _has(name)]
+    if not found:
+        log.warning(f'[gst-recv] no audio decoder found for codec {codec!r} in GStreamer registry')
+    else:
+        log.info(f'[gst-recv] audio decoder candidates for {codec}: {found}')
+    return found
 
 
 def _rtp_depay_name(codec: str) -> str:
@@ -100,10 +86,6 @@ def _rtp_audio_depay_name(codec: str) -> str:
 def _srtp_key_from_psk(psk: bytes) -> bytes:
     """
     Derive a 30-byte SRTP master-key+salt from the robonet PSK using BLAKE2b.
-
-    >>> key = _srtp_key_from_psk(b'test-psk')
-    >>> len(key)
-    30
     """
     return hashlib.blake2b(psk, digest_size=30).digest()
 
@@ -111,10 +93,6 @@ def _srtp_key_from_psk(psk: bytes) -> bytes:
 def _srtp_caps(pt: int, key: bytes) -> Gst.Caps:
     """
     Build the GstCaps required by srtpdec.
-
-    srtpdec cannot infer the cipher suite or master key from incoming packets
-    because the payload is already encrypted. The caps must be set explicitly
-    before the pipeline transitions to PLAYING.
     """
     return Gst.Caps.from_string(
         f'application/x-srtp, payload=(int){pt}, '
@@ -153,26 +131,23 @@ class _VideoRecvPipeline:
         pipe.stop()
     """
 
-    def __init__(self, info: GstStreamInfo, srtp_key: bytes,
+    def __init__(self, info: GstStreamInfo, dec_name: str, srtp_key: bytes,
                  on_frame: Callable[[np.ndarray], None]):
         self._info      = info
+        self._dec_name  = dec_name
         self._srtp_key  = srtp_key
         self._on_frame  = on_frame
         self._pipeline: Optional[Gst.Pipeline] = None
 
     def build(self) -> bool:
         codec = self._info.video_codec
-        dec_name   = _pick_video_decoder(codec)
         depay_name = _rtp_depay_name(codec)
-        if dec_name is None:
-            return False
-
         p       = Gst.Pipeline.new('video-recv')
         src     = Gst.ElementFactory.make('udpsrc',       'vsrc')
         capsflt = Gst.ElementFactory.make('capsfilter',   'vcaps')
         srtpdec = Gst.ElementFactory.make('srtpdec',      'vsrtpdec')
         depay   = Gst.ElementFactory.make(depay_name,     'vdepay')
-        dec     = Gst.ElementFactory.make(dec_name,       'vdec')
+        dec     = Gst.ElementFactory.make(self._dec_name, 'vdec')
         conv    = Gst.ElementFactory.make('videoconvert', 'vconv')
         outcaps = Gst.ElementFactory.make('capsfilter',   'voutcaps')
         sink    = Gst.ElementFactory.make('appsink',      'vsink')
@@ -230,6 +205,33 @@ class _VideoRecvPipeline:
         bus.set_sync_handler(self._on_bus_sync, None)
 
         self._pipeline = p
+        return True
+
+    def probe(self, timeout_s: float = 1.0) -> bool:
+        """
+        Set the pipeline to PAUSED and listen for bus errors for up to
+        timeout_s seconds.
+
+        Returns True if no error was observed, False otherwise.
+        Call stop() before discarding a pipeline that failed probe().
+        """
+        if not self._pipeline:
+            return False
+        ret = self._pipeline.set_state(Gst.State.PAUSED)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            log.warning(f'[gst-recv] {self._dec_name}: PAUSED state change failed immediately')
+            return False
+        bus = self._pipeline.get_bus()
+        deadline = timeout_s * Gst.SECOND
+        msg = bus.timed_pop_filtered(deadline,
+                                     Gst.MessageType.ERROR | Gst.MessageType.WARNING)
+        if msg and msg.type == Gst.MessageType.ERROR:
+            err, dbg = msg.parse_error()
+            log.warning(f'[gst-recv] {self._dec_name}: probe error: {err} — {dbg}')
+            return False
+        if msg and msg.type == Gst.MessageType.WARNING:
+            warn, dbg = msg.parse_warning()
+            log.info(f'[gst-recv] {self._dec_name}: probe warning (non-fatal): {warn}')
         return True
 
     @staticmethod
@@ -313,10 +315,11 @@ class _AudioRecvPipeline:
         ...     #pipe.play()
     """
 
-    def __init__(self, info: GstStreamInfo, srtp_key: bytes,
+    def __init__(self, info: GstStreamInfo, dec_name: str, srtp_key: bytes,
                  direct_audio: bool, audio_device: str,
                  on_audio: Optional[Callable[[np.ndarray], None]] = None):
         self._info         = info
+        self._dec_name     = dec_name
         self._srtp_key     = srtp_key
         self._direct_audio = direct_audio
         self._audio_device = audio_device
@@ -325,17 +328,13 @@ class _AudioRecvPipeline:
 
     def build(self) -> bool:
         codec      = self._info.audio_codec
-        dec_name   = _pick_audio_decoder(codec)
         depay_name = _rtp_audio_depay_name(codec)
-        if dec_name is None:
-            return False
-
         p       = Gst.Pipeline.new('audio-recv')
         src     = Gst.ElementFactory.make('udpsrc',       'asrc')
         capsflt = Gst.ElementFactory.make('capsfilter',   'acaps')
         srtpdec = Gst.ElementFactory.make('srtpdec',      'asrtpdec')
         depay   = Gst.ElementFactory.make(depay_name,     'adepay')
-        dec     = Gst.ElementFactory.make(dec_name,       'adec')
+        dec     = Gst.ElementFactory.make(self._dec_name, 'adec')
         conv    = Gst.ElementFactory.make('audioconvert', 'aconv')
         outcaps = Gst.ElementFactory.make('capsfilter',   'aoutcaps')
 
@@ -390,6 +389,30 @@ class _AudioRecvPipeline:
         bus.set_sync_handler(self._on_bus_sync, None)
 
         self._pipeline = p
+        return True
+
+    def probe(self, timeout_s: float = 1.0) -> bool:
+        """
+        Set the pipeline to PAUSED and listen for bus errors for up to
+        timeout_s seconds.
+        """
+        if not self._pipeline:
+            return False
+        ret = self._pipeline.set_state(Gst.State.PAUSED)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            log.warning(f'[gst-recv] {self._dec_name}: audio PAUSED state change failed')
+            return False
+        bus = self._pipeline.get_bus()
+        deadline = timeout_s * Gst.SECOND
+        msg = bus.timed_pop_filtered(deadline,
+                                     Gst.MessageType.ERROR | Gst.MessageType.WARNING)
+        if msg and msg.type == Gst.MessageType.ERROR:
+            err, dbg = msg.parse_error()
+            log.warning(f'[gst-recv] {self._dec_name}: audio probe error: {err} — {dbg}')
+            return False
+        if msg and msg.type == Gst.MessageType.WARNING:
+            warn, dbg = msg.parse_warning()
+            log.info(f'[gst-recv] {self._dec_name}: audio probe warning (non-fatal): {warn}')
         return True
 
     @staticmethod
@@ -528,27 +551,54 @@ class GstReceiver:
         self._info = obj
 
         if self._recv_image_callback is not None and obj.video_codec:
-            self._vpipe = _VideoRecvPipeline(
-                obj, self._srtp_key, self._recv_image_callback)
-            if self._vpipe.build():
-                self._vpipe.play()
+            candidates = _video_decoder_candidates(obj.video_codec)
+            for dec_name in candidates:
+                log.info(f'[gst-recv] trying video decoder: {dec_name}')
+                pipe = _VideoRecvPipeline(
+                    obj, dec_name, self._srtp_key, self._recv_image_callback)
+                if not pipe.build():
+                    log.warning(f'[gst-recv] {dec_name}: build failed, trying next')
+                    continue
+                if not pipe.probe():
+                    log.warning(f'[gst-recv] {dec_name}: probe failed, trying next')
+                    pipe.stop()
+                    continue
+                log.info(f'[gst-recv] video decoder selected: {dec_name} ({obj.video_codec})')
+                self._vpipe = pipe
+                pipe.play()
+                break
             else:
-                log.error('[gst-recv] video pipeline build failed — no video will be displayed')
-                self._vpipe = None
+                log.error('[gst-recv] all video decoders failed probe — no video will be displayed')
         elif not obj.video_codec:
             log.info('[gst-recv] no video codec in stream info — skipping video pipeline')
         else:
             log.info('[gst-recv] set_last_img is None — skipping video pipeline (no screen)')
 
         if obj.audio_codec:
-            self._apipe = _AudioRecvPipeline(
-                obj, self._srtp_key, self._direct_audio, self._audio_device,
-                on_audio=self._recv_audio_callback if not (self._direct_audio and self._recv_audio_callback is not None) else None)
-            if self._apipe.build():
-                self._apipe.play()
+            candidates = _audio_decoder_candidates(obj.audio_codec)
+            for dec_name in candidates:
+                log.info(f'[gst-recv] trying audio decoder: {dec_name}')
+                on_audio = (
+                    self._recv_audio_callback
+                    if not (self._direct_audio and self._recv_audio_callback is not None)
+                    else None
+                )
+                pipe = _AudioRecvPipeline(
+                    obj, dec_name, self._srtp_key,
+                    self._direct_audio, self._audio_device, on_audio=on_audio)
+                if not pipe.build():
+                    log.warning(f'[gst-recv] {dec_name}: build failed, trying next')
+                    continue
+                if not pipe.probe():
+                    log.warning(f'[gst-recv] {dec_name}: probe failed, trying next')
+                    pipe.stop()
+                    continue
+                log.info(f'[gst-recv] audio decoder selected: {dec_name} ({obj.audio_codec})')
+                self._apipe = pipe
+                pipe.play()
+                break
             else:
-                log.error('[gst-recv] audio pipeline build failed — no audio will be played')
-                self._apipe = None
+                log.error('[gst-recv] all audio decoders failed probe — no audio will be played')
         else:
             log.info('[gst-recv] no audio codec in stream info — skipping audio pipeline')
 

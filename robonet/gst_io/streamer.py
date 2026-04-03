@@ -67,19 +67,18 @@ def _first(candidates: list) -> tuple:
     return None, None
 
 
-def _pick_video_encoder() -> tuple:
+def _video_encoder_candidates() -> list:
     """
-    Probe the GStreamer registry and return the best available video encoder.
+    Return all available video encoders as an ordered list of (enc_name, codec).
 
-    Preference order: dedicated GPU APIs → OMX (SBC hardware) → V4L2 M2M
-    (kernel codec drivers, increasingly common on newer SBCs) → Intel/NVIDIA
-    VA-API → software fallbacks.
+    Registry-present but broken encoders (e.g. v4l2h264enc on cameras with
+    unsupported colorimetry) are weeded out at probe time, not here.
 
-    >>> enc_name, codec = _pick_video_encoder()
-    >>> codec in ('h264', 'h265', 'vp8', 'vp9', None)
+    >>> cands = _video_encoder_candidates()
+    >>> all(isinstance(n, str) and isinstance(c, str) for n, c in cands)
     True
     """
-    return _first([
+    ordered = [
         ('amfh264enc',   'h264'),   # AMD AMF
         ('mfh264enc',    'h264'),   # Windows Media Foundation
         ('vtenc_h264',   'h264'),   # Apple VideoToolbox
@@ -105,28 +104,37 @@ def _pick_video_encoder() -> tuple:
         ('openh264enc',  'h264'),   # software — fastest first
         ('vp8enc',       'vp8'),
         ('x264enc',      'h264'),
-    ])
+    ]
+    found = [(n, c) for n, c in ordered if _has(n)]
+    if not found:
+        log.warning('[gst] no video encoder found in GStreamer registry')
+    else:
+        log.info(f'[gst] video encoder candidates: {[n for n, _ in found]}')
+    return found
 
 
-def _pick_audio_encoder() -> tuple:
+def _audio_encoder_candidates() -> list:
     """
-    Probe the GStreamer registry and return the best available audio encoder.
+    Return all available audio encoders as an ordered list of (enc_name, codec).
 
-    Opus is preferred over AAC for real-time use: lower latency, better
-    quality at low bitrates, and free of patent concerns.
-
-    >>> enc_name, codec = _pick_audio_encoder()
-    >>> codec in ('aac', 'opus', 'mp3', 'flac', None)
+    >>> cands = _audio_encoder_candidates()
+    >>> all(isinstance(n, str) and isinstance(c, str) for n, c in cands)
     True
     """
-    return _first([
+    ordered = [
         ('omxaacenc',  'aac'),    # OMX hardware AAC
         ('opusenc',    'opus'),   # low-latency, best quality/bandwidth ratio
         ('avenc_aac',  'aac'),
         ('omxmp3enc',  'mp3'),
         ('lamemp3enc', 'mp3'),
         ('flacenc',    'flac'),   # lossless — last resort, high bandwidth
-    ])
+    ]
+    found = [(n, c) for n, c in ordered if _has(n)]
+    if not found:
+        log.warning('[gst] no audio encoder found in GStreamer registry')
+    else:
+        log.info(f'[gst] audio encoder candidates: {[n for n, _ in found]}')
+    return found
 
 
 def _srtp_key_from_psk(psk: bytes) -> bytes:
@@ -276,7 +284,7 @@ class _VideoPipeline:
         sink.set_property('port', VIDEO_PORT)
         sink.set_property('sync', False)
 
-        for el in (src, scale, capsflt, conv, enc, pay, srtp, sink, rtpbin):
+        for el in (src, scale, capsflt, conv, outcaps, enc, pay, srtp, sink, rtpbin):
             p.add(el)
 
         src.link(scale)
@@ -300,13 +308,51 @@ class _VideoPipeline:
         rtpbin.link_pads('send_rtp_src_0', srtp, 'rtp_sink_0')
         srtp.link_pads('rtp_src_0', sink, 'sink')
 
-        bus = p.get_bus()
-        bus.set_sync_handler(self._on_bus_sync, None)
-
+        # Bus handler intentionally not attached here — probe() reads the bus
+        # directly to detect runtime failures before we commit to PLAYING.
         self._enc_elem = enc
         self._rtpbin   = rtpbin
         self._pipeline = p
         return True
+
+    def probe(self, timeout_s: float = 1.0) -> bool:
+        """
+        Set the pipeline to PAUSED and listen for bus errors for up to
+        timeout_s seconds.  Live sources return NO_PREROLL (not ASYNC) so
+        the state change completes immediately; a broken encoder or camera
+        driver posts ERROR within a few milliseconds.
+
+        Returns True if no error was observed, False otherwise.
+        Call stop() before discarding a pipeline that failed probe().
+        """
+        if not self._pipeline:
+            return False
+        ret = self._pipeline.set_state(Gst.State.PAUSED)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            log.warning(f'[gst] {self._enc_name}: PAUSED state change failed immediately')
+            return False
+        bus = self._pipeline.get_bus()
+        deadline = timeout_s * Gst.SECOND
+        msg = bus.timed_pop_filtered(deadline,
+                                     Gst.MessageType.ERROR | Gst.MessageType.WARNING)
+        if msg and msg.type == Gst.MessageType.ERROR:
+            err, dbg = msg.parse_error()
+            log.warning(f'[gst] {self._enc_name}: probe error: {err} — {dbg}')
+            return False
+        if msg and msg.type == Gst.MessageType.WARNING:
+            warn, dbg = msg.parse_warning()
+            log.info(f'[gst] {self._enc_name}: probe warning (non-fatal): {warn}')
+        return True
+
+    def play(self):
+        if self._pipeline:
+            bus = self._pipeline.get_bus()
+            bus.set_sync_handler(self._on_bus_sync, None)
+            ret = self._pipeline.set_state(Gst.State.PLAYING)
+            if ret == Gst.StateChangeReturn.FAILURE:
+                log.error(f'[{self.__class__.__name__}] Failed to transition to PLAYING state!')
+            else:
+                log.info(f'[{self.__class__.__name__}] successfully transitioned to PLAYING.')
 
     def connect_rtcp(self, callback):
         """Wire the RTCP feedback signal to callback(rtpbin, session_id, ssrc, enc)."""
@@ -317,14 +363,6 @@ class _VideoPipeline:
         self._bitrate = bitrate
         if self._enc_elem:
             _apply_bitrate(self._enc_elem, self._enc_name, bitrate)
-
-    def play(self):
-        if self._pipeline:
-            ret = self._pipeline.set_state(Gst.State.PLAYING)
-            if ret == Gst.StateChangeReturn.FAILURE:
-                log.error(f'[{self.__class__.__name__}] Failed to transition to PLAYING state!')
-            else:
-                log.info(f'[{self.__class__.__name__}] successfully transitioned to PLAYING.')
 
     def stop(self):
         if self._pipeline:
@@ -411,13 +449,29 @@ class _AudioPipeline:
         pay.link(srtp)
         srtp.link(sink)
 
-        bus = p.get_bus()
-        bus.set_sync_handler(self._on_bus_sync, None)
         self._pipeline = p
+        return True
+
+    def probe(self, timeout_s: float = 1.0) -> bool:
+        if not self._pipeline:
+            return False
+        ret = self._pipeline.set_state(Gst.State.PAUSED)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            log.warning(f'[gst] {self._enc_name}: audio PAUSED state change failed')
+            return False
+        bus = self._pipeline.get_bus()
+        msg = bus.timed_pop_filtered(int(timeout_s * Gst.SECOND),
+                                     Gst.MessageType.ERROR | Gst.MessageType.WARNING)
+        if msg and msg.type == Gst.MessageType.ERROR:
+            err, dbg = msg.parse_error()
+            log.warning(f'[gst] {self._enc_name}: audio probe error: {err} — {dbg}')
+            return False
         return True
 
     def play(self):
         if self._pipeline:
+            bus = self._pipeline.get_bus()
+            bus.set_sync_handler(self._on_bus_sync, None)
             ret = self._pipeline.set_state(Gst.State.PLAYING)
             if ret == Gst.StateChangeReturn.FAILURE:
                 log.error(f'[{self.__class__.__name__}] Failed to transition to PLAYING state!')
@@ -492,13 +546,15 @@ class GstSender:
         self._srtp_key    = _srtp_key_from_psk(psk)
         self._bitrate     = BITRATE_DEFAULT
 
-        self._venc_name, self._video_codec = _pick_video_encoder()
-        self._aenc_name, self._audio_codec = _pick_audio_encoder()
-
-        if self._venc_name is None:
-            log.warning('[gst] no video encoder found — video will not be sent')
-        if self._aenc_name is None:
-            log.warning('[gst] no audio encoder found — audio will not be sent')
+        self._video_candidates = _video_encoder_candidates()
+        self._audio_candidates = _audio_encoder_candidates()
+        # These get set to whichever candidate actually survives probe().
+        # Initialised to the top candidate so _make_stream_info() has something
+        # reasonable before the ack arrives.
+        self._venc_name, self._video_codec = (
+            self._video_candidates[0] if self._video_candidates else (None, None))
+        self._aenc_name, self._audio_codec = (
+            self._audio_candidates[0] if self._audio_candidates else (None, None))
 
         self._drop_streak = 0
         self._good_streak = 0
@@ -567,36 +623,67 @@ class GstSender:
         log.info('[gst] stream acked — starting pipelines')
         self._acked = True
 
-        if self._venc_name and self._src_device and self._receiver_ip:
-            log.info(f'[gst] Video send routing to IP: {self._receiver_ip}:{VIDEO_PORT} from {self._src_device}')
-            self._vpipe = _VideoPipeline(
-                self._src_device, self._venc_name, self._video_codec,
-                self._receiver_ip, self._srtp_key,
-                self._width, self._height, self._fps, self._bitrate)
-            if self._vpipe.build():
-                self._vpipe.connect_rtcp(self._on_rtcp_feedback)
-                self._vpipe.play()
-            else:
-                log.error('[gst] video pipeline build failed — no video will be sent')
-                self._vpipe = None
+        if self._src_device and self._receiver_ip and self._video_candidates:
+            log.info(f'[gst] video send → {self._receiver_ip}:{VIDEO_PORT} from {self._src_device}')
+            self._vpipe = self._start_video_pipeline()
+            if self._vpipe is None:
+                log.error('[gst] all video encoders failed probe — no video will be sent')
         else:
             log.info(f'[gst] skipping video pipeline '
-                     f'(enc={self._venc_name!r}, device={self._src_device!r}, '
-                     f'server={self._receiver_ip!r})')
+                     f'(candidates={[n for n,_ in self._video_candidates]}, '
+                     f'device={self._src_device!r}, server={self._receiver_ip!r})')
 
-        if self._aenc_name and self._receiver_ip:
-            log.info(f'[gst] Audio send routing to IP: {self._receiver_ip}:{AUDIO_PORT} from {self._mic_device}')
-            self._apipe = _AudioPipeline(
-                self._mic_device, self._aenc_name, self._audio_codec,
-                self._receiver_ip, self._srtp_key, self._sample_rate)
-            if self._apipe.build():
-                self._apipe.play()
-            else:
-                log.error('[gst] audio pipeline build failed — no audio will be sent')
-                self._apipe = None
+        if self._receiver_ip and self._audio_candidates:
+            log.info(f'[gst] audio send → {self._receiver_ip}:{AUDIO_PORT} from {self._mic_device}')
+            self._apipe = self._start_audio_pipeline()
+            if self._apipe is None:
+                log.error('[gst] all audio encoders failed probe — no audio will be sent')
         else:
             log.info(f'[gst] skipping audio pipeline '
-                     f'(enc={self._aenc_name!r}, server={self._receiver_ip!r})')
+                     f'(candidates={[n for n,_ in self._audio_candidates]}, '
+                     f'server={self._receiver_ip!r})')
+
+    def _start_video_pipeline(self) -> Optional['_VideoPipeline']:
+        for enc_name, codec in self._video_candidates:
+            log.info(f'[gst] trying video encoder: {enc_name}')
+            pipe = _VideoPipeline(
+                self._src_device, enc_name, codec,
+                self._receiver_ip, self._srtp_key,
+                self._width, self._height, self._fps, self._bitrate)
+            if not pipe.build():
+                log.warning(f'[gst] {enc_name}: build failed, trying next')
+                continue
+            if not pipe.probe():
+                log.warning(f'[gst] {enc_name}: probe failed, trying next')
+                pipe.stop()
+                continue
+            log.info(f'[gst] video encoder selected: {enc_name} ({codec})')
+            self._venc_name  = enc_name
+            self._video_codec = codec
+            pipe.connect_rtcp(self._on_rtcp_feedback)
+            pipe.play()
+            return pipe
+        return None
+
+    def _start_audio_pipeline(self) -> Optional['_AudioPipeline']:
+        for enc_name, codec in self._audio_candidates:
+            log.info(f'[gst] trying audio encoder: {enc_name}')
+            pipe = _AudioPipeline(
+                self._mic_device, enc_name, codec,
+                self._receiver_ip, self._srtp_key, self._sample_rate)
+            if not pipe.build():
+                log.warning(f'[gst] {enc_name}: build failed, trying next')
+                continue
+            if not pipe.probe():
+                log.warning(f'[gst] {enc_name}: probe failed, trying next')
+                pipe.stop()
+                continue
+            log.info(f'[gst] audio encoder selected: {enc_name} ({codec})')
+            self._aenc_name  = enc_name
+            self._audio_codec = codec
+            pipe.play()
+            return pipe
+        return None
 
     def _on_rtcp_feedback(self, rtpbin, session_id, ssrc, enc_elem):
         """
