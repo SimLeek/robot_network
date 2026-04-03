@@ -137,6 +137,7 @@ class _VideoRecvPipeline:
         self._dec_name  = dec_name
         self._srtp_key  = srtp_key
         self._on_frame  = on_frame
+        self._received_packet  = False
         self._pipeline: Optional[Gst.Pipeline] = None
 
     def build(self) -> bool:
@@ -200,6 +201,17 @@ class _VideoRecvPipeline:
         dec.link(conv)
         conv.link(outcaps)
         outcaps.link(sink)
+
+        # === NEW: Debug probe – tells us if ANY UDP packet reaches the receiver ===
+        def _packet_probe(pad, info):
+            if not self._received_packet:
+                self._received_packet = True
+                log.info(f'[gst-recv] FIRST SRTP packet received → data is flowing to {self._dec_name} pipeline')
+            return Gst.PadProbeReturn.OK
+
+        capsflt.get_static_pad('src').add_probe(
+            Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST,
+            _packet_probe)
 
         bus = p.get_bus()
         bus.set_sync_handler(self._on_bus_sync, None)
@@ -353,6 +365,7 @@ class _AudioRecvPipeline:
         self._audio_device = audio_device
         self._pipeline:    Optional[Gst.Pipeline] = None
         self._on_audio = on_audio
+        self._received_packet = False
 
     def build(self) -> bool:
         codec      = self._info.audio_codec
@@ -412,6 +425,17 @@ class _AudioRecvPipeline:
         dec.link(conv)
         conv.link(outcaps)
         outcaps.link(sink)
+
+        # === NEW: Debug probe (audio) ===
+        def _packet_probe(pad, info):
+            if not self._received_packet:
+                self._received_packet = True
+                log.info(f'[gst-recv] FIRST SRTP packet received → data is flowing to {self._dec_name} pipeline (audio)')
+            return Gst.PadProbeReturn.OK
+
+        capsflt.get_static_pad('src').add_probe(
+            Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST,
+            _packet_probe)
 
         bus = p.get_bus()
         bus.set_sync_handler(self._on_bus_sync, None)
