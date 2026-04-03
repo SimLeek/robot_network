@@ -213,7 +213,9 @@ class Robot:
         self._active_vel: Dict[int, float] = {sid: 0.0 for sid in ARM_SERVO_IDS}
         self._move_deadline: Dict[int, float] = {sid: 0.0 for sid in ARM_SERVO_IDS}
         self._last_tick = time.monotonic()
-        self._hw_last_read: Dict[int, float] = {sid: time.monotonic() for sid in ARM_SERVO_IDS}
+        self._pos_read_buildup = 1.0  # read initial
+        self._pos_read_trigger = 1.0/20
+        self._hw_last_read: Dict[int, float] = {sid: 0.0 for sid in ARM_SERVO_IDS}
 
         # --- Battery ---
         self._battery_mv: Optional[int] = None
@@ -330,9 +332,14 @@ class Robot:
         if dt is None:
             dt = now - self._last_tick
         self._last_tick = now
+        self._pos_read_buildup+=dt
 
         with self._pos_lock:
-            pos_snapshot = dict(self._arm_pos)
+            if self._pos_read_buildup >= self._pos_read_trigger:
+                self._pos_read_buildup = 0.0
+                pos_snapshot = self._read_arm_pos_blocking()
+            else:
+                pos_snapshot = dict(self._arm_pos)
 
         for sid in ARM_SERVO_IDS:
             vel      = self._arm_vel[sid]
@@ -341,7 +348,7 @@ class Robot:
 
             vel_changed = abs(vel - prev_vel) > self._DEAD_BAND
 
-            if not vel_changed and in_flight:
+            if not vel_changed and (in_flight or vel==0.0):
                 continue   # this joint is mid-move with unchanged intent — leave it alone
 
             # --- intent changed or last move expired ---
@@ -352,8 +359,9 @@ class Robot:
             if vel == 0.0:
                 # Snap-stop: command current position, near-zero duration.
                 # This overwrites any in-flight move on the hardware side.
-                pulse = normalized_to_pulse(clamp(cur, lo, hi))
-                self._board.pwm_servo_set_position(self._STOP_DURATION, [[sid, pulse]])
+                if self._hw_last_read[sid] > 0.0:  # has received at least one hw read
+                    pulse = normalized_to_pulse(clamp(cur, lo, hi))
+                    self._board.pwm_servo_set_position(self._STOP_DURATION, [[sid, pulse]])
                 self._move_deadline[sid] = 0.0
                 continue
 

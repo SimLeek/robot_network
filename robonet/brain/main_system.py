@@ -27,6 +27,7 @@ class ServerSystem:
     ):
         self.radio   = radio
         self.menu = menu
+        self.loop = None
 
         assert displayer or ai, "Something must see what is going on"
 
@@ -44,6 +45,7 @@ class ServerSystem:
             self.ai.setup(self)
 
     def start(self):
+        self.loop = asyncio.get_running_loop()
         self.menu.start()
         if self.active_sub is not None:
             self.active_sub.start()
