@@ -217,21 +217,49 @@ class _VideoRecvPipeline:
         """
         if not self._pipeline:
             return False
+
+        # 1. Quick PAUSED check (catches element creation / caps issues)
         ret = self._pipeline.set_state(Gst.State.PAUSED)
         if ret == Gst.StateChangeReturn.FAILURE:
             log.warning(f'[gst-recv] {self._dec_name}: PAUSED state change failed immediately')
             return False
+
         bus = self._pipeline.get_bus()
-        deadline = timeout_s * Gst.SECOND
+        deadline = int(timeout_s * Gst.SECOND)
         msg = bus.timed_pop_filtered(deadline,
                                      Gst.MessageType.ERROR | Gst.MessageType.WARNING)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst-recv] {self._dec_name}: probe error: {err} — {dbg}')
+            log.warning(f'[gst-recv] {self._dec_name}: probe (PAUSED) error: {err} — {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, dbg = msg.parse_warning()
-            log.info(f'[gst-recv] {self._dec_name}: probe warning (non-fatal): {warn}')
+            log.info(f'[gst-recv] {self._dec_name}: probe (PAUSED) warning (non-fatal): {warn}')
+
+        # 2. Short PLAYING test — this is what catches "Failed to process frame"
+        #    style errors that only happen once data actually flows.
+        log.debug(f'[gst-recv] {self._dec_name}: starting 1 s PLAYING probe test')
+        ret = self._pipeline.set_state(Gst.State.PLAYING)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            log.warning(f'[gst-recv] {self._dec_name}: PLAYING state change failed during probe test')
+            return False
+
+        test_deadline = int(1.0 * Gst.SECOND)
+        msg = bus.timed_pop_filtered(test_deadline,
+                                     Gst.MessageType.ERROR | Gst.MessageType.WARNING)
+
+        # Stop the test run (we will call play() again if this probe succeeds)
+        self._pipeline.set_state(Gst.State.NULL)
+
+        if msg and msg.type == Gst.MessageType.ERROR:
+            err, dbg = msg.parse_error()
+            log.warning(f'[gst-recv] {self._dec_name}: probe test (PLAYING) error: {err} — {dbg}')
+            return False
+        if msg and msg.type == Gst.MessageType.WARNING:
+            warn, dbg = msg.parse_warning()
+            log.info(f'[gst-recv] {self._dec_name}: probe test warning (non-fatal): {warn}')
+
+        log.debug(f'[gst-recv] {self._dec_name}: probe test passed')
         return True
 
     @staticmethod
@@ -393,26 +421,54 @@ class _AudioRecvPipeline:
 
     def probe(self, timeout_s: float = 1.0) -> bool:
         """
-        Set the pipeline to PAUSED and listen for bus errors for up to
-        timeout_s seconds.
+        Set the pipeline to PAUSED and listen for immediate errors,
+        then run a short PLAYING test (1 second) to catch runtime failures
+        that only appear once the first buffer reaches the decoder.
         """
         if not self._pipeline:
             return False
+
+        # 1. Quick PAUSED check
         ret = self._pipeline.set_state(Gst.State.PAUSED)
         if ret == Gst.StateChangeReturn.FAILURE:
             log.warning(f'[gst-recv] {self._dec_name}: audio PAUSED state change failed')
             return False
+
         bus = self._pipeline.get_bus()
-        deadline = timeout_s * Gst.SECOND
+        deadline = int(timeout_s * Gst.SECOND)
         msg = bus.timed_pop_filtered(deadline,
                                      Gst.MessageType.ERROR | Gst.MessageType.WARNING)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst-recv] {self._dec_name}: audio probe error: {err} — {dbg}')
+            log.warning(f'[gst-recv] {self._dec_name}: audio probe (PAUSED) error: {err} — {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, dbg = msg.parse_warning()
-            log.info(f'[gst-recv] {self._dec_name}: audio probe warning (non-fatal): {warn}')
+            log.info(f'[gst-recv] {self._dec_name}: audio probe (PAUSED) warning (non-fatal): {warn}')
+
+        # 2. Short PLAYING test
+        log.debug(f'[gst-recv] {self._dec_name}: starting 1 s PLAYING probe test (audio)')
+        ret = self._pipeline.set_state(Gst.State.PLAYING)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            log.warning(f'[gst-recv] {self._dec_name}: audio PLAYING state change failed during probe test')
+            return False
+
+        test_deadline = int(1.0 * Gst.SECOND)
+        msg = bus.timed_pop_filtered(test_deadline,
+                                     Gst.MessageType.ERROR | Gst.MessageType.WARNING)
+
+        # Stop the test run
+        self._pipeline.set_state(Gst.State.NULL)
+
+        if msg and msg.type == Gst.MessageType.ERROR:
+            err, dbg = msg.parse_error()
+            log.warning(f'[gst-recv] {self._dec_name}: audio probe test (PLAYING) error: {err} — {dbg}')
+            return False
+        if msg and msg.type == Gst.MessageType.WARNING:
+            warn, dbg = msg.parse_warning()
+            log.info(f'[gst-recv] {self._dec_name}: audio probe test warning (non-fatal): {warn}')
+
+        log.debug(f'[gst-recv] {self._dec_name}: audio probe test passed')
         return True
 
     @staticmethod
