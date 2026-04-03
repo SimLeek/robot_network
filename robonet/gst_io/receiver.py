@@ -202,22 +202,19 @@ class _VideoRecvPipeline:
         conv.link(outcaps)
         outcaps.link(sink)
 
-        # SRTP key hash (compare this on both sides)
+        # SRTP key hash (for verification)
         key_hash = hashlib.sha256(self._srtp_key).hexdigest()[:16]
         log.info(f'[gst-recv] SRTP KEY HASH video: {key_hash} (dec_name={self._dec_name})')
 
-        # Probe before srtpdec (already present)
-        def _packet_probe(pad, info):
-            if not self._received_packet:
-                self._received_packet = True
-                log.info(f'[gst-recv] FIRST SRTP packet received → data is flowing to {self._dec_name} pipeline')
+        # Probe 1: encrypted packets entering srtpdec
+        def _srtpdec_sink_probe(pad, info):
+            log.info(f'[gst-recv] ENCRYPTED buffer arrived at srtpdec sink (video)')
             return Gst.PadProbeReturn.OK
-
-        capsflt.get_static_pad('src').add_probe(
+        srtpdec.get_static_pad('sink').add_probe(
             Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST,
-            _packet_probe)
+            _srtpdec_sink_probe)
 
-        # Probe after srtpdec (new - tells us if decryption succeeded)
+        # Probe 2: decrypted RTP leaving srtpdec
         def _post_srtp_probe(pad, info):
             log.info(f'[gst-recv] DECRYPTED RTP buffer reached depay/decoder (video)')
             return Gst.PadProbeReturn.OK
@@ -226,6 +223,16 @@ class _VideoRecvPipeline:
             if pad.get_parent_element().get_name() == 'vdepay':
                 pad.add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, _post_srtp_probe)
         srtpdec.connect('pad-added', _add_post_probe, None)
+
+        # Existing pre-srtpdec probe (kept)
+        def _packet_probe(pad, info):
+            if not self._received_packet:
+                self._received_packet = True
+                log.info(f'[gst-recv] FIRST SRTP packet received → data is flowing to {self._dec_name} pipeline')
+            return Gst.PadProbeReturn.OK
+        capsflt.get_static_pad('src').add_probe(
+            Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST,
+            _packet_probe)
 
         bus = p.get_bus()
         bus.set_sync_handler(self._on_bus_sync, None)
@@ -444,15 +451,12 @@ class _AudioRecvPipeline:
         key_hash = hashlib.sha256(self._srtp_key).hexdigest()[:16]
         log.info(f'[gst-recv] SRTP KEY HASH audio: {key_hash} (dec_name={self._dec_name})')
 
-        def _packet_probe(pad, info):
-            if not self._received_packet:
-                self._received_packet = True
-                log.info(f'[gst-recv] FIRST SRTP packet received → data is flowing to {self._dec_name} pipeline (audio)')
+        def _srtpdec_sink_probe(pad, info):
+            log.info(f'[gst-recv] ENCRYPTED buffer arrived at srtpdec sink (audio)')
             return Gst.PadProbeReturn.OK
-
-        capsflt.get_static_pad('src').add_probe(
+        srtpdec.get_static_pad('sink').add_probe(
             Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST,
-            _packet_probe)
+            _srtpdec_sink_probe)
 
         def _post_srtp_probe(pad, info):
             log.info(f'[gst-recv] DECRYPTED RTP buffer reached depay/decoder (audio)')
@@ -462,6 +466,15 @@ class _AudioRecvPipeline:
             if pad.get_parent_element().get_name() == 'adepay':
                 pad.add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, _post_srtp_probe)
         srtpdec.connect('pad-added', _add_post_probe, None)
+
+        def _packet_probe(pad, info):
+            if not self._received_packet:
+                self._received_packet = True
+                log.info(f'[gst-recv] FIRST SRTP packet received → data is flowing to {self._dec_name} pipeline (audio)')
+            return Gst.PadProbeReturn.OK
+        capsflt.get_static_pad('src').add_probe(
+            Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST,
+            _packet_probe)
 
         bus = p.get_bus()
         bus.set_sync_handler(self._on_bus_sync, None)
