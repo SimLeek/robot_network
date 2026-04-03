@@ -98,7 +98,10 @@ def _srtp_caps(pt: int, key: bytes) -> Gst.Caps:
         f'application/x-srtp, payload=(int){pt}, '
         f'srtp-key=(buffer){key.hex()}, '
         f'srtp-cipher=(string)aes-128-icm, '
-        f'srtp-auth=(string)hmac-sha1-80')
+        f'srtp-auth=(string)hmac-sha1-80, '
+        f'srtcp-cipher=(string)aes-128-icm, '
+        f'srtcp-auth=(string)hmac-sha1-80, '
+        f'roc=(uint)0')
 
 
 class _VideoRecvPipeline:
