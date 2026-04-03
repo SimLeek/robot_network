@@ -90,11 +90,6 @@ def _srtp_key_from_psk(psk: bytes) -> bytes:
     return hashlib.blake2b(psk, digest_size=30).digest()
 
 
-def _srtp_buf(key: bytes) -> Gst.Buffer:
-    """Same helper used on the sender side."""
-    return Gst.Buffer.new_wrapped(key)
-
-
 def _srtp_caps(pt: int, key: bytes) -> Gst.Caps:
     """
     Build the GstCaps required by srtpdec.
@@ -143,6 +138,8 @@ class _VideoRecvPipeline:
         self._srtp_key  = srtp_key
         self._on_frame  = on_frame
         self._received_packet  = False
+        self._received_encrypted = False
+        self._received_decrypted = False
         self._pipeline: Optional[Gst.Pipeline] = None
 
     def build(self) -> bool:
@@ -181,11 +178,6 @@ class _VideoRecvPipeline:
         src.link(capsflt)
         capsflt.link(srtpdec)
 
-        # set key directly on srtpdec
-        srtpdec.set_property('key',        _srtp_buf(self._srtp_key))
-        srtpdec.set_property('rtp-cipher', 'aes-128-icm')
-        srtpdec.set_property('rtp-auth',   'hmac-sha1-80')
-
         first_link_done = [False]
         def _on_srtpdec_pad(element, pad, downstream):
             if first_link_done[0]:
@@ -216,7 +208,9 @@ class _VideoRecvPipeline:
 
         # Probe 1: encrypted packets entering srtpdec
         def _srtpdec_sink_probe(pad, info):
-            log.info(f'[gst-recv] ENCRYPTED buffer arrived at srtpdec sink (video)')
+            if not self._received_encrypted:
+                log.info(f'[gst-recv] ENCRYPTED buffer arrived at srtpdec sink (video)')
+                self._received_encrypted = True
             return Gst.PadProbeReturn.OK
         # Probing 'capsflt.src' because 'srtpdec.sink' is a Request Pad and doesn't exist yet.
         # Data leaving capsflt is exactly what enters srtpdec.
@@ -226,7 +220,9 @@ class _VideoRecvPipeline:
 
         # Probe 2: decrypted RTP leaving srtpdec
         def _post_srtp_probe(pad, info):
-            log.info(f'[gst-recv] DECRYPTED RTP buffer reached depay/decoder (video)')
+            if not self._received_decrypted:
+                log.info(f'[gst-recv] DECRYPTED RTP buffer reached depay/decoder (video)')
+                self._received_decrypted = True
             return Gst.PadProbeReturn.OK
 
         def _add_post_probe(element, pad, _):
@@ -397,6 +393,8 @@ class _AudioRecvPipeline:
         self._pipeline:    Optional[Gst.Pipeline] = None
         self._on_audio = on_audio
         self._received_packet = False
+        self._received_encrypted = False
+        self._received_decrypted = False
 
     def build(self) -> bool:
         codec      = self._info.audio_codec
@@ -440,11 +438,6 @@ class _AudioRecvPipeline:
         src.link(capsflt)
         capsflt.link(srtpdec)
 
-        # set key directly on srtpdec
-        srtpdec.set_property('key',        _srtp_buf(self._srtp_key))
-        srtpdec.set_property('rtp-cipher', 'aes-128-icm')
-        srtpdec.set_property('rtp-auth',   'hmac-sha1-80')
-
         first_link_done = [False]
         def _on_srtpdec_pad(element, pad, downstream):
             if first_link_done[0]:
@@ -466,7 +459,9 @@ class _AudioRecvPipeline:
         log.info(f'[gst-recv] SRTP KEY HASH audio: {key_hash} (dec_name={self._dec_name})')
 
         def _srtpdec_sink_probe(pad, info):
-            log.info(f'[gst-recv] ENCRYPTED buffer arrived at srtpdec sink (audio)')
+            if not self._received_encrypted:
+                log.info(f'[gst-recv] ENCRYPTED buffer arrived at srtpdec sink (audio)')
+                self._received_encrypted = True
             return Gst.PadProbeReturn.OK
         # Probing 'capsflt.src' because 'srtpdec.sink' is a Request Pad and doesn't exist yet.
         # Data leaving capsflt is exactly what enters srtpdec.
@@ -475,7 +470,9 @@ class _AudioRecvPipeline:
             _srtpdec_sink_probe)
 
         def _post_srtp_probe(pad, info):
-            log.info(f'[gst-recv] DECRYPTED RTP buffer reached depay/decoder (audio)')
+            if not self._received_decrypted:
+                log.info(f'[gst-recv] DECRYPTED RTP buffer reached depay/decoder (audio)')
+                self._received_decrypted = True
             return Gst.PadProbeReturn.OK
 
         def _add_post_probe(element, pad, _):
