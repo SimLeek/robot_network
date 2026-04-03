@@ -168,16 +168,26 @@ class _VideoRecvPipeline:
 
         def _on_video_request_key(element, ssrc):
             log.info(f'[gst-recv] Supplying video SRTP key for SSRC {ssrc}')
-            return Gst.Caps.from_string(
-                f'application/x-srtp, '
-                f'ssrc=(uint){ssrc}, '
+
+            # 1. Provide the key/caps
+            caps = Gst.Caps.from_string(
+                f'application/x-srtp, ssrc=(uint){ssrc}, '
                 f'srtp-key=(buffer){self._srtp_key.hex()}, '
-                f'srtp-cipher=(string)aes-128-icm, '
-                f'srtp-auth=(string)hmac-sha1-80, '
-                f'srtcp-cipher=(string)aes-128-icm, '
-                f'srtcp-auth=(string)hmac-sha1-80, '
-                f'roc=(uint)0'
+                f'srtp-cipher=(string)aes-128-icm, srtp-auth=(string)hmac-sha1-80, '
+                f'srtcp-cipher=(string)aes-128-icm, srtcp-auth=(string)hmac-sha1-80, roc=(uint)0'
             )
+
+            # 2. Pre-emptively link the pad if it exists or ensure linkage
+            # Note: srtpdec creates pads named 'rtp_src_%u' % ssrc
+            pad_name = f'rtp_src_{ssrc}'
+            src_pad = element.get_static_pad(pad_name)
+            if src_pad:
+                sink_pad = depay.get_static_pad('sink')
+                if sink_pad and not sink_pad.is_linked():
+                    src_pad.link(sink_pad)
+                    log.info(f'[gst-recv] Dynamically linked video SSRC {ssrc} to depayloader')
+
+            return caps
 
         srtpdec.connect('request-key', _on_video_request_key)
         outcaps.set_property('caps', Gst.Caps.from_string('video/x-raw,format=BGR'))
@@ -196,17 +206,17 @@ class _VideoRecvPipeline:
         src.link(capsflt)
         capsflt.link(srtpdec)
 
-        first_link_done = [False]
-        def _on_srtpdec_pad(element, pad, downstream):
-            if first_link_done[0]:
-                return
-            sink_pad = downstream.get_static_pad('sink')
-            if sink_pad and not sink_pad.is_linked():
-                pad.link(sink_pad)
-                first_link_done[0] = True
-                log.info(
-                    f'[gst-recv] SUCCESS: Encrypted packets received and dynamic pad linked to {downstream.get_name()}!')
-        srtpdec.connect('pad-added', _on_srtpdec_pad, depay)
+        #first_link_done = [False]
+        #def _on_srtpdec_pad(element, pad, downstream):
+        #    if first_link_done[0]:
+        #        return
+        #    sink_pad = downstream.get_static_pad('sink')
+        #    if sink_pad and not sink_pad.is_linked():
+        #        pad.link(sink_pad)
+        #        first_link_done[0] = True
+        #        log.info(
+        #            f'[gst-recv] SUCCESS: Encrypted packets received and dynamic pad linked to {downstream.get_name()}!')
+        #srtpdec.connect('pad-added', _on_srtpdec_pad, depay)
 
         if codec in ('h264', 'h265'):
             parse = Gst.ElementFactory.make(f'{codec}parse', 'vparse')
@@ -243,10 +253,10 @@ class _VideoRecvPipeline:
                 self._received_decrypted = True
             return Gst.PadProbeReturn.OK
 
-        def _add_post_probe(element, pad, _):
-            # Only attach to the newly created source pad of srtpdec
-            pad.add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, _post_srtp_probe)
-        srtpdec.connect('pad-added', _add_post_probe, None)
+        #def _add_post_probe(element, pad, _):
+        #    # Only attach to the newly created source pad of srtpdec
+        #    pad.add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, _post_srtp_probe)
+        #srtpdec.connect('pad-added', _add_post_probe, None)
 
         # Existing pre-srtpdec probe (kept)
         def _packet_probe(pad, info):
@@ -451,16 +461,22 @@ class _AudioRecvPipeline:
 
         def _on_audio_request_key(element, ssrc):
             log.info(f'[gst-recv] Supplying audio SRTP key for SSRC {ssrc}')
-            return Gst.Caps.from_string(
-                f'application/x-srtp, '
-                f'ssrc=(uint){ssrc}, '
+            caps = Gst.Caps.from_string(
+                f'application/x-srtp, ssrc=(uint){ssrc}, '
                 f'srtp-key=(buffer){self._srtp_key.hex()}, '
-                f'srtp-cipher=(string)aes-128-icm, '
-                f'srtp-auth=(string)hmac-sha1-80, '
-                f'srtcp-cipher=(string)aes-128-icm, '
-                f'srtcp-auth=(string)hmac-sha1-80, '
-                f'roc=(uint)0'
+                f'srtp-cipher=(string)aes-128-icm, srtp-auth=(string)hmac-sha1-80, '
+                f'srtcp-cipher=(string)aes-128-icm, srtcp-auth=(string)hmac-sha1-80, roc=(uint)0'
             )
+
+            pad_name = f'rtp_src_{ssrc}'
+            src_pad = element.get_static_pad(pad_name)
+            if src_pad:
+                sink_pad = depay.get_static_pad('sink')
+                if sink_pad and not sink_pad.is_linked():
+                    src_pad.link(sink_pad)
+                    log.info(f'[gst-recv] Dynamically linked audio SSRC {ssrc} to depayloader')
+
+            return caps
 
         srtpdec.connect('request-key', _on_audio_request_key)
         outcaps.set_property('caps', Gst.Caps.from_string(
@@ -471,17 +487,17 @@ class _AudioRecvPipeline:
         src.link(capsflt)
         capsflt.link(srtpdec)
 
-        first_link_done = [False]
-        def _on_srtpdec_pad(element, pad, downstream):
-            if first_link_done[0]:
-                return
-            sink_pad = downstream.get_static_pad('sink')
-            if sink_pad and not sink_pad.is_linked():
-                pad.link(sink_pad)
-                first_link_done[0] = True
-                log.info(
-                    f'[gst-recv] SUCCESS: Encrypted packets received and dynamic pad linked to {downstream.get_name()}!')
-        srtpdec.connect('pad-added', _on_srtpdec_pad, depay)
+        #first_link_done = [False]
+        #def _on_srtpdec_pad(element, pad, downstream):
+        #    if first_link_done[0]:
+        #        return
+        #    sink_pad = downstream.get_static_pad('sink')
+        #    if sink_pad and not sink_pad.is_linked():
+        #        pad.link(sink_pad)
+        #        first_link_done[0] = True
+        #        log.info(
+        #            f'[gst-recv] SUCCESS: Encrypted packets received and dynamic pad linked to {downstream.get_name()}!')
+        #srtpdec.connect('pad-added', _on_srtpdec_pad, depay)
         depay.link(dec)
         dec.link(conv)
         conv.link(outcaps)
@@ -508,10 +524,10 @@ class _AudioRecvPipeline:
                 self._received_decrypted = True
             return Gst.PadProbeReturn.OK
 
-        def _add_post_probe(element, pad, _):
-            # Only attach to the newly created source pad of srtpdec
-            pad.add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, _post_srtp_probe)
-        srtpdec.connect('pad-added', _add_post_probe, None)
+        #def _add_post_probe(element, pad, _):
+        #    # Only attach to the newly created source pad of srtpdec
+        #    pad.add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, _post_srtp_probe)
+        #srtpdec.connect('pad-added', _add_post_probe, None)
 
         def _packet_probe(pad, info):
             if not self._received_packet:
