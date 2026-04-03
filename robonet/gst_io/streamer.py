@@ -242,6 +242,7 @@ class _VideoPipeline:
         scale   = Gst.ElementFactory.make('videoscale',   'vscale')
         capsflt = Gst.ElementFactory.make('capsfilter',   'vcaps')
         conv    = Gst.ElementFactory.make('videoconvert', 'vconv')
+        outcaps = Gst.ElementFactory.make('capsfilter', 'voutcaps')
         enc     = Gst.ElementFactory.make(self._enc_name, 'venc')
         rtpbin  = Gst.ElementFactory.make('rtpbin',       'vrtpbin')
         pay     = Gst.ElementFactory.make(_rtp_pay_name(self._video_codec), 'vpay')
@@ -257,6 +258,10 @@ class _VideoPipeline:
         capsflt.set_property('caps', Gst.Caps.from_string(
             f'video/x-raw,width={self._width},height={self._height},'
             f'framerate={self._fps}/1'))
+
+        outcaps.set_property('caps', Gst.Caps.from_string('video/x-raw,format=I420'))
+        pay.set_property('pt', 96)
+
         _apply_bitrate(enc, self._enc_name, self._bitrate)
 
         # Embed SPS/PPS parameter sets in every keyframe so the receiver
@@ -277,14 +282,16 @@ class _VideoPipeline:
         src.link(scale)
         scale.link(capsflt)
         capsflt.link(conv)
-        conv.link(enc)
+        conv.link(outcaps)
 
         if self._video_codec in ('h264', 'h265'):
             parse = Gst.ElementFactory.make(f'{self._video_codec}parse', 'vparse')
             p.add(parse)
+            outcaps.link(enc)
             enc.link(parse)
             parse.link(pay)
         else:
+            outcaps.link(enc)
             enc.link(pay)
 
         # rtpbin exposes named request pads. send_rtp_sink_0 accepts raw RTP
@@ -377,6 +384,7 @@ class _AudioPipeline:
         capsflt= Gst.ElementFactory.make('capsfilter',   'acaps')
         enc    = Gst.ElementFactory.make(self._enc_name, 'aenc')
         pay    = Gst.ElementFactory.make(_rtp_audio_pay_name(self._audio_codec), 'apay')
+        pay.set_property('pt', 97)
         srtp   = Gst.ElementFactory.make('srtpenc',      'asrtp')
         sink   = Gst.ElementFactory.make('udpsink',      'asink')
 

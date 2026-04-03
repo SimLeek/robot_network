@@ -13,8 +13,8 @@ _DEFAULT_SETTINGS: dict[str, Any] = {
 }
 
 _DEFAULT_ADVANCED_SETTINGS: dict[str, Any] = {
-    "ai_res": [320, 240],
-    "ai_fps": 60,
+    "ai_res": [640, 480],
+    "ai_fps": 30,
     "localhost_enabled": False,
     "our_port": 9999,
     "their_port": 9998,

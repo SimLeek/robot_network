@@ -22,7 +22,7 @@ def find_camera_devices() -> List[str]:
     V4L2_CAP_VIDEO_CAPTURE = 0x00000001
     V4L2_CAP_VIDEO_CAPTURE_MPLANE = 0x00001000
 
-    for dev in sorted(glob.glob('/dev/video*')):
+    for dev in sorted(glob.glob('/dev/video*'), key=lambda x: int(x.replace('/dev/video', ''))):
         try:
             # Attempt to open non-blocking. If another app has it locked, this fails.
             fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK)

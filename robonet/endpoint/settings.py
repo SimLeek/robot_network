@@ -8,8 +8,8 @@ log = setup_logging()
 
 _SETTINGS: dict[str, Any] = {
     "jpeg_quality": 70,
-    "cam_res": [320, 240],
-    "cam_fps": 60,
+    "cam_res": [640, 480],
+    "cam_fps": 30,
     "endpoints": ["robot", "desktop"],
     "our_port": 9998,
     "their_port": 9999,
