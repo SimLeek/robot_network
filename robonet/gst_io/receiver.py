@@ -199,7 +199,18 @@ class _VideoRecvPipeline:
 
         src.link(capsflt)
         capsflt.link(srtpdec)
-        srtpdec.link(depay)
+        # srtpdec creates src pads dynamically (one per SSRC) when the first
+        # encrypted packet arrives — static link() at build time finds no pad
+        # and silently returns False.  Connect pad-added instead.
+        first_link_done = [False]
+        def _on_srtpdec_pad(element, pad, downstream):
+            if first_link_done[0]:
+                return
+            sink_pad = downstream.get_static_pad('sink')
+            if sink_pad and not sink_pad.is_linked():
+                pad.link(sink_pad)
+                first_link_done[0] = True
+        srtpdec.connect('pad-added', _on_srtpdec_pad, depay)
 
         if codec in ('h264', 'h265'):
             parse = Gst.ElementFactory.make(f'{codec}parse', 'vparse')
@@ -213,8 +224,23 @@ class _VideoRecvPipeline:
         conv.link(outcaps)
         outcaps.link(sink)
 
+        bus = p.get_bus()
+        bus.set_sync_handler(self._on_bus_sync, None)
+
         self._pipeline = p
         return True
+
+    @staticmethod
+    def _on_bus_sync(bus, message, _data):
+        if message.type == Gst.MessageType.ERROR:
+            err, dbg = message.parse_error()
+            log.error(f'[gst-recv video] pipeline error: {err} | {dbg}')
+        elif message.type == Gst.MessageType.WARNING:
+            warn, dbg = message.parse_warning()
+            log.warning(f'[gst-recv video] pipeline warning: {warn} | {dbg}')
+        elif message.type == Gst.MessageType.EOS:
+            log.warning('[gst-recv video] EOS received')
+        return Gst.BusSyncReply.DROP
 
     def _pull_frame(self, sink, width, height) -> Gst.FlowReturn:
         sample = sink.emit('pull-sample')
@@ -336,14 +362,39 @@ class _AudioRecvPipeline:
             p.add(el)
         src.link(capsflt)
         capsflt.link(srtpdec)
-        srtpdec.link(depay)
+        # Same dynamic-pad issue as the video pipeline — srtpdec src pads
+        # don't exist at build time.
+        first_link_done = [False]
+        def _on_srtpdec_pad(element, pad, downstream):
+            if first_link_done[0]:
+                return
+            sink_pad = downstream.get_static_pad('sink')
+            if sink_pad and not sink_pad.is_linked():
+                pad.link(sink_pad)
+                first_link_done[0] = True
+        srtpdec.connect('pad-added', _on_srtpdec_pad, depay)
         depay.link(dec)
         dec.link(conv)
         conv.link(outcaps)
         outcaps.link(sink)
 
+        bus = p.get_bus()
+        bus.set_sync_handler(self._on_bus_sync, None)
+
         self._pipeline = p
         return True
+
+    @staticmethod
+    def _on_bus_sync(bus, message, _data):
+        if message.type == Gst.MessageType.ERROR:
+            err, dbg = message.parse_error()
+            log.error(f'[gst-recv audio] pipeline error: {err} | {dbg}')
+        elif message.type == Gst.MessageType.WARNING:
+            warn, dbg = message.parse_warning()
+            log.warning(f'[gst-recv audio] pipeline warning: {warn} | {dbg}')
+        elif message.type == Gst.MessageType.EOS:
+            log.warning('[gst-recv audio] EOS received')
+        return Gst.BusSyncReply.DROP
 
     def _pull_chunk(self, sink) -> Gst.FlowReturn:
         sample = sink.emit('pull-sample')
