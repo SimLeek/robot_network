@@ -166,32 +166,55 @@ class _VideoRecvPipeline:
         src.set_property('port', self._info.video_port)
         capsflt.set_property('caps', Gst.Caps.from_string('application/x-srtp, payload=(int)96'))
 
+        def _link_video_src_to_depay(element, src_pad):
+            """Find depay's unlinked sink and connect src_pad to it."""
+            sink_pad = depay.get_static_pad('sink')
+            if not sink_pad:
+                log.error('[gst-recv] video depay has no static sink pad')
+                return
+            if sink_pad.is_linked():
+                log.info('[gst-recv] video depay static sink pad is linked')
+                return
+            result = src_pad.link(sink_pad)
+            if result == Gst.PadLinkReturn.OK:
+                log.info(f'[gst-recv] video srtpdec → depay linked (pad={src_pad.get_name()})')
+            else:
+                log.error(f'[gst-recv] video srtpdec → depay link failed: {result} (pad={src_pad.get_name()})')
+
         def _on_video_request_key(element, ssrc):
             log.info(f'[gst-recv] Supplying video SRTP key for SSRC {ssrc}')
-            return Gst.Caps.from_string(
+            caps = Gst.Caps.from_string(
                 f'application/x-srtp, ssrc=(uint){ssrc}, '
                 f'srtp-key=(buffer){self._srtp_key.hex()}, '
                 f'srtp-cipher=(string)aes-128-icm, srtp-auth=(string)hmac-sha1-80, '
                 f'srtcp-cipher=(string)aes-128-icm, srtcp-auth=(string)hmac-sha1-80, roc=(uint)0'
             )
+            # GStreamer source creates the src pad before firing request-key,
+            # so it should exist by now.  We search by iteration rather than
+            # by name because the naming convention differs across versions.
+            sink_pad = depay.get_static_pad('sink')
+            if sink_pad and not sink_pad.is_linked():
+                it = element.iterate_src_pads()
+                while True:
+                    res, pad = it.next()
+                    if res != Gst.IteratorResult.OK:
+                        break
+                    log.info(f"[gst-recv] video sink pad name: {pad.get_name()}")
+                    if 'rtp_src' in pad.get_name():
+                        _link_video_src_to_depay(element, pad)
+                        break
+                if not sink_pad.is_linked():
+                    log.warning(f'[gst-recv] video: no rtp_src pad found during request-key for SSRC {ssrc}')
+            return caps
 
         srtpdec.connect('request-key', _on_video_request_key)
 
-        # srtpdec creates its src pad *after* request-key fires and the key is
-        # accepted. pad-added is the correct place to do the linking.
-        first_link_done = [False]
-        def _on_srtpdec_pad(element, pad, downstream):
-            if first_link_done[0]:
-                return
-            sink_pad = downstream.get_static_pad('sink')
-            if sink_pad and not sink_pad.is_linked():
-                result = pad.link(sink_pad)
-                if result == Gst.PadLinkReturn.OK:
-                    log.info(f'[gst-recv] video srtpdec → depay linked successfully')
-                    first_link_done[0] = True
-                else:
-                    log.error(f'[gst-recv] video srtpdec → depay link failed: {result}')
-        srtpdec.connect('pad-added', _on_srtpdec_pad, depay)
+        # pad-added fires if the pad is created after request-key returns
+        # (timing varies by GStreamer version).  One of the two handlers will win.
+        def _on_video_pad_added(element, pad):
+            if 'rtp_src' in pad.get_name():
+                _link_video_src_to_depay(element, pad)
+        srtpdec.connect('pad-added', _on_video_pad_added)
         outcaps.set_property('caps', Gst.Caps.from_string('video/x-raw,format=BGR'))
 
         # Drop stale frames rather than buffering them; we only want the latest.
@@ -449,30 +472,49 @@ class _AudioRecvPipeline:
         src.set_property('port', self._info.audio_port)
         capsflt.set_property('caps', Gst.Caps.from_string('application/x-srtp, payload=(int)97'))
 
+        def _link_audio_src_to_depay(element, src_pad):
+            sink_pad = depay.get_static_pad('sink')
+            if not sink_pad:
+                log.error('[gst-recv] audio depay has no static sink pad')
+                return
+            if sink_pad.is_linked():
+                log.info('[gst-recv] audio depay static sink pad is linked')
+                return
+            result = src_pad.link(sink_pad)
+            if result == Gst.PadLinkReturn.OK:
+                log.info(f'[gst-recv] audio srtpdec → depay linked (pad={src_pad.get_name()})')
+            else:
+                log.error(f'[gst-recv] audio srtpdec → depay link failed: {result} (pad={src_pad.get_name()})')
+
         def _on_audio_request_key(element, ssrc):
             log.info(f'[gst-recv] Supplying audio SRTP key for SSRC {ssrc}')
-            return Gst.Caps.from_string(
+            caps = Gst.Caps.from_string(
                 f'application/x-srtp, ssrc=(uint){ssrc}, '
                 f'srtp-key=(buffer){self._srtp_key.hex()}, '
                 f'srtp-cipher=(string)aes-128-icm, srtp-auth=(string)hmac-sha1-80, '
                 f'srtcp-cipher=(string)aes-128-icm, srtcp-auth=(string)hmac-sha1-80, roc=(uint)0'
             )
+            sink_pad = depay.get_static_pad('sink')
+            if sink_pad and not sink_pad.is_linked():
+                it = element.iterate_src_pads()
+                while True:
+                    res, pad = it.next()
+                    if res != Gst.IteratorResult.OK:
+                        break
+                    log.info(f"[gst-recv] audio sink pad name: {pad.get_name()}")
+                    if 'rtp_src' in pad.get_name():
+                        _link_audio_src_to_depay(element, pad)
+                        break
+                if not sink_pad.is_linked():
+                    log.warning(f'[gst-recv] audio: no rtp_src pad found during request-key for SSRC {ssrc}')
+            return caps
 
         srtpdec.connect('request-key', _on_audio_request_key)
 
-        first_link_done = [False]
-        def _on_srtpdec_pad(element, pad, downstream):
-            if first_link_done[0]:
-                return
-            sink_pad = downstream.get_static_pad('sink')
-            if sink_pad and not sink_pad.is_linked():
-                result = pad.link(sink_pad)
-                if result == Gst.PadLinkReturn.OK:
-                    log.info(f'[gst-recv] audio srtpdec → depay linked successfully')
-                    first_link_done[0] = True
-                else:
-                    log.error(f'[gst-recv] audio srtpdec → depay link failed: {result}')
-        srtpdec.connect('pad-added', _on_srtpdec_pad, depay)
+        def _on_audio_pad_added(element, pad):
+            if 'rtp_src' in pad.get_name():
+                _link_audio_src_to_depay(element, pad)
+        srtpdec.connect('pad-added', _on_audio_pad_added)
         outcaps.set_property('caps', Gst.Caps.from_string(
             f'audio/x-raw,rate={self._info.sample_rate},channels=1'))
 
