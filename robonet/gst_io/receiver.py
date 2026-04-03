@@ -184,8 +184,8 @@ class _VideoRecvPipeline:
         def _on_video_request_key(element, ssrc):
             log.info(f'[gst-recv] Supplying video SRTP key for SSRC {ssrc}')
             caps = Gst.Caps.from_string(
-                f'application/x-srtp, ssrc=(uint){ssrc}, '
-                f'srtp-key=(buffer){self._srtp_key}, '
+                f'application/x-srtp, payload=(int)96, ssrc=(uint){ssrc}, '
+                f'srtp-key=(buffer){self._srtp_key.hex()}, '
                 f'srtp-cipher=(string)aes-128-icm, srtp-auth=(string)hmac-sha1-80, '
                 f'srtcp-cipher=(string)aes-128-icm, srtcp-auth=(string)hmac-sha1-80, roc=(uint)0'
             )
@@ -489,8 +489,8 @@ class _AudioRecvPipeline:
         def _on_audio_request_key(element, ssrc):
             log.info(f'[gst-recv] Supplying audio SRTP key for SSRC {ssrc}')
             caps = Gst.Caps.from_string(
-                f'application/x-srtp, ssrc=(uint){ssrc}, '
-                f'srtp-key=(buffer){self._srtp_key}, '
+                f'application/x-srtp, payload=(int)97, ssrc=(uint){ssrc}, '
+                f'srtp-key=(buffer){self._srtp_key.hex()}, '
                 f'srtp-cipher=(string)aes-128-icm, srtp-auth=(string)hmac-sha1-80, '
                 f'srtcp-cipher=(string)aes-128-icm, srtcp-auth=(string)hmac-sha1-80, roc=(uint)0'
             )
