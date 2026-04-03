@@ -90,18 +90,18 @@ def _srtp_key_from_psk(psk: bytes) -> bytes:
     return hashlib.blake2b(psk, digest_size=30).digest()
 
 
-def _srtp_caps(pt: int, key: bytes) -> Gst.Caps:
-    """
-    Build the GstCaps required by srtpdec.
-    """
-    return Gst.Caps.from_string(
-        f'application/x-srtp, payload=(int){pt}, '
-        f'srtp-key=(buffer){key.hex()}, '
-        f'srtp-cipher=(string)aes-128-icm, '
-        f'srtp-auth=(string)hmac-sha1-80, '
-        f'srtcp-cipher=(string)aes-128-icm, '
-        f'srtcp-auth=(string)hmac-sha1-80, '
-        f'roc=(uint)0')
+#def _srtp_caps(pt: int, key: bytes) -> Gst.Caps:
+#    """
+#    Build the GstCaps required by srtpdec.
+#    """
+#    return Gst.Caps.from_string(
+#        f'application/x-srtp, payload=(int){pt}, '
+#        f'srtp-key=(buffer){key.hex()}, '
+#        f'srtp-cipher=(string)aes-128-icm, '
+#        f'srtp-auth=(string)hmac-sha1-80, '
+#        f'srtcp-cipher=(string)aes-128-icm, '
+#        f'srtcp-auth=(string)hmac-sha1-80, '
+#        f'roc=(uint)0')
 
 
 class _VideoRecvPipeline:
@@ -164,7 +164,22 @@ class _VideoRecvPipeline:
             return False
 
         src.set_property('port', self._info.video_port)
-        capsflt.set_property('caps', _srtp_caps(96, self._srtp_key))
+        capsflt.set_property('caps', Gst.Caps.from_string('application/x-srtp, payload=(int)96'))
+
+        def _on_video_request_key(element, ssrc):
+            log.info(f'[gst-recv] Supplying video SRTP key for SSRC {ssrc}')
+            return Gst.Caps.from_string(
+                f'application/x-srtp, '
+                f'ssrc=(uint){ssrc}, '
+                f'srtp-key=(buffer){self._srtp_key.hex()}, '
+                f'srtp-cipher=(string)aes-128-icm, '
+                f'srtp-auth=(string)hmac-sha1-80, '
+                f'srtcp-cipher=(string)aes-128-icm, '
+                f'srtcp-auth=(string)hmac-sha1-80, '
+                f'roc=(uint)0'
+            )
+
+        srtpdec.connect('request-key', _on_video_request_key)
         outcaps.set_property('caps', Gst.Caps.from_string('video/x-raw,format=BGR'))
 
         # Drop stale frames rather than buffering them; we only want the latest.
@@ -432,7 +447,22 @@ class _AudioRecvPipeline:
             return False
 
         src.set_property('port', self._info.audio_port)
-        capsflt.set_property('caps', _srtp_caps(97, self._srtp_key))
+        capsflt.set_property('caps', Gst.Caps.from_string('application/x-srtp, payload=(int)97'))
+
+        def _on_audio_request_key(element, ssrc):
+            log.info(f'[gst-recv] Supplying audio SRTP key for SSRC {ssrc}')
+            return Gst.Caps.from_string(
+                f'application/x-srtp, '
+                f'ssrc=(uint){ssrc}, '
+                f'srtp-key=(buffer){self._srtp_key.hex()}, '
+                f'srtp-cipher=(string)aes-128-icm, '
+                f'srtp-auth=(string)hmac-sha1-80, '
+                f'srtcp-cipher=(string)aes-128-icm, '
+                f'srtcp-auth=(string)hmac-sha1-80, '
+                f'roc=(uint)0'
+            )
+
+        srtpdec.connect('request-key', _on_audio_request_key)
         outcaps.set_property('caps', Gst.Caps.from_string(
             f'audio/x-raw,rate={self._info.sample_rate},channels=1'))
 
