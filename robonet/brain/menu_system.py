@@ -15,8 +15,8 @@ from robonet.brain.util.system_base import SubSystem
 from robonet.buffers.buffer_objects import MJpegCamFrame, RobotStart
 import robonet.brain.settings as settings_
 from robonet.gst_io.devices import get_first_mic_device, DeviceNotFoundError
-from robonet.gst_io.receiver import GstReceiver
-from robonet.gst_io.streamer import GstSender
+from robonet.gst_io.receiver_unencrypted import GstReceiver
+from robonet.gst_io.streamer_unencrypted import GstSender
 from robonet.logging_setup import setup_logging
 
 log = setup_logging()
@@ -65,12 +65,10 @@ class MenuSubSystem(SubSystem):
         with open(settings["psk_file"], "rb") as f:
             psk = f.read()
 
-        self._gst_sender = GstSender(psk=psk,
-                                     src_device=None,
+        self._gst_sender = GstSender(src_device=None,
                                      mic_device=mic,
                                      sample_rate=48000)
-        self._gst_receiver = GstReceiver(psk=psk,
-                                         recv_img_callback=self.on_img,
+        self._gst_receiver = GstReceiver(recv_img_callback=self.on_img,
                                          recv_audio_callback=self.on_audio
                                          #direct_audio=False,  # <- gst will play received audio directly to speaker
                                          #audio_output_device=speaker

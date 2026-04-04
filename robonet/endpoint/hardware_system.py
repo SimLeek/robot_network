@@ -11,8 +11,8 @@ from robonet.buffers.buffer_objects import RobotCapabilities, MJpegCamFrame, Sou
     SparseVectorBuffer
 from robonet.gst_io.devices import get_first_camera_device, get_first_mic_device, DeviceNotFoundError, \
     get_first_speaker_device
-from robonet.gst_io.receiver import GstReceiver
-from robonet.gst_io.streamer import GstSender
+from robonet.gst_io.receiver_unencrypted import GstReceiver
+from robonet.gst_io.streamer_unencrypted import GstSender
 from robonet.logging_setup import setup_logging
 
 log = setup_logging()
@@ -117,15 +117,13 @@ class CamMicSpkRobotHardware(RobotHardware, ABC):
         with open(settings["psk_file"], "rb") as f:
             psk = f.read()
 
-        self._gst_sender = GstSender(psk=psk,
-                                     src_device=camera,
+        self._gst_sender = GstSender(src_device=camera,
                                      mic_device=mic,
                                      sample_rate=48000,
                                      width=settings['cam_res'][0],  # make sure the camera actually has these
                                      height=settings['cam_res'][1],
                                      fps=settings['cam_fps'])
-        self._gst_receiver = GstReceiver(psk=psk,
-                                         recv_img_callback=None,
+        self._gst_receiver = GstReceiver(recv_img_callback=None,
                                          direct_audio=True,  # <- gst will play received audio directly to speaker
                                          audio_output_device=speaker
                                          )
