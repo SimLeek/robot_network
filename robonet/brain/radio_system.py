@@ -49,6 +49,7 @@ class RadioSubSystem(SubSystem):
         LOCALHOST = 1
         WIFI = 2
         ADHOC = 3
+        WIRED = 4
 
     def __init__(self):
         self.ctx        = zmq.asyncio.Context.instance()
@@ -76,13 +77,26 @@ class RadioSubSystem(SubSystem):
         self._endpoints: Dict[str, Endpoint] = {}
         self.our_ip = None
 
-        if settings["localhost_enabled"]:
+        if settings["auto_connect_mode"] == "localhost":
+            self._mode = self.NetMode.LOCALHOST
+        elif settings["auto_connect_mode"] == "wired":
+            self._mode = self.NetMode.WIRED
+        elif settings["auto_connect_mode"] == "wifi":
+            self._mode = self.NetMode.WIFI
+        elif settings["localhost_enabled"]:
             # this means the server is in a robot body, or self modification is enabled
             self._mode = self.NetMode.LOCALHOST
         elif check_wifi_connected():
             self._mode = self.NetMode.WIFI
         else:
             self._mode = self.NetMode.ADHOC
+
+        self._auto_connect_mode = settings["auto_connect_mode"]
+        self._auto_connect_endpoint_type = settings["auto_connect_endpoint_type"]
+
+        self._wired_our_ip = settings["wired_our_ip"]
+        self._wired_subnet = settings["wired_subnet"]
+        self._wired_iface: Optional[str] = None  # set once we've configured one, for teardown
 
         self._adhoc_our_ip    = settings["adhoc_our_ip"]
         self._adhoc_ssid      = settings["adhoc_ssid"]
@@ -153,6 +167,22 @@ class RadioSubSystem(SubSystem):
             self.connect_additional('127.0.0.1')
         elif mode == self.NetMode.WIFI:
             pass   # scanner handles wifi discovery
+        elif mode == self.NetMode.WIRED:
+            try:
+                from robonet.wired_pair.server import (
+                    find_connected_ethernet_interface, set_wired_static)
+                iface = find_connected_ethernet_interface()
+                if iface is None:
+                    print('[radio] wired mode: no ethernet interface with a cable plugged in')
+                else:
+                    ip = self._wired_our_ip
+                    prefix = int(self._wired_subnet.split('/')[1])
+                    set_wired_static(iface, ip, prefix)
+                    self._wired_iface = iface
+                    self._scanner.set_subnet(self._wired_subnet, iface=iface)
+                    print(f'[radio] wired up on {iface} ({ip}), probing...')
+            except Exception as e:
+                print(f'[radio] wired setup failed: {e}')
         elif mode == self.NetMode.ADHOC:
             try:
                 from robonet.buffers.buffer_objects import WifiSetupInfo
@@ -173,7 +203,15 @@ class RadioSubSystem(SubSystem):
 
     def _teardown_mode(self, mode: NetMode):
         """Synchronous teardown for the given mode."""
-        if mode == self.NetMode.ADHOC and self._adhoc_prev_conn is not None:
+        if mode == self.NetMode.WIRED and self._wired_iface is not None:
+            try:
+                from robonet.wired_pair.server import teardown_wired_static
+                teardown_wired_static()
+                self._wired_iface = None
+                print('[radio] wired torn down')
+            except Exception as e:
+                print(f'[radio] wired teardown failed: {e}')
+        elif mode == self.NetMode.ADHOC and self._adhoc_prev_conn is not None:
             try:
                 from robonet.util import switch_connections
                 from robonet.buffers.buffer_objects import WifiSetupInfo
@@ -345,7 +383,24 @@ class RadioSubSystem(SubSystem):
             all_endpoints = self._endpoints | self._scanner.by_hostname | self._scanner.by_ip
             self.root.menu.set_endpoints(all_endpoints)
             self.burst(RobotCapabilitiesAck(hostname=obj.hostname, endpoint_type=obj.endpoint_type))
+            self._maybe_auto_connect(ep)
         return handler
+
+    def _maybe_auto_connect(self, ep: Endpoint):
+        """If auto_connect_mode is set and nothing is connected yet, connect
+        to the first matching, ready endpoint automatically -- the same
+        path a human pressing Enter in the radio menu would take."""
+        if self._auto_connect_mode == 'off':
+            return
+        if self.root is None or self.root.active_sub is not None:
+            return  # already connected to something
+        if not (ep.axes or ep.streams):
+            return  # not ready yet -- matches the menu's own readiness gate
+        wanted = self._auto_connect_endpoint_type
+        if wanted != 'any' and ep.endpoint_type != wanted:
+            return
+        print(f'[radio] auto-connecting to {ep.hostname or ep.ip} [{ep.endpoint_type}]')
+        self.root.menu._connect(ep)
 
     async def transmit_who_are_you(self):
         """Probe a specific endpoint that we want to connect to."""

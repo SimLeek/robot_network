@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from robonet.brain.robot_system import RobotSubSystem
+from robonet.brain.desktop_system import DesktopSubSystem
 from robonet.brain.util.action_factory import ActionFactory
 from robonet.brain.util.selection_menu import SelectionMenu, MenuVisState
 from robonet.brain.util.system_base import SubSystem
@@ -21,6 +22,11 @@ from robonet.logging_setup import setup_logging
 
 log = setup_logging()
 settings = settings_.get()
+
+# 'unknown' deliberately not registered -- falls back to RobotSubSystem in
+# _connect(), matching the historical behavior of always using RobotSubSystem.
+SubSystem.register('robot', RobotSubSystem)
+SubSystem.register('desktop', DesktopSubSystem)
 
 import typing
 if typing.TYPE_CHECKING:
@@ -35,10 +41,13 @@ class MenuSubSystem(SubSystem):
 
     Toggle with Ctrl+backtick (human) or token/neuron 800/300 (AI).
     """
-    SHUTDOWN_TIMEOUT = 30.0
+    SHUTDOWN_TIMEOUT = 30.0  # fallback default if settings is somehow unavailable
 
     def __init__(self, out_res: Tuple[int, int] = None, fps:float=None):
-        self.does_timeout = False  # set to true for AI runs
+        # settings-driven default; still fine to set explicitly afterwards,
+        # e.g. for AI runs, same as before.
+        self.does_timeout = settings['auto_shutdown_enabled']
+        self.shutdown_timeout = settings['auto_shutdown_timeout'] or self.SHUTDOWN_TIMEOUT
         if out_res is None:
             out_res = settings["ai_res"]
         if fps is None:
@@ -149,7 +158,7 @@ class MenuSubSystem(SubSystem):
         sm.radio.connect_to(ep.ip)
 
         self._connected = True
-        self._menu.set_status(f'Connecting → {ep.hostname or ep.ip} [{ep.endpoint_type}]')
+        self._menu.set_status(f'Connecting -> {ep.hostname or ep.ip} [{ep.endpoint_type}]')
         self._menu.toggle()
 
         # Stop previous sub if any
@@ -167,8 +176,13 @@ class MenuSubSystem(SubSystem):
         self._gst_sender.start()
         self._gst_receiver.start()
 
-        new_sub = RobotSubSystem(endpoint=ep)
+        try:
+            sub_cls = SubSystem.for_endpoint_type(ep.endpoint_type)
+        except KeyError:
+            sub_cls = RobotSubSystem  # unknown endpoint_type -- historical default
+        new_sub = sub_cls(endpoint=ep)
         sm.swap_subsystem(new_sub)
+        self._menu.set_desktop_mode(ep.endpoint_type == 'desktop')
 
         if getattr(ep, 'axes', None) or getattr(ep, 'streams', None):
             self._menu.set_robot_capabilities(
@@ -182,18 +196,25 @@ class MenuSubSystem(SubSystem):
         af.bind_ai_neuron(lambda v: self.toggle(), 300, 0.5)
 
     async def timeout_loop(self):
+        """While does_timeout is on: shut down if no endpoint has been
+        available for shutdown_timeout seconds. Tracks a rolling
+        last-seen timestamp rather than a fixed startup deadline, so this
+        also covers "endpoints were available, connected or not, and then
+        all went away" -- not just "nothing ever showed up at startup"."""
+        last_seen = time.time()
         while self.does_timeout:
             await asyncio.sleep(1.0)
-            if self._connected:
+            if self._connected or self._menu.get_unique_endpoints():
+                last_seen = time.time()
+                if not self._connected:
+                    self._menu.set_status('Endpoint found - press Enter to connect')
+                continue
+            idle = time.time() - last_seen
+            remaining = int(self.shutdown_timeout - idle)
+            if remaining <= 0:
+                self.root.shutdown(reason=f'no endpoints available for {self.shutdown_timeout:.0f}s')
                 return
-            elapsed   = time.time() - self._start_time
-            remaining = int(self.SHUTDOWN_TIMEOUT - elapsed)
-            if not self._endpoints:
-                if remaining <= 0:
-                    raise RuntimeError('no endpoints found within timeout')
-                self._menu.set_status(f'Scanning… shutdown in {remaining}s')
-            else:
-                self._menu.set_status('Endpoint found — press Enter to connect')
+            self._menu.set_status(f'No endpoints - shutdown in {remaining}s')
 
     async def send_frames_always(self):
         while self.is_running:

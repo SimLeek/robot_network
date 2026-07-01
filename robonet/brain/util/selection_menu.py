@@ -10,6 +10,7 @@ import numpy as np
 
 from robonet.brain.util.bitmapfont import cols_for_width, wrap_text
 from robonet.brain.util.network_scanner import Endpoint
+from robonet.buffers.buffer_objects import SwitchVideoSource
 from statemachine import StateChart, State
 from robonet.brain.util.bitmapfont import render_text
 
@@ -118,6 +119,10 @@ class SelectionMenu:
         self._robot_caps: Optional[dict] = None   # {'axes': [...], 'streams': [...]}
         self._robot_page: int = 0                  # index into _ROBOT_PAGES
 
+        # Desktop-mode state (camera vs desktop-capture switch)
+        self._is_desktop = False
+        self._desktop_video_source = 'desktop'   # 'desktop' | 'camera'
+
         # Derived layout constants
         self._ch   = 8 * font_scale + 2   # character row height in pixels
         self._cols = cols_for_width(width, font_scale)
@@ -159,6 +164,20 @@ class SelectionMenu:
         self._robot_caps = caps
         self._robot_page = 0
 
+    def set_desktop_mode(self, is_desktop: bool):
+        """Called by MenuSubSystem._connect() so the main menu knows
+        whether to show the camera/desktop-capture switch item."""
+        self._is_desktop = is_desktop
+        if not is_desktop:
+            self._desktop_video_source = 'desktop'  # reset for the next connection
+
+    def _toggle_desktop_camera(self):
+        self._desktop_video_source = (
+            'camera' if self._desktop_video_source == 'desktop' else 'desktop')
+        if self.root is not None:
+            self.root.radio.burst(SwitchVideoSource(source=self._desktop_video_source))
+        self.set_status(f'Switching video source -> {self._desktop_video_source}')
+
     def request_sudo(self, description: str):
         self._sudo_desc = description
         self._password  = ''
@@ -195,10 +214,13 @@ class SelectionMenu:
         return None
 
     def _main_items(self) -> List[str]:
-        """Main menu items; 'Robot' appears once capabilities are known."""
+        """Main menu items; 'Robot' appears once capabilities are known,
+        'Camera: ...' appears once connected to a desktop endpoint."""
         items = list(_MAIN_ITEMS_BASE)
         if self._robot_caps is not None:
             items.append('Robot')
+        if self._is_desktop:
+            items.append(f'Camera: {self._desktop_video_source}')
         return items
 
     # ------------------------------------------------------------------
@@ -227,9 +249,12 @@ class SelectionMenu:
         elif key == 'escape':
             self.state = MenuVisState.HIDDEN
         elif key == 'enter':
-            event = items[self._cursor].lower()
-            self.menu_state.send(event)
-            self._cursor = 0  # fresh cursor for the sub-menu
+            label = items[self._cursor]
+            if label.startswith('Camera:'):
+                self._toggle_desktop_camera()
+            else:
+                self.menu_state.send(label.lower())
+                self._cursor = 0  # fresh cursor for the sub-menu
 
     # --- radio ---------------------------------------------------------
 
@@ -253,16 +278,17 @@ class SelectionMenu:
             f'Mode: Local   {chk(mode == NetMode.LOCALHOST)}',
             f'Mode: Wi-Fi   {chk(mode == NetMode.WIFI)}',
             f'Mode: Ad-Hoc  {chk(mode == NetMode.ADHOC)}',
+            f'Mode: Wired   {chk(mode == NetMode.WIRED)}',
             'Stop Scanning' if self.root.radio.is_scanning else 'Start Scanning',
         ]
         for ep in self.get_unique_endpoints():
             ready = bool(getattr(ep, 'axes', None) or getattr(ep, 'streams', None))
             tag = ep.endpoint_type or 'unknown'
-            label = f'{"✓" if ready else "·"} {ep.ip}  [{tag}]'
+            label = f'{"[ready]" if ready else "[..]"} {ep.ip}  [{tag}]'
             if ep.hostname:
                 label += f'  {ep.hostname}'
             if not ready:
-                label += '  (discovering…)'
+                label += '  (discovering...)'
             items.append(label)
         return items
 
@@ -290,16 +316,19 @@ class SelectionMenu:
                 asyncio.ensure_future(
                     self.root.radio.switch_mode(self.root.radio.NetMode.ADHOC))
             elif ci == 3:
+                asyncio.ensure_future(
+                    self.root.radio.switch_mode(self.root.radio.NetMode.WIRED))
+            elif ci == 4:
                 if self.root.radio.is_scanning:
                     asyncio.ensure_future(self.root.radio.stop_scanner_task())
                 else:
                     asyncio.ensure_future(self.root.radio.start_scanner_task())
             else:
-                ep_idx = ci - 4
+                ep_idx = ci - 5
                 if 0 <= ep_idx < len(endpoints):
                     ep = endpoints[ep_idx]
                     if not (getattr(ep, 'axes', None) or getattr(ep, 'streams', None)):
-                        self.set_status('Endpoint not ready yet — wait for capabilities')
+                        self.set_status('Endpoint not ready yet - wait for capabilities')
                         return None
                     return ep
         return None

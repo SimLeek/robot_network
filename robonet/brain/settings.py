@@ -24,7 +24,30 @@ _DEFAULT_ADVANCED_SETTINGS: dict[str, Any] = {
     "adhoc_ssid"  : "robot_server",
     "adhoc_subnet": "192.168.2.0/24",
     "psk_file" : Path.home() / ".robobrain" / "psk.key",
-    "server_psk_file" : Path.home() / ".robobrain" / "server_psk.key"
+    "server_psk_file" : Path.home() / ".robobrain" / "server_psk.key",
+
+    # Wired (ethernet) pairing. Same static-address philosophy as adhoc's
+    # wifi hotspot above, just for a direct/point-to-point cable instead
+    # of a wifi AP -- see robonet/wired_pair/server.py.
+    "wired_our_ip": "169.254.90.1",
+    "wired_subnet": "169.254.90.0/24",
+
+    # Auto-connect on start. mode: "off" | "localhost" | "wired" | "wifi".
+    # "off" preserves the original startup behavior exactly (localhost_enabled
+    # then check_wifi_connected() fallback, human picks an endpoint from the
+    # menu). Any other value both picks the startup NetMode directly and
+    # auto-connects to the first matching, ready endpoint once one appears,
+    # instead of waiting for a human to open the menu and press Enter.
+    "auto_connect_mode": "off",
+    # endpoint_type filter for the above: "any" | "robot" | "desktop".
+    "auto_connect_endpoint_type": "any",
+
+    # Auto-shutdown when no endpoints are available (see MenuSubSystem.
+    # timeout_loop). Off by default for interactive human use; meant for
+    # unattended/AI runs, same spirit as the pre-existing does_timeout
+    # flag this now drives the default of.
+    "auto_shutdown_enabled": False,
+    "auto_shutdown_timeout": 30.0,
 }
 
 _ALL_SETTINGS = _DEFAULT_SETTINGS | _DEFAULT_ADVANCED_SETTINGS

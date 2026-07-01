@@ -372,8 +372,23 @@ class IMUBuffer(BufferBase):
 
 
 # ============================================================
-# Desktop client — remote capture config (server → client)
+# Desktop client — remote capture config (server -> client)
 # ============================================================
+
+class SwitchVideoSource(BufferBase):
+    """Server -> desktop client: swap the outgoing video feed.
+
+    source: 'desktop' (virtual-cam desktop capture, the default for
+    desktop-mode endpoints) or 'camera' (the machine's physical webcam,
+    if one is available). Lets a human briefly show their face instead
+    of the screen, then switch back.
+    """
+    type_list    = [str]
+    field_codecs = [_str_]
+
+    def __init__(self, source: str = 'desktop'):
+        self.source = source
+
 
 class SetInputCropRes(BufferBase):
     type_list    = [int, int]
@@ -424,19 +439,34 @@ class SetInputMicChannels(BufferBase):
 
 
 # ============================================================
-# Desktop client — input events (server → client)
+# Desktop client — input events (server -> client)
 # ============================================================
 
 class KeyEvent(BufferBase):
-    type_list    = [str]
-    field_codecs = [_str_]
+    """Server -> desktop client: one keyboard event to replay via pyautogui.
 
-    def __init__(self, key: str):
+    key: pyautogui-compatible key name, e.g. 'a', 'enter', 'space', 'shift'.
+    pressed: True for key-down, False for key-up.
+    modifiers: comma-separated held modifiers, e.g. 'ctrl,shift'. Informational;
+        the individual modifier keys also arrive as their own KeyEvents.
+    """
+    type_list    = [str, bool, str]
+    field_codecs = [_str_, _bool_, _str_]
+
+    def __init__(self, key: str, pressed: bool = True, modifiers: str = ''):
         self.key = key
+        self.pressed = pressed
+        self.modifiers = modifiers
 
 
 class MouseEvent(BufferBase):
-    """event_type: 0=move  1=click  2=scroll"""
+    """Server -> desktop client: one mouse event to replay via pyautogui.
+
+    event_type: 0=move  1=press(button down)  2=release(button up)  3=scroll
+    x, y: absolute position for move/press/release (ignored for scroll).
+    button: 0=left 1=right 2=middle (ignored for move/scroll).
+    delta: scroll amount for scroll events (ignored otherwise).
+    """
     type_list    = [int, int, int, int, int]
     field_codecs = [_uint32] * 5
 

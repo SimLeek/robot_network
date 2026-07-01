@@ -526,6 +526,25 @@ class GstSender:
             return pipe
         return None
 
+    def set_source_device(self, device: str):
+        """Switch the v4l2 source device (e.g. desktop-capture loopback cam
+        vs a physical webcam) and restart the video pipeline against it.
+        No-op on the audio pipeline. Safe to call before start() too --
+        the new device just gets used whenever the pipeline first starts.
+        """
+        if device == self._src_device:
+            return
+        self._src_device = device
+        if not self._acked:
+            return  # not streaming yet -- new device will be used on start
+        if self._vpipe:
+            self._vpipe.stop()
+            self._vpipe = None
+        if self._src_device and self._receiver_ip and self._video_candidates:
+            self._vpipe = self._start_video_pipeline()
+            if self._vpipe is None:
+                log.error('[gst] set_source_device: all video encoders failed probe')
+
     def _start_audio_pipeline(self) -> Optional[_AudioPipeline]:
         for enc_name, codec in self._audio_candidates:
             log.info(f'[gst] trying audio encoder: {enc_name}')
