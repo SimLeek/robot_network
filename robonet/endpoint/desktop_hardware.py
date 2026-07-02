@@ -26,9 +26,7 @@ from robonet.endpoint.desktop_capture import (
 )
 from robonet.endpoint.hardware_system import CamMicSpkRobotHardware
 from robonet.endpoint.radio_system import HOSTNAME
-import robonet.endpoint.settings as settings_
 
-settings = settings_.get()
 log = logging.getLogger(__name__)
 
 # pyautogui (via its mouseinfo submodule) connects to X at import time, so
@@ -69,8 +67,8 @@ class DesktopHw(CamMicSpkRobotHardware):
     out, and replays received keyboard/mouse events via pyautogui."""
 
     def __init__(self,
-                 capture_width: int = 1920, capture_height: int = 1080,
-                 capture_fps: int = 30, include_mic: bool = True):
+                 capture_width: int = 1280, capture_height: int = 720,
+                 capture_fps: int = 15, include_mic: bool = True):
         if pyautogui is None:
             raise DesktopCaptureError(
                 "pyautogui could not be imported (it needs a live, connectable "
@@ -82,18 +80,19 @@ class DesktopHw(CamMicSpkRobotHardware):
         loopback_video = ensure_v4l2loopback_device()
         loopback_audio_playback, loopback_audio_capture = ensure_alsa_loopback()
 
-        # CamMicSpkRobotHardware.__init__ builds its GstSender from
-        # settings['cam_res']/['cam_fps'], not from constructor args -- so
-        # those need to reflect the desktop capture size *before* we call
-        # super().__init__(), or the sender would downscale to the 640x480
-        # webcam default and desktop text would be illegible. This is an
-        # in-memory override only (no .save()), scoped to this process.
-        settings['cam_res'] = [capture_width, capture_height]
-        settings['cam_fps'] = capture_fps
-
-        # camera=our virtual desktop cam, mic=the loopback CAPTURE side
-        # (what the desktop is saying/playing), speaker=None so the base
-        # class auto-detects a real speaker for normal incoming playback.
+        # Two separate resolutions, on purpose:
+        #  - capture_width/height/fps (here) is how big a frame the feeder
+        #    grabs off the real X11 desktop into the *loopback* device.
+        #  - settings['cam_res']/['cam_fps'] (read inside super().__init__,
+        #    completely untouched here) is what CamMicSpkRobotHardware's
+        #    GstSender actually *transmits* -- its existing v4l2src ->
+        #    videoscale chain downscales from whatever the loopback device
+        #    provides down to cam_res on its own, same as it would for a
+        #    real webcam. Its small default (640x480) is intentional, not a
+        #    bug: most AI consumers can't usefully handle 1920x1080@30fps,
+        #    and it's the setting a human would already know to raise for
+        #    their own viewing if they want more detail transmitted. Do not
+        #    override it here.
         super().__init__(camera=loopback_video, mic=loopback_audio_capture, speaker=None)
 
         self._loopback_video = loopback_video

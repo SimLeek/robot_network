@@ -34,12 +34,17 @@ from robonet.endpoint.radio_system import RobotRadio
 
 log = logging.getLogger(__name__)
 
-# Desktop capture wants to be legible, not tiny -- 1080p by default rather
-# than the 640x480 the webcam-oriented cam_res setting defaults to. See
-# DesktopHw.__init__ for why this can't just be a settings.json default.
-CAPTURE_WIDTH  = 1920
-CAPTURE_HEIGHT = 1080
-CAPTURE_FPS    = 30
+# This is the desktop-capture (feeder) resolution -- how big a frame gets
+# grabbed off the real X11 desktop into the virtual camera. It is NOT the
+# transmitted resolution: CamMicSpkRobotHardware's GstSender downscales
+# from this down to settings['cam_res']/['cam_fps'] (endpoint/settings.py,
+# small by default -- most AI consumers can't usefully handle 1080p30) on
+# its own, exactly like it would for a real webcam. Raise cam_res in
+# ~/.robotar/settings.json if a human viewer wants more transmitted detail;
+# don't do it by raising these.
+CAPTURE_WIDTH  = 1280
+CAPTURE_HEIGHT = 720
+CAPTURE_FPS    = 15
 
 
 if __name__ == '__main__':

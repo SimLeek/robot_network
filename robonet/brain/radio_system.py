@@ -77,12 +77,18 @@ class RadioSubSystem(SubSystem):
         self._endpoints: Dict[str, Endpoint] = {}
         self.our_ip = None
 
-        if settings["auto_connect_mode"] == "localhost":
-            self._mode = self.NetMode.LOCALHOST
-        elif settings["auto_connect_mode"] == "wired":
-            self._mode = self.NetMode.WIRED
-        elif settings["auto_connect_mode"] == "wifi":
-            self._mode = self.NetMode.WIFI
+        self._auto_connect_priority = list(settings["auto_connect_priority"])
+        self._auto_connect_endpoint_type = settings["auto_connect_endpoint_type"]
+        self._auto_connect_attempt_timeout = settings["auto_connect_attempt_timeout"]
+
+        if self._auto_connect_priority:
+            try:
+                self._mode = self.NetMode[self._auto_connect_priority[0].upper()]
+            except KeyError:
+                log.warning(f'[radio] unknown mode in auto_connect_priority: '
+                           f'{self._auto_connect_priority[0]!r}, ignoring auto-connect')
+                self._auto_connect_priority = []
+                self._mode = self.NetMode.ADHOC
         elif settings["localhost_enabled"]:
             # this means the server is in a robot body, or self modification is enabled
             self._mode = self.NetMode.LOCALHOST
@@ -90,9 +96,6 @@ class RadioSubSystem(SubSystem):
             self._mode = self.NetMode.WIFI
         else:
             self._mode = self.NetMode.ADHOC
-
-        self._auto_connect_mode = settings["auto_connect_mode"]
-        self._auto_connect_endpoint_type = settings["auto_connect_endpoint_type"]
 
         self._wired_our_ip = settings["wired_our_ip"]
         self._wired_subnet = settings["wired_subnet"]
@@ -387,10 +390,13 @@ class RadioSubSystem(SubSystem):
         return handler
 
     def _maybe_auto_connect(self, ep: Endpoint):
-        """If auto_connect_mode is set and nothing is connected yet, connect
-        to the first matching, ready endpoint automatically -- the same
-        path a human pressing Enter in the radio menu would take."""
-        if self._auto_connect_mode == 'off':
+        """If auto-connect is on (a non-empty priority list) and nothing is
+        connected yet, connect to the first matching, ready endpoint
+        automatically -- the same path a human pressing Enter in the radio
+        menu would take. Fires regardless of which mode is currently
+        active; auto_connect_sequence_loop is what tries each mode in turn
+        to find something for this to fire on in the first place."""
+        if not self._auto_connect_priority:
             return
         if self.root is None or self.root.active_sub is not None:
             return  # already connected to something
@@ -463,9 +469,52 @@ class RadioSubSystem(SubSystem):
         if sm.active_sub:
             self._live_handlers.update(sm.active_sub.handlers)
 
+    async def _ensure_mode_active(self, mode: NetMode):
+        """Make sure we're actually in `mode` and, for non-localhost modes,
+        actively scanning -- regardless of whether we were already in that
+        mode (switch_mode() alone no-ops in that case, including never
+        having started the scanner on the very first mode of a run)."""
+        if self._mode != mode:
+            await self.switch_mode(mode)
+        if mode != self.NetMode.LOCALHOST and not self.is_scanning:
+            await self.start_scanner_task()
+
+    async def auto_connect_sequence_loop(self):
+        """Try each mode in auto_connect_priority in turn, giving each up
+        to auto_connect_attempt_timeout seconds to produce a ready,
+        matching endpoint (via _maybe_auto_connect, which does the actual
+        connecting) before moving to the next. Stops early the moment
+        something connects. Once the list is exhausted without success,
+        stays in the last mode -- scanning keeps running, so a human can
+        still connect manually via the menu, or a late-arriving endpoint
+        (e.g. a cable plugged in after the wired attempt gave up) can still
+        trigger auto-connect on its own. MenuSubSystem.timeout_loop is what
+        eventually shuts things down if nothing ever shows up."""
+        if not self._auto_connect_priority:
+            return
+        for mode_name in self._auto_connect_priority:
+            if self.root.active_sub is not None:
+                return
+            try:
+                mode = self.NetMode[mode_name.upper()]
+            except KeyError:
+                log.warning(f'[radio] auto_connect_priority: unknown mode {mode_name!r}, skipping')
+                continue
+            await self._ensure_mode_active(mode)
+            log.info(f'[radio] auto-connect: trying {mode_name} for up to '
+                     f'{self._auto_connect_attempt_timeout:.0f}s')
+            waited = 0.0
+            while waited < self._auto_connect_attempt_timeout:
+                if self.root.active_sub is not None:
+                    return
+                await asyncio.sleep(1.0)
+                waited += 1.0
+        log.info('[radio] auto-connect: priority list exhausted, staying in last mode')
+
     def async_loops(self, sm: 'ServerSystem'):
         self.rebuild_handlers(sm)
         return [ self.probe_loop(),
+            self.auto_connect_sequence_loop(),
             receive_objs_encrypted(
                 psk=self.psk,
                 obj_handlers=self._live_handlers,

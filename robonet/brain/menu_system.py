@@ -41,13 +41,15 @@ class MenuSubSystem(SubSystem):
 
     Toggle with Ctrl+backtick (human) or token/neuron 800/300 (AI).
     """
-    SHUTDOWN_TIMEOUT = 30.0  # fallback default if settings is somehow unavailable
+    NO_ENDPOINTS_TIMEOUT = 30.0   # fallback defaults if settings is somehow unavailable
+    IDLE_TIMEOUT = 600.0
 
     def __init__(self, out_res: Tuple[int, int] = None, fps:float=None):
-        # settings-driven default; still fine to set explicitly afterwards,
+        # settings-driven defaults; still fine to set explicitly afterwards,
         # e.g. for AI runs, same as before.
         self.does_timeout = settings['auto_shutdown_enabled']
-        self.shutdown_timeout = settings['auto_shutdown_timeout'] or self.SHUTDOWN_TIMEOUT
+        self.no_endpoints_timeout = settings['auto_shutdown_no_endpoints_timeout'] or self.NO_ENDPOINTS_TIMEOUT
+        self.idle_timeout = settings['auto_shutdown_idle_timeout'] or self.IDLE_TIMEOUT
         if out_res is None:
             out_res = settings["ai_res"]
         if fps is None:
@@ -62,6 +64,8 @@ class MenuSubSystem(SubSystem):
         self.screen_lock = threading.Lock()
         self.last_img = np.zeros((self.out_res[1], self.out_res[0], 3), dtype=np.uint8)
         self.last_audio = None
+        self._logged_first_img = False
+        self._logged_first_audio = False
         self.handlers = None
 
         # todo: move this all somewhere other than menu
@@ -196,23 +200,28 @@ class MenuSubSystem(SubSystem):
         af.bind_ai_neuron(lambda v: self.toggle(), 300, 0.5)
 
     async def timeout_loop(self):
-        """While does_timeout is on: shut down if no endpoint has been
-        available for shutdown_timeout seconds. Tracks a rolling
-        last-seen timestamp rather than a fixed startup deadline, so this
-        also covers "endpoints were available, connected or not, and then
-        all went away" -- not just "nothing ever showed up at startup"."""
-        last_seen = time.time()
+        """While does_timeout is on: shut down fast (no_endpoints_timeout,
+        default 30s) if no endpoint has EVER been seen -- nothing to wait
+        for. Once anything has been seen (an endpoint appeared, or we
+        connected), switch to the much longer idle_timeout (default 10min)
+        for the rest of the run if we later go idle -- an AI or human
+        could still be working through the menu."""
+        ever_seen_anything = False
+        last_active = time.time()   # 'active' = connected, or an endpoint currently visible
         while self.does_timeout:
             await asyncio.sleep(1.0)
-            if self._connected or self._menu.get_unique_endpoints():
-                last_seen = time.time()
+            have_endpoints = bool(self._menu.get_unique_endpoints())
+            if self._connected or have_endpoints:
+                last_active = time.time()
+                ever_seen_anything = True
                 if not self._connected:
                     self._menu.set_status('Endpoint found - press Enter to connect')
                 continue
-            idle = time.time() - last_seen
-            remaining = int(self.shutdown_timeout - idle)
+            idle = time.time() - last_active
+            timeout = self.idle_timeout if ever_seen_anything else self.no_endpoints_timeout
+            remaining = int(timeout - idle)
             if remaining <= 0:
-                self.root.shutdown(reason=f'no endpoints available for {self.shutdown_timeout:.0f}s')
+                self.root.shutdown(reason=f'no endpoints available for {timeout:.0f}s')
                 return
             self._menu.set_status(f'No endpoints - shutdown in {remaining}s')
 
@@ -236,7 +245,11 @@ class MenuSubSystem(SubSystem):
 
     def on_img(self, img:np.ndarray):
         #This is put in the menu since neither AI nor humans should be menu-less
-        log.info(f"gst img received")
+        if not self._logged_first_img:
+            log.info("gst img received (first frame -- further frames logged at DEBUG only)")
+            self._logged_first_img = True
+        else:
+            log.debug("gst img received")
         with self.screen_lock:
             #if obj.format == 'MJPG':
             #    img = cv2.imdecode(np.frombuffer(obj.mjpeg, np.uint8), cv2.IMREAD_COLOR)
@@ -250,6 +263,10 @@ class MenuSubSystem(SubSystem):
                 self.last_img = img
 
     def on_audio(self, aud:np.ndarray):
-        log.info(f"gst aud received")
+        if not self._logged_first_audio:
+            log.info("gst audio received (first chunk -- further chunks logged at DEBUG only)")
+            self._logged_first_audio = True
+        else:
+            log.debug("gst audio received")
         self.last_audio = aud
 

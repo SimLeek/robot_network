@@ -95,8 +95,52 @@ filed as confirmed bugs.
   touched for this work (a couple of section-header comments in
   buffer_objects.py that were being edited anyway).
 
+## Deferred (thought through, not implemented -- see reasoning below)
+
 - **examples/setup_vnc_client.sh**: explicitly marked "untested
   boilerplate, probably doesn't work" and references a `robopi_client` /
   `robotar.vnc_client` module that doesn't exist anywhere in the current
   tree. Looks like leftover scaffolding from an earlier naming scheme
   (robotar vs robonet).
+
+- **Multiple endpoint types on one machine collide on port.**
+  `endpoint/settings.py`'s `our_port` (9998) is a single fixed value --
+  `RobotRadio.__init__` does `self._dish.bind(f"udp://0.0.0.0:{our_port}")`
+  unconditionally regardless of `endpoint_type`. Running
+  `robot_endpoint.py` and `desktop_endpoint.py` on the same machine at the
+  same time means both try to bind the same UDP port; the second one to
+  start fails. Proposed fix: a small shared `ENDPOINT_TYPE_PORT_OFFSETS =
+  {'robot': 0, 'desktop': 1}` (in `robonet/util.py`, already imported by
+  both sides), endpoint binds to `our_port + offset[endpoint_type]`, and
+  brain's `RadioSubSystem.connect_additional(ip)` connects to one port per
+  offset instead of a single fixed port per ip. Not done here because it
+  also touches `_probed_ips` (currently a set of bare ips, would need to
+  become ip:port pairs), `_disconnect_all`, `connect_to`, `_on_scanner_lost`,
+  and `NetworkScanner._probe_port`'s TCP liveness check -- real surface
+  area across both sides' core discovery path, and not something I could
+  verify here without two real machines (or at least two real processes
+  actually exchanging UDP over a real interface, not just importable
+  Python). Given the instruction to prioritize verified work this session,
+  writing up the design seemed better than shipping an unverified change
+  to the one thing that already reliably works (discovery).
+
+- **"Speaker out from neurons out tensors, mic in same as camera."**
+  Read this as: eventually let an AI's raw neuron-output tensor drive
+  audio *output* (e.g. synthesized speech/tone) the same way
+  `SparseVectorBuffer` drives a robot's motors today, and treat mic input
+  as just another received stream on the same footing as camera video
+  (which, worth noting, it already mostly is -- `CamMicSpkRobotHardware`
+  already pairs mic with camera symmetrically). The audio-output-from-
+  neurons half doesn't have a concrete spec yet (what tensor shape, what
+  synthesis step turns it into a waveform), so there's nothing to build
+  against yet -- flagging for a follow-up conversation rather than
+  guessing at a design.
+
+- **Claude Code CLI wrapper over robonet's IP/connection layer**, chat-only
+  (no code-tool access), prefixing desktop-originated messages with
+  `P:`. Genuinely a separate piece of software from this repo, and
+  underspecified enough (which "P", what the wrapper actually talks to on
+  the robonet side, whether it lives in this repo at all) that building it
+  now risks guessing wrong. Wanted to flag clearly that this was read and
+  not silently dropped, rather than either ignoring it or building
+  something off a half-guess.

@@ -32,22 +32,30 @@ _DEFAULT_ADVANCED_SETTINGS: dict[str, Any] = {
     "wired_our_ip": "169.254.90.1",
     "wired_subnet": "169.254.90.0/24",
 
-    # Auto-connect on start. mode: "off" | "localhost" | "wired" | "wifi".
-    # "off" preserves the original startup behavior exactly (localhost_enabled
-    # then check_wifi_connected() fallback, human picks an endpoint from the
-    # menu). Any other value both picks the startup NetMode directly and
-    # auto-connects to the first matching, ready endpoint once one appears,
-    # instead of waiting for a human to open the menu and press Enter.
-    "auto_connect_mode": "off",
+    # Auto-connect on start. Tries each mode in auto_connect_priority in
+    # order -- "localhost" | "wired" | "wifi" -- giving each up to
+    # auto_connect_attempt_timeout seconds to produce a ready, matching
+    # endpoint before moving to the next. Connects to the first matching,
+    # ready endpoint found this way, exactly as if a human had pressed
+    # Enter on it in the menu. Empty list disables this entirely and
+    # falls back to the original startup behavior (localhost_enabled then
+    # check_wifi_connected() fallback, human picks from the menu).
+    "auto_connect_priority": ["localhost", "wired"],
     # endpoint_type filter for the above: "any" | "robot" | "desktop".
     "auto_connect_endpoint_type": "any",
+    "auto_connect_attempt_timeout": 20.0,
 
     # Auto-shutdown when no endpoints are available (see MenuSubSystem.
     # timeout_loop). Off by default for interactive human use; meant for
     # unattended/AI runs, same spirit as the pre-existing does_timeout
-    # flag this now drives the default of.
+    # flag this now drives the default of. Two tiers: shut down fast if
+    # literally nothing has ever been seen (no point waiting), but give a
+    # much longer grace period if something has been seen (or we're
+    # connected) and then goes away -- an AI could still be working
+    # through the menu.
     "auto_shutdown_enabled": False,
-    "auto_shutdown_timeout": 30.0,
+    "auto_shutdown_no_endpoints_timeout": 30.0,
+    "auto_shutdown_idle_timeout": 600.0,
 }
 
 _ALL_SETTINGS = _DEFAULT_SETTINGS | _DEFAULT_ADVANCED_SETTINGS

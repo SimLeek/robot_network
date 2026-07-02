@@ -62,6 +62,66 @@ def keycode_to_pyautogui(key: int) -> Optional[str]:
     return None
 
 
+# Printable ASCII key range, matching keycode_to_pyautogui's fallback branch.
+_PRINTABLE_ASCII_COUNT = 126 - 32 + 1  # 95
+
+# The control-interface size an AI would need to fully drive a desktop
+# endpoint, were bind_ai_token/bind_ai_neuron wired up to it -- not done
+# yet, AI control is explicitly the last step for this whole project.
+# This documents the target shape ahead of that work, computed from the
+# actual key table above rather than hand-counted so it can't drift out
+# of sync with it.
+#
+# Each channel has a very different natural rate -- unlike a robot's
+# fixed-Hz polled axis vector, desktop control is event-driven per
+# channel, so Hz is documented per channel rather than as one number for
+# the whole endpoint (a key press and a mouse-move stream don't remotely
+# share a natural rate).
+#
+# For comparison, a robot endpoint's neuron count is len(ep.axes) --
+# already available on any connected Endpoint (see RobotCapabilities),
+# each axis polled uniformly at RobotSubSystem.CTRL_HZ.
+DESKTOP_CONTROL_INTERFACE_SPEC = {
+    'keys_press': {
+        'count': len(_NAMED_KEY_MAP) + _PRINTABLE_ASCII_COUNT,
+        'hz': 'event-driven, not polled -- one token per key-down. '
+             'Human typing rarely exceeds ~10/s; no hard ceiling.',
+    },
+    'keys_release': {
+        'count': len(_NAMED_KEY_MAP) + _PRINTABLE_ASCII_COUNT,
+        'hz': 'event-driven -- one token per key-up, roughly mirrors keys_press.',
+    },
+    'mouse_move': {
+        'count': 2,  # x, y -- continuous position, not discrete tokens
+        'hz': 'event-driven, can be dense during drags -- '
+             '30-60/s typical if the source polls continuously.',
+    },
+    'mouse_press': {
+        'count': 3,  # left, right, middle
+        'hz': 'event-driven, rare -- well under 10/s.',
+    },
+    'mouse_release': {
+        'count': 3,
+        'hz': 'event-driven, rare -- mirrors mouse_press.',
+    },
+    'scroll': {
+        'count': 1,  # delta -- continuous, not a discrete token
+        'hz': 'event-driven, rare -- well under 10/s.',
+    },
+}
+
+
+def describe_control_interface() -> str:
+    """Human-readable summary of DESKTOP_CONTROL_INTERFACE_SPEC, logged
+    when a desktop connection starts so the interface shape is visible
+    without having to go read this file."""
+    lines = ['Desktop control interface (not yet wired to an AI -- human '
+            'pass-through only for now):']
+    for channel, info in DESKTOP_CONTROL_INTERFACE_SPEC.items():
+        lines.append(f"  {channel}: {info['count']} -- {info['hz']}")
+    return '\n'.join(lines)
+
+
 class DesktopSubSystem(SubSystem):
     """Server-side desktop counterpart.
 
@@ -88,6 +148,7 @@ class DesktopSubSystem(SubSystem):
     def start(self):
         self._running = True
         self._bind_input()
+        log.info(describe_control_interface())
 
     def stop(self):
         self._running = False
