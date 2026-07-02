@@ -79,7 +79,7 @@ def find_v4l2loopback_device(label: str = DESKTOP_CAM_LABEL) -> Optional[str]:
         except OSError:
             continue
         if name == label:
-            m = re.search(r'video(\d+)', name_path)
+            m = re.search(r'video(\d+)/name$', name_path)
             if m:
                 return f'/dev/video{m.group(1)}'
     return None
