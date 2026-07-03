@@ -545,6 +545,30 @@ class GstSender:
             if self._vpipe is None:
                 log.error('[gst] set_source_device: all video encoders failed probe')
 
+    def set_mic_device(self, device: str):
+        """Switch the ALSA mic source device and restart the audio
+        pipeline against it. The audio-channel sibling of
+        set_source_device -- e.g. for redirecting from a real human mic
+        to an AI-driven virtual device (a PipeWire loopback an AI writes
+        synthesized audio into via sounddevice; PipeWire's ALSA
+        compatibility layer is what makes it visible here as a normal
+        alsasrc device). No-op on the video pipeline. Safe to call before
+        start() too -- the new device just gets used whenever the
+        pipeline first starts.
+        """
+        if device == self._mic_device:
+            return
+        self._mic_device = device
+        if not self._acked:
+            return  # not streaming yet -- new device will be used on start
+        if self._apipe:
+            self._apipe.stop()
+            self._apipe = None
+        if self._mic_device and self._receiver_ip and self._audio_candidates:
+            self._apipe = self._start_audio_pipeline()
+            if self._apipe is None:
+                log.error('[gst] set_mic_device: all audio encoders failed probe')
+
     def _start_audio_pipeline(self) -> Optional[_AudioPipeline]:
         for enc_name, codec in self._audio_candidates:
             log.info(f'[gst] trying audio encoder: {enc_name}')

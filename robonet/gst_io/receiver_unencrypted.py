@@ -477,30 +477,60 @@ class GstReceiver:
             log.info('[gst-recv] recv_img_callback is None — skipping video pipeline (no screen)')
 
         if obj.audio_codec:
-            on_audio = (self._recv_audio_callback
-                        if not (self._direct_audio and self._recv_audio_callback is not None)
-                        else None)
-            for dec_name in _audio_decoder_candidates(obj.audio_codec):
-                log.info(f'[gst-recv] trying audio decoder: {dec_name}')
-                pipe = _AudioRecvPipeline(
-                    obj, dec_name, self._direct_audio, self._audio_device, on_audio=on_audio)
-                if not pipe.build():
-                    log.warning(f'[gst-recv] {dec_name}: build failed, trying next')
-                    continue
-                if not pipe.probe():
-                    log.warning(f'[gst-recv] {dec_name}: probe failed, trying next')
-                    pipe.stop()
-                    continue
-                log.info(f'[gst-recv] audio decoder selected: {dec_name} ({obj.audio_codec})')
-                self._apipe = pipe
-                pipe.play()
-                break
-            else:
-                log.error('[gst-recv] all audio decoders failed — no audio will be played')
+            self._build_audio_pipeline()
         else:
             log.info('[gst-recv] no audio codec in stream info — skipping audio pipeline')
 
         self._ack(obj)
+
+    def _build_audio_pipeline(self):
+        """(Re)build the audio receive pipeline from self._info, honoring
+        the current _direct_audio/_audio_device/_recv_audio_callback
+        settings. Shared by on_stream_info() and set_direct_audio() so
+        the decoder-selection loop only lives in one place."""
+        if self._info is None or not self._info.audio_codec:
+            return
+        on_audio = (self._recv_audio_callback
+                    if not (self._direct_audio and self._recv_audio_callback is not None)
+                    else None)
+        for dec_name in _audio_decoder_candidates(self._info.audio_codec):
+            log.info(f'[gst-recv] trying audio decoder: {dec_name}')
+            pipe = _AudioRecvPipeline(
+                self._info, dec_name, self._direct_audio, self._audio_device, on_audio=on_audio)
+            if not pipe.build():
+                log.warning(f'[gst-recv] {dec_name}: build failed, trying next')
+                continue
+            if not pipe.probe():
+                log.warning(f'[gst-recv] {dec_name}: probe failed, trying next')
+                pipe.stop()
+                continue
+            log.info(f'[gst-recv] audio decoder selected: {dec_name} ({self._info.audio_codec})')
+            self._apipe = pipe
+            pipe.play()
+            return
+        log.error('[gst-recv] all audio decoders failed — no audio will be played')
+
+    def set_direct_audio(self, direct_audio: bool, audio_device: Optional[str] = None):
+        """Switch whether received audio plays straight to a device (e.g.
+        a PipeWire virtual device an AI reads via sounddevice, bypassing
+        Python entirely for the audio data itself) instead of only going
+        through recv_audio_callback, and/or which device it plays to.
+        Rebuilds the audio pipeline immediately if a stream is already
+        active (self._info set); otherwise just takes effect the next
+        time on_stream_info() builds one. The video pipeline is
+        untouched either way.
+        """
+        changed = (direct_audio != self._direct_audio
+                  or (audio_device is not None and audio_device != self._audio_device))
+        if not changed:
+            return
+        self._direct_audio = direct_audio
+        if audio_device is not None:
+            self._audio_device = audio_device
+        if self._apipe:
+            self._apipe.stop()
+            self._apipe = None
+        self._build_audio_pipeline()
 
     def _ack(self, obj: GstStreamInfo):
         self._root.radio.burst(

@@ -36,6 +36,7 @@ log = logging.getLogger(__name__)
 # the module itself stays importable either way; DesktopHw.__init__ raises
 # a clear DesktopCaptureError instead of a cryptic Xlib traceback if it's
 # actually needed and unavailable.
+_PYAUTOGUI_IMPORT_ERROR = None
 try:
     import pyautogui
     # pyautogui adds a 0.1s pause after every single call by default --

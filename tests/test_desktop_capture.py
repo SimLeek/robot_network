@@ -261,6 +261,60 @@ class _FakeGstSenderForSourceSwitch:
         return pipe
 
 
+class _FakeGstSenderForMicSwitch:
+    """Minimal GstSender stand-in for set_mic_device."""
+    def __init__(self, mic_device, acked=True, receiver_ip='10.0.0.1', has_candidates=True):
+        self._mic_device = mic_device
+        self._acked = acked
+        self._receiver_ip = receiver_ip
+        self._audio_candidates = ['opus'] if has_candidates else []
+        self._apipe = None
+        self.started_pipelines = []
+
+    def _start_audio_pipeline(self):
+        pipe = MagicMock(name=f'audio-pipeline-for-{self._mic_device}')
+        self.started_pipelines.append((self._mic_device, pipe))
+        return pipe
+
+
+class TestGstSenderSetMicDevice(unittest.TestCase):
+    """GstSender.set_mic_device -- the audio-channel sibling of
+    set_source_device, needed to redirect the brain's mic source from a
+    real human mic to an AI-driven PipeWire virtual device."""
+
+    def _bind(self, fake):
+        from robonet.gst_io.streamer_unencrypted import GstSender
+        return GstSender.set_mic_device.__get__(fake)
+
+    def test_same_device_is_a_no_op(self):
+        fake = _FakeGstSenderForMicSwitch('default')
+        self._bind(fake)('default')
+        self.assertEqual(fake.started_pipelines, [])
+
+    def test_not_yet_streaming_just_stores_device(self):
+        fake = _FakeGstSenderForMicSwitch('default', acked=False)
+        self._bind(fake)('robonet_ai_out_capture')
+        self.assertEqual(fake._mic_device, 'robonet_ai_out_capture')
+        self.assertEqual(fake.started_pipelines, [])
+
+    def test_streaming_switches_device_and_restarts_audio_pipeline(self):
+        old_pipe = MagicMock()
+        fake = _FakeGstSenderForMicSwitch('default', acked=True)
+        fake._apipe = old_pipe
+        self._bind(fake)('robonet_ai_out_capture')
+
+        old_pipe.stop.assert_called_once()
+        self.assertEqual(fake._mic_device, 'robonet_ai_out_capture')
+        self.assertEqual(len(fake.started_pipelines), 1)
+        self.assertIsNotNone(fake._apipe)
+
+    def test_does_not_touch_video_state(self):
+        fake = _FakeGstSenderForMicSwitch('default', acked=True)
+        fake._src_device = '/dev/video0'  # unrelated video state
+        self._bind(fake)('robonet_ai_out_capture')
+        self.assertEqual(fake._src_device, '/dev/video0')  # untouched
+
+
 class TestGstSenderSetSourceDevice(unittest.TestCase):
     """robonet/gst_io/streamer_unencrypted.py's GstSender.set_source_device,
     the mechanism behind the desktop-mode camera/desktop-capture switch."""
@@ -366,6 +420,30 @@ class TestDesktopHwConstruction(unittest.TestCase):
             with self.assertRaises(DesktopCaptureError) as ctx:
                 DesktopHw()
             self.assertIn('DISPLAY', str(ctx.exception))
+
+    def test_pyautogui_unavailable_error_path_does_not_itself_crash(self):
+        """Regression test: _PYAUTOGUI_IMPORT_ERROR previously had no
+        default value, so if pyautogui was None for any reason other
+        than the module's own except block having just run (e.g. patched
+        to None without also patching the error variable, which is
+        exactly what happens in a real process where the import
+        succeeded and something else set it to None later), building the
+        error message raised NameError instead of the intended
+        DesktopCaptureError. Only patches pyautogui itself here, not the
+        error variable, to catch that gap if it comes back."""
+        with patch('robonet.endpoint.desktop_hardware.pyautogui', None), \
+             patch('robonet.endpoint.desktop_hardware.ensure_v4l2loopback_device',
+                  return_value='/dev/video42'), \
+             patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
+                  return_value=('hw:1,0,0', 'hw:1,1,0')):
+            from robonet.endpoint.desktop_hardware import DesktopHw, DesktopCaptureError
+            try:
+                DesktopHw()
+                self.fail('expected DesktopCaptureError')
+            except DesktopCaptureError:
+                pass  # correct
+            except NameError as e:
+                self.fail(f'_PYAUTOGUI_IMPORT_ERROR regression: {e}')
 
     def test_construction_propagates_missing_v4l2loopback(self):
         from robonet.endpoint.desktop_capture import DesktopCaptureError as CaptureErr

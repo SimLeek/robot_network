@@ -124,7 +124,27 @@ filed as confirmed bugs.
   mode genuinely still calls `set_hotspot()`/`lazy_pirate_send_con_info()`
   from it -- that one's real production code, not a leftover test.
 
+## Found and fixed via testing (this session, own new code)
+
+- **`_PYAUTOGUI_IMPORT_ERROR`/`_SOUNDDEVICE_IMPORT_ERROR` had no default.**
+  Both `desktop_hardware.py` and the new `ai_audio.py` had the same
+  shape: `try: import X / except Exception as _e: X = None;
+  _X_IMPORT_ERROR = _e`. Since the import actually succeeds in any
+  normal environment, `_X_IMPORT_ERROR` is only ever defined inside the
+  except branch -- so the error-message code path
+  (`f'...{_X_IMPORT_ERROR}...'`) hit `NameError` instead of the intended
+  clear error, in any situation where the module-level name got set to
+  None by something other than that exact except block running.
+  `test_ai_audio.py`'s `test_raises_clear_error_when_sounddevice_unavailable`
+  (patches only `sounddevice`, not the error var) caught this directly.
+  The equivalent `desktop_hardware.py` test had accidentally also
+  patched `_PYAUTOGUI_IMPORT_ERROR` into existence, masking the same
+  bug there -- added a second test that patches only `pyautogui` to
+  catch the regression. Fixed both by giving the `_X_IMPORT_ERROR` name
+  a `None` default before the try block.
+
 ## Deferred (thought through, not implemented -- see reasoning below)
+
 
 - **examples/setup_vnc_client.sh**: explicitly marked "untested
   boilerplate, probably doesn't work" and references a `robopi_client` /
@@ -177,17 +197,22 @@ filed as confirmed bugs.
   already built this separately; it depends on the fixed IPs this
   session's wired-mode work provides and is otherwise complete.
 
-- **Audio neurons/blocksize**: original idea was letting an AI's raw
-  neuron-output tensor drive audio *output* (e.g. synthesized speech/
-  tone) the same way `SparseVectorBuffer` drives a robot's motors today,
-  and treating mic input as just another received stream on the same
-  footing as camera video (which it already mostly is --
-  `CamMicSpkRobotHardware` already pairs mic with camera symmetrically).
-  Refined on a second pass: direction converged on a global settings
-  parameter (parallel to how `cam_res`/`cam_fps` already double as "how
-  many neurons the AI needs" for video) for the sounddevice blocksize
-  used whether streaming AI output to a speaker or mic input to the AI.
-  Not implemented here -- there's no "AI drives audio output" mechanism
-  anywhere in the codebase yet for such a setting to actually configure,
-  so adding just the parameter now would be a setting that does nothing.
-  Worth building once the consuming mechanism exists.
+- **Audio neurons/blocksize -- now implemented.** Original idea was
+  letting an AI's raw neuron-output tensor drive audio *output* (e.g.
+  synthesized speech/tone) the same way `SparseVectorBuffer` drives a
+  robot's motors today, and treating mic input as just another received
+  stream on the same footing as camera video (which it already mostly
+  is -- `CamMicSpkRobotHardware` already pairs mic with camera
+  symmetrically). Built out this session as `robonet/audio_io.py`
+  (`audio_neuron_spec`/`blocksize_for_max_hz` -- the blocksize<->Hz math)
+  and `robonet/brain/ai_audio.py` (`setup_ai_audio_input`/
+  `setup_ai_audio_output` -- the actual PipeWire-virtual-device +
+  sounddevice + GstSender/GstReceiver redirection). Logic is fully unit
+  tested (mocked subprocess/sounddevice throughout), but the PipeWire
+  device-naming assumption in `ai_audio.py`'s module docstring (that
+  `pw-loopback`'s `node.name` is what sounddevice/PortAudio and
+  GStreamer's alsasrc/alsasink both see as the device string) could not
+  be verified against a live PipeWire server in this environment --
+  flagged clearly in that docstring, with `python -m sounddevice` given
+  as the way to check the real device name on an actual machine if it
+  doesn't resolve.

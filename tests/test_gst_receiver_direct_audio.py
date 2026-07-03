@@ -1,0 +1,165 @@
+"""
+tests/test_gst_receiver_direct_audio.py
+
+Tests robonet/gst_io/receiver_unencrypted.py's GstReceiver.set_direct_audio
+and the _build_audio_pipeline helper it shares with on_stream_info --
+the receiver-side redirection mechanism setup_ai_audio_input uses to
+route received audio straight into a PipeWire virtual device instead of
+only through the Python recv_audio_callback.
+"""
+
+import unittest
+from unittest.mock import patch, MagicMock
+
+from robonet.gst_io.receiver_unencrypted import GstReceiver
+
+
+class _FakeInfo:
+    def __init__(self, audio_codec='opus'):
+        self.audio_codec = audio_codec
+
+
+class _FakeGstReceiver:
+    """Minimal GstReceiver stand-in carrying just the attributes
+    _build_audio_pipeline/set_direct_audio actually touch."""
+    def __init__(self, info=None, direct_audio=False, audio_device='default',
+                recv_audio_callback=None):
+        self._info = info
+        self._direct_audio = direct_audio
+        self._audio_device = audio_device
+        self._recv_audio_callback = recv_audio_callback
+        self._apipe = None
+
+    _build_audio_pipeline = GstReceiver._build_audio_pipeline
+    set_direct_audio = GstReceiver.set_direct_audio
+
+
+class TestBuildAudioPipeline(unittest.TestCase):
+
+    def test_noop_when_no_info(self):
+        fake = _FakeGstReceiver(info=None)
+        fake._build_audio_pipeline()
+        self.assertIsNone(fake._apipe)
+
+    def test_noop_when_info_has_no_audio_codec(self):
+        fake = _FakeGstReceiver(info=_FakeInfo(audio_codec=None))
+        fake._build_audio_pipeline()
+        self.assertIsNone(fake._apipe)
+
+    @patch('robonet.gst_io.receiver_unencrypted._audio_decoder_candidates', return_value=['opusdec'])
+    @patch('robonet.gst_io.receiver_unencrypted._AudioRecvPipeline')
+    def test_builds_and_plays_on_success(self, mock_pipe_cls, _candidates):
+        mock_pipe = MagicMock()
+        mock_pipe.build.return_value = True
+        mock_pipe.probe.return_value = True
+        mock_pipe_cls.return_value = mock_pipe
+
+        fake = _FakeGstReceiver(info=_FakeInfo())
+        fake._build_audio_pipeline()
+
+        mock_pipe.play.assert_called_once()
+        self.assertIs(fake._apipe, mock_pipe)
+
+    @patch('robonet.gst_io.receiver_unencrypted._audio_decoder_candidates', return_value=['opusdec'])
+    @patch('robonet.gst_io.receiver_unencrypted._AudioRecvPipeline')
+    def test_direct_audio_with_callback_set_suppresses_python_callback(self, mock_pipe_cls, _candidates):
+        mock_pipe = MagicMock()
+        mock_pipe.build.return_value = True
+        mock_pipe.probe.return_value = True
+        mock_pipe_cls.return_value = mock_pipe
+
+        fake = _FakeGstReceiver(info=_FakeInfo(), direct_audio=True,
+                                recv_audio_callback=MagicMock())
+        fake._build_audio_pipeline()
+
+        call = mock_pipe_cls.call_args
+        passed_on_audio = call.kwargs.get('on_audio')
+        self.assertIsNone(passed_on_audio)  # direct_audio wins -- python callback suppressed
+
+    @patch('robonet.gst_io.receiver_unencrypted._audio_decoder_candidates', return_value=['opusdec'])
+    @patch('robonet.gst_io.receiver_unencrypted._AudioRecvPipeline')
+    def test_no_direct_audio_still_uses_python_callback(self, mock_pipe_cls, _candidates):
+        mock_pipe = MagicMock()
+        mock_pipe.build.return_value = True
+        mock_pipe.probe.return_value = True
+        mock_pipe_cls.return_value = mock_pipe
+        my_callback = MagicMock()
+
+        fake = _FakeGstReceiver(info=_FakeInfo(), direct_audio=False,
+                                recv_audio_callback=my_callback)
+        fake._build_audio_pipeline()
+
+        call = mock_pipe_cls.call_args
+        passed_on_audio = call.kwargs.get('on_audio')
+        self.assertIs(passed_on_audio, my_callback)
+
+    @patch('robonet.gst_io.receiver_unencrypted._audio_decoder_candidates', return_value=['a', 'b'])
+    @patch('robonet.gst_io.receiver_unencrypted._AudioRecvPipeline')
+    def test_falls_through_to_next_decoder_on_build_failure(self, mock_pipe_cls, _candidates):
+        failing = MagicMock()
+        failing.build.return_value = False
+        working = MagicMock()
+        working.build.return_value = True
+        working.probe.return_value = True
+        mock_pipe_cls.side_effect = [failing, working]
+
+        fake = _FakeGstReceiver(info=_FakeInfo())
+        fake._build_audio_pipeline()
+
+        working.play.assert_called_once()
+        self.assertIs(fake._apipe, working)
+
+    @patch('robonet.gst_io.receiver_unencrypted._audio_decoder_candidates', return_value=['a'])
+    @patch('robonet.gst_io.receiver_unencrypted._AudioRecvPipeline')
+    def test_all_decoders_failing_leaves_apipe_none(self, mock_pipe_cls, _candidates):
+        failing = MagicMock()
+        failing.build.return_value = False
+        mock_pipe_cls.return_value = failing
+
+        fake = _FakeGstReceiver(info=_FakeInfo())
+        fake._build_audio_pipeline()
+
+        self.assertIsNone(fake._apipe)
+
+
+class TestSetDirectAudio(unittest.TestCase):
+
+    @patch.object(_FakeGstReceiver, '_build_audio_pipeline')
+    def test_no_op_when_nothing_changes(self, mock_build):
+        fake = _FakeGstReceiver(direct_audio=True, audio_device='foo')
+        fake.set_direct_audio(True, 'foo')
+        mock_build.assert_not_called()
+
+    @patch.object(_FakeGstReceiver, '_build_audio_pipeline')
+    def test_updates_flag_and_rebuilds_on_direct_audio_toggle(self, mock_build):
+        fake = _FakeGstReceiver(direct_audio=False, audio_device='default')
+        fake.set_direct_audio(True, 'robonet_ai_in_playback')
+        self.assertTrue(fake._direct_audio)
+        self.assertEqual(fake._audio_device, 'robonet_ai_in_playback')
+        mock_build.assert_called_once()
+
+    @patch.object(_FakeGstReceiver, '_build_audio_pipeline')
+    def test_device_only_change_still_rebuilds(self, mock_build):
+        fake = _FakeGstReceiver(direct_audio=True, audio_device='old_device')
+        fake.set_direct_audio(True, 'new_device')
+        self.assertEqual(fake._audio_device, 'new_device')
+        mock_build.assert_called_once()
+
+    @patch.object(_FakeGstReceiver, '_build_audio_pipeline')
+    def test_stops_existing_pipeline_before_rebuilding(self, mock_build):
+        old_pipe = MagicMock()
+        fake = _FakeGstReceiver(direct_audio=False)
+        fake._apipe = old_pipe
+        fake.set_direct_audio(True, 'robonet_ai_in_playback')
+        old_pipe.stop.assert_called_once()
+
+    @patch.object(_FakeGstReceiver, '_build_audio_pipeline')
+    def test_audio_device_none_leaves_existing_device_unchanged(self, mock_build):
+        fake = _FakeGstReceiver(direct_audio=False, audio_device='keep_me')
+        fake.set_direct_audio(True)  # audio_device not given
+        self.assertEqual(fake._audio_device, 'keep_me')
+        self.assertTrue(fake._direct_audio)
+
+
+if __name__ == '__main__':
+    unittest.main()

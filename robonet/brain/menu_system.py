@@ -90,6 +90,18 @@ class MenuSubSystem(SubSystem):
     def set_endpoints(self, eps):
         self._menu.set_endpoints(eps)
 
+    @property
+    def gst_sender(self):
+        """The active GstSender -- e.g. for robonet.brain.ai_audio to
+        redirect its mic source to an AI-driven virtual device."""
+        return self._gst_sender
+
+    @property
+    def gst_receiver(self):
+        """The active GstReceiver -- e.g. for robonet.brain.ai_audio to
+        redirect received audio straight to an AI-driven virtual device."""
+        return self._gst_receiver
+
     def setup(self, root: 'ServerSystem'):
         self.root = root
         self._menu.root = root
