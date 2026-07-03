@@ -373,6 +373,15 @@ class TestMenuSubSystemConstruction(unittest.TestCase):
         np.testing.assert_array_equal(menu.last_audio, np.zeros(100, dtype=np.float32))
 
 
+    def test_gst_sender_property_exposes_the_real_instance(self):
+        menu = self._construct()
+        self.assertIs(menu.gst_sender, menu._gst_sender)
+
+    def test_gst_receiver_property_exposes_the_real_instance(self):
+        menu = self._construct()
+        self.assertIs(menu.gst_receiver, menu._gst_receiver)
+
+
 class TestSubSystemRegistryForConnect(unittest.TestCase):
     """The registry _connect() picks a SubSystem class from -- importing
     menu_system.py registers both 'robot' and 'desktop' as a module-level
