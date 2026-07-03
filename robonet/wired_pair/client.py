@@ -19,16 +19,20 @@ has no address at all, and the brain's WhoAreYou probes (aimed at the
 reach even though RobotRadio itself is already listening correctly.
 
 This mirrors what adhoc_pair/client.py, local_wifi_pair/client.py, and
-localhost_pair/client.py exist to do for their own transports -- worth
-noting those three are standalone scripts built on an older
-client_unicast_communication/client_udp_discovery pattern that predates
-RobotRadio/RobotNode and isn't invoked by the current endpoint entry
-points either (grepped robonet/endpoint/ and examples/ for any of the
-three -- nothing references them). Rather than copy that older,
-disconnected pattern, this does the one thing wired mode actually needs
-(a static IP, via the same set_wired_static() the brain side already
-uses) and stays a simple standalone step, same as
-examples/desktop/setup_desktop_capture.sh.
+localhost_pair/client.py used to exist to do for their own transports --
+those three were standalone scripts on an older client_unicast_
+communication/client_udp_discovery pattern (see robonet/util.py) from
+before RobotRadio/RobotNode existed, weren't referenced anywhere in the
+current endpoint code, and have since been deleted (they're still in git
+history if anyone needs to look back at them; adhoc_pair/server.py is
+kept since robonet/brain/radio_system.py's ADHOC mode genuinely still
+uses set_hotspot()/lazy_pirate_send_con_info() from it). Rather than
+recreate that older, disconnected pattern, this does the one thing wired
+mode actually needs (a static IP, via the same set_wired_static() the
+brain side already uses) and stays a simple standalone step, same as
+examples/desktop/setup_desktop_capture.sh -- or set auto_wired_setup in
+robonet/endpoint/settings.py to have RobotRadio call this automatically
+on startup instead.
 
 Usage (run once after plugging in the cable; nmcli's autoconnect=no
 means this needs to be re-run after a reboot, or turned into a systemd

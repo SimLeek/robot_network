@@ -23,6 +23,13 @@ _SETTINGS: dict[str, Any] = {
     # chosen value between them.
     "wired_endpoint_ip": "169.254.90.2",
     "wired_subnet": "169.254.90.0/24",
+    # Off by default: attempting this unconditionally on every endpoint
+    # startup would reconfigure the first ethernet interface with a cable
+    # plugged in via nmcli, which could just as easily be someone's normal
+    # wired internet connection, not one intended for robonet pairing.
+    # Turn this on for endpoints that are actually meant to be reached over
+    # a direct wired link -- see RobotRadio.__init__.
+    "auto_wired_setup": False,
     "psk_file": Path.home() / ".robotar" / "psk.key",
     "server_psk_file": Path.home() / ".robotar" / "server_psk.key"
 }

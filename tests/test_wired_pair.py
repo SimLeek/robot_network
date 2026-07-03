@@ -7,7 +7,10 @@ set_wired_static/teardown_wired_static issue, against a mocked
 subprocess.run -- no real network interfaces or nmcli needed.
 """
 
+import os
+import shutil
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch, mock_open, MagicMock, call
 
@@ -282,6 +285,65 @@ class TestDisconnectWired(unittest.TestCase):
     def test_custom_con_name(self, mock_teardown):
         wpc.disconnect_wired(con_name='my_link')
         mock_teardown.assert_called_once_with(con_name='my_link')
+
+
+class TestRobotRadioWiredIntegration(unittest.TestCase):
+    """RobotRadio.__init__'s new auto_wired_setup integration -- the
+    actual endpoint-side receiving code, not just the standalone
+    wired_pair.client script. This sandbox's pyzmq build lacks draft-
+    socket support (zmq.DISH/RADIO need it), so socket creation is
+    mocked; everything else in __init__ (including the new wired block)
+    runs for real."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix='robonet_endpoint_radio_test_')
+        self.psk_path = os.path.join(self.tmpdir, 'psk.key')
+        self.server_psk_path = os.path.join(self.tmpdir, 'server_psk.key')
+        with open(self.psk_path, 'wb') as f:
+            f.write(os.urandom(32))
+        with open(self.server_psk_path, 'wb') as f:
+            f.write(os.urandom(32))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _make_settings(self, **overrides):
+        vals = {
+            'psk_file': self.psk_path, 'server_psk_file': self.server_psk_path,
+            'our_port': 0, 'their_port': 0,
+            'auto_wired_setup': False,
+        }
+        vals.update(overrides)
+        fake = MagicMock()
+        fake.__getitem__.side_effect = vals.__getitem__
+        return fake
+
+    def _construct(self, **setting_overrides):
+        from robonet.endpoint.radio_system import RobotRadio
+        with patch('robonet.endpoint.radio_system.settings', self._make_settings(**setting_overrides)), \
+             patch('robonet.endpoint.radio_system.zmq.asyncio.Context.instance') as mock_ctx_cls:
+            mock_ctx = MagicMock()
+            mock_ctx.socket.return_value = MagicMock()
+            mock_ctx_cls.return_value = mock_ctx
+            return RobotRadio()
+
+    def test_wired_setup_not_attempted_when_disabled(self):
+        with patch('robonet.wired_pair.client.connect_wired') as mock_connect:
+            self._construct(auto_wired_setup=False)
+        mock_connect.assert_not_called()
+
+    def test_wired_setup_attempted_when_enabled(self):
+        with patch('robonet.wired_pair.client.connect_wired', return_value='eth0') as mock_connect:
+            self._construct(auto_wired_setup=True)
+        mock_connect.assert_called_once()
+
+    def test_wired_setup_failure_does_not_prevent_construction(self):
+        # No cable plugged in is the normal case for most endpoints --
+        # must not raise or block listening on other interfaces.
+        with patch('robonet.wired_pair.client.connect_wired',
+                  side_effect=RuntimeError('no cable plugged in')):
+            radio = self._construct(auto_wired_setup=True)  # must not raise
+        self.assertIsNotNone(radio)
 
 
 if __name__ == '__main__':

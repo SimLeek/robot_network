@@ -75,17 +75,6 @@ filed as confirmed bugs.
   (e.g. for wired mode specifically, given the docstring) or is dead
   duplicate code to remove.
 
-- **robonet/adhoc_pair, local_wifi_pair, localhost_pair**: three
-  standalone `client.py`/`server.py` pairs with their own
-  `if __name__ == '__main__':` entry points, predating the current
-  `RadioSubSystem`/`RobotNode` architecture. `radio_system.py` still
-  imports `set_hotspot`/`lazy_pirate_send_con_info` from
-  `adhoc_pair/server.py` for real, but `local_wifi_pair` and
-  `localhost_pair` look fully orphaned relative to the current brain
-  code path -- nothing in `robonet/brain/` or `robonet/endpoint/`
-  references them. Might be worth archiving or deleting if confirmed
-  unused, to stop them drifting further from the real handshake.
-
 - **Non-ASCII characters scattered through existing comments/UI
   strings**: em dashes and arrows appear throughout the pre-existing
   codebase (e.g. selection_menu.py's UI glyphs `-> . |`, doc comment
@@ -109,17 +98,31 @@ filed as confirmed bugs.
   side already uses, plus matching `wired_endpoint_ip`/`wired_subnet`
   settings on the endpoint side.
 
-  Worth noting while looking into this: `adhoc_pair`, `local_wifi_pair`,
-  and `localhost_pair` all *do* have a `client.py`, but all three are
-  standalone scripts built on an older `client_unicast_communication`/
-  `client_udp_discovery` pattern (see robonet/util.py) that predates
-  RobotRadio/RobotNode, and none of them are referenced anywhere in
-  `robonet/endpoint/` or `examples/` -- confirmed by grep. So the
-  existing convention isn't "client.py is wired into the current
-  architecture automatically," it's "client.py is a standalone step you
-  run yourself" -- which is the pattern the new wired_pair/client.py
-  actually follows (run once via `python -m robonet.wired_pair.client`),
-  just built on RobotRadio-era primitives instead of the older ones.
+- **Settings existed but nothing in the actual receiving code used
+  them.** Follow-up catch on the fix above: `wired_endpoint_ip`/
+  `wired_subnet` were readable from `endpoint/settings.py` and consumed
+  by the standalone `wired_pair/client.py` script, but
+  `robonet/endpoint/radio_system.py` -- `RobotRadio`, the class that
+  actually owns the receiving DISH socket -- had zero "wired" references
+  at all (checked with `grep -rn wired robonet/endpoint/`). Fixed:
+  `RobotRadio.__init__` now calls `connect_wired()` itself, gated behind
+  a new opt-in `auto_wired_setup` setting (default `False`) and wrapped
+  so failure (no cable, no nmcli, whatever) just logs and continues --
+  running this unconditionally on every endpoint startup would reconfigure
+  the first ethernet interface with a cable plugged in via nmcli, which
+  could just as easily be someone's normal wired internet connection as
+  one intended for robonet pairing, so it stays opt-in rather than
+  automatic-by-default.
+
+- **Deleted `robonet/local_wifi_pair/`, `robonet/localhost_pair/`, and
+  `robonet/adhoc_pair/client.py`** -- confirmed via grep that nothing
+  outside their own directories imported any of them (all three were
+  standalone scripts on an older `client_unicast_communication`/
+  `client_udp_discovery` pattern, predating RobotRadio/RobotNode
+  entirely). Still in git history if needed later. Kept
+  `adhoc_pair/server.py`, since `robonet/brain/radio_system.py`'s ADHOC
+  mode genuinely still calls `set_hotspot()`/`lazy_pirate_send_con_info()`
+  from it -- that one's real production code, not a leftover test.
 
 ## Deferred (thought through, not implemented -- see reasoning below)
 
@@ -150,23 +153,41 @@ filed as confirmed bugs.
   writing up the design seemed better than shipping an unverified change
   to the one thing that already reliably works (discovery).
 
-- **"Speaker out from neurons out tensors, mic in same as camera."**
-  Read this as: eventually let an AI's raw neuron-output tensor drive
-  audio *output* (e.g. synthesized speech/tone) the same way
-  `SparseVectorBuffer` drives a robot's motors today, and treat mic input
-  as just another received stream on the same footing as camera video
-  (which, worth noting, it already mostly is -- `CamMicSpkRobotHardware`
-  already pairs mic with camera symmetrically). The audio-output-from-
-  neurons half doesn't have a concrete spec yet (what tensor shape, what
-  synthesis step turns it into a waveform), so there's nothing to build
-  against yet -- flagging for a follow-up conversation rather than
-  guessing at a design.
+- **ADHOC mode likely has the same class of gap wired mode had, unfixed.**
+  Noticed this while confirming nothing referenced the now-deleted
+  `adhoc_pair/client.py`: the brain side creates the wifi hotspot
+  (`set_hotspot()`) and broadcasts its connection info
+  (`lazy_pirate_send_con_info()`), but nothing in the current
+  `robonet/endpoint/` code listens for that broadcast or joins the
+  hotspot -- the old `adhoc_pair/client.py` did exactly that (via
+  `lazy_pirate_recv_con_info()` + `connect_hotspot()`), but on the older,
+  now-deleted REQ/REP+unicast pattern, and it was never actually called
+  from `RobotRadio`/`RobotNode` either. So joining ADHOC mode's
+  brain-created hotspot probably has the identical problem WIRED mode had
+  before this session's fix: the endpoint's wifi interface has no reason
+  to associate with a hotspot it's never told to join. Didn't fix this now -- flagging it since it's a direct
+  parallel to what was just fixed for wired, and the fix shape would
+  likely mirror it (an endpoint-side function using current-architecture
+  primitives, gated behind a settings flag, called from
+  `RobotRadio.__init__`), but wanted to confirm the diagnosis and get
+  agreement on scope before touching ADHOC mode's actual wifi-joining
+  behavior.
 
-- **Claude Code CLI wrapper over robonet's IP/connection layer**, chat-only
-  (no code-tool access), prefixing desktop-originated messages with
-  `P:`. Genuinely a separate piece of software from this repo, and
-  underspecified enough (which "P", what the wrapper actually talks to on
-  the robonet side, whether it lives in this repo at all) that building it
-  now risks guessing wrong. Wanted to flag clearly that this was read and
-  not silently dropped, rather than either ignoring it or building
-  something off a half-guess.
+- **Claude Code CLI wrapper**: resolved outside this repo -- Simleek has
+  already built this separately; it depends on the fixed IPs this
+  session's wired-mode work provides and is otherwise complete.
+
+- **Audio neurons/blocksize**: original idea was letting an AI's raw
+  neuron-output tensor drive audio *output* (e.g. synthesized speech/
+  tone) the same way `SparseVectorBuffer` drives a robot's motors today,
+  and treating mic input as just another received stream on the same
+  footing as camera video (which it already mostly is --
+  `CamMicSpkRobotHardware` already pairs mic with camera symmetrically).
+  Refined on a second pass: direction converged on a global settings
+  parameter (parallel to how `cam_res`/`cam_fps` already double as "how
+  many neurons the AI needs" for video) for the sounddevice blocksize
+  used whether streaming AI output to a speaker or mic input to the AI.
+  Not implemented here -- there's no "AI drives audio output" mechanism
+  anywhere in the codebase yet for such a setting to actually configure,
+  so adding just the parameter now would be a setting that does nothing.
+  Worth building once the consuming mechanism exists.
