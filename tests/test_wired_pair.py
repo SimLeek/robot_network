@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch, mock_open, MagicMock, call
 
 from robonet.wired_pair import server as wp
+from robonet.wired_pair import client as wpc
 
 
 class TestFindEthernetInterfaces(unittest.TestCase):
@@ -225,6 +226,62 @@ class TestTeardownWiredStatic(unittest.TestCase):
         commands = [c.args[0] for c in mock_run.call_args_list]
         self.assertIn('con down my_link', commands[0])
         self.assertIn('con delete my_link', commands[1])
+
+
+class TestConnectWired(unittest.TestCase):
+
+    @patch('robonet.wired_pair.client.set_wired_static')
+    @patch('robonet.wired_pair.client.find_connected_ethernet_interface')
+    def test_auto_detects_interface_and_uses_settings_defaults(self, mock_find, mock_set):
+        mock_find.return_value = 'eth0'
+
+        result = wpc.connect_wired()
+
+        self.assertEqual(result, 'eth0')
+        mock_set.assert_called_once_with('eth0', '169.254.90.2', 24, con_name='robonet_wired')
+
+    @patch('robonet.wired_pair.client.set_wired_static')
+    @patch('robonet.wired_pair.client.find_connected_ethernet_interface')
+    def test_explicit_iface_skips_auto_detection(self, mock_find, mock_set):
+        result = wpc.connect_wired(iface='eth1')
+
+        mock_find.assert_not_called()
+        self.assertEqual(result, 'eth1')
+        mock_set.assert_called_once_with('eth1', '169.254.90.2', 24, con_name='robonet_wired')
+
+    @patch('robonet.wired_pair.client.set_wired_static')
+    @patch('robonet.wired_pair.client.find_connected_ethernet_interface')
+    def test_explicit_ip_and_prefix_override_settings(self, mock_find, mock_set):
+        mock_find.return_value = 'eth0'
+
+        wpc.connect_wired(ip='10.0.0.5', prefix=16)
+
+        mock_set.assert_called_once_with('eth0', '10.0.0.5', 16, con_name='robonet_wired')
+
+    @patch('robonet.wired_pair.client.find_connected_ethernet_interface', return_value=None)
+    def test_raises_clear_error_when_no_cable_plugged_in(self, _find):
+        with self.assertRaises(RuntimeError) as ctx:
+            wpc.connect_wired()
+        self.assertIn('cable', str(ctx.exception))
+
+    @patch('robonet.wired_pair.client.set_wired_static')
+    @patch('robonet.wired_pair.client.find_connected_ethernet_interface', return_value='eth0')
+    def test_custom_con_name_passed_through(self, _find, mock_set):
+        wpc.connect_wired(con_name='my_link')
+        mock_set.assert_called_once_with('eth0', '169.254.90.2', 24, con_name='my_link')
+
+
+class TestDisconnectWired(unittest.TestCase):
+
+    @patch('robonet.wired_pair.client.teardown_wired_static')
+    def test_delegates_to_teardown_wired_static(self, mock_teardown):
+        wpc.disconnect_wired()
+        mock_teardown.assert_called_once_with(con_name='robonet_wired')
+
+    @patch('robonet.wired_pair.client.teardown_wired_static')
+    def test_custom_con_name(self, mock_teardown):
+        wpc.disconnect_wired(con_name='my_link')
+        mock_teardown.assert_called_once_with(con_name='my_link')
 
 
 if __name__ == '__main__':

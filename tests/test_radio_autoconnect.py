@@ -16,9 +16,12 @@ make these tests slow, environment-dependent, or both.
 """
 
 import asyncio
+import shutil
+import tempfile
 import time
 import unittest
 from enum import Enum
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from robonet.brain.radio_system import RadioSubSystem
@@ -280,6 +283,73 @@ class TestWiredNetModeSetupTeardown(unittest.TestCase):
 
         mock_teardown.assert_called_once()
         self.assertIsNone(radio._wired_iface)
+
+
+class TestRadioSubSystemInitModeSelection(unittest.TestCase):
+    """__init__'s actual priority-list parsing (which methods above test
+    in isolation via _FakeRadio) -- constructs a real RadioSubSystem to
+    verify the parsing itself, including the unknown-mode fallback path,
+    with temp psk files so the real constructor doesn't need
+    ~/.robobrain to already exist."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix='robonet_radio_init_test_')
+        self.psk_path = Path(self.tmpdir) / 'psk.key'
+        self.server_psk_path = Path(self.tmpdir) / 'server_psk.key'
+        self.psk_path.write_bytes(b'0' * 32)
+        self.server_psk_path.write_bytes(b'0' * 32)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _make_settings(self, **overrides):
+        base = {
+            "our_port": 0, "their_port": 0,
+            "psk_file": self.psk_path, "server_psk_file": self.server_psk_path,
+            "adhoc_our_ip": "192.168.2.1", "adhoc_ssid": "robot_server",
+            "wired_our_ip": "169.254.90.1", "wired_subnet": "169.254.90.0/24",
+            "localhost_enabled": False, "wifi_prev_connection": None,
+            "auto_connect_priority": [], "auto_connect_endpoint_type": "any",
+            "auto_connect_attempt_timeout": 20.0,
+        }
+        base.update(overrides)
+        fake = MagicMock()
+        fake.__getitem__.side_effect = base.__getitem__
+        return fake
+
+    def _construct(self, **setting_overrides):
+        """This sandbox's pyzmq wheel isn't built with draft-socket
+        support, which zmq.DISH/zmq.RADIO need -- mock just the socket
+        creation (not the class under test) so __init__'s actual
+        mode-selection logic still runs for real. connect_additional()
+        (called for LOCALHOST) also needs the mocked radio socket's
+        .connect to be a plain no-op, which MagicMock already gives us.
+        """
+        with patch('robonet.brain.radio_system.settings', self._make_settings(**setting_overrides)), \
+             patch('robonet.brain.radio_system.zmq.asyncio.Context.instance') as mock_ctx_cls:
+            mock_ctx = MagicMock()
+            mock_ctx.socket.return_value = MagicMock()
+            mock_ctx_cls.return_value = mock_ctx
+            return RadioSubSystem()
+
+    def test_first_priority_entry_sets_starting_mode(self):
+        radio = self._construct(auto_connect_priority=['wired'])
+        self.assertEqual(radio._mode, RadioSubSystem.NetMode.WIRED)
+        self.assertEqual(radio._auto_connect_priority, ['wired'])
+
+    def test_unknown_first_priority_entry_falls_back_and_clears_priority(self):
+        radio = self._construct(auto_connect_priority=['not_a_mode'])
+        self.assertEqual(radio._auto_connect_priority, [])  # auto-connect disabled entirely
+        self.assertEqual(radio._mode, RadioSubSystem.NetMode.ADHOC)  # safe fallback
+
+    def test_empty_priority_falls_back_to_localhost_enabled(self):
+        radio = self._construct(auto_connect_priority=[], localhost_enabled=True)
+        self.assertEqual(radio._mode, RadioSubSystem.NetMode.LOCALHOST)
+
+    def test_empty_priority_and_localhost_disabled_falls_back_to_adhoc_when_no_wifi(self):
+        with patch('robonet.brain.radio_system.check_wifi_connected', return_value=False):
+            radio = self._construct(auto_connect_priority=[], localhost_enabled=False)
+        self.assertEqual(radio._mode, RadioSubSystem.NetMode.ADHOC)
 
 
 if __name__ == '__main__':

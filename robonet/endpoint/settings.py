@@ -16,6 +16,13 @@ _SETTINGS: dict[str, Any] = {
     "adhoc_their_ip": "192.168.2.1",
     "adhoc_ssid": "robot_server",
     "adhoc_subnet": "192.168.2.0/24",
+    # Matches robonet/brain/settings.py's wired_our_ip/wired_subnet -- see
+    # robonet/wired_pair/client.py. Both sides are hardcoded to agree on
+    # this subnet out of the box since they're independent settings files,
+    # possibly on different machines, with no automatic way to sync a
+    # chosen value between them.
+    "wired_endpoint_ip": "169.254.90.2",
+    "wired_subnet": "169.254.90.0/24",
     "psk_file": Path.home() / ".robotar" / "psk.key",
     "server_psk_file": Path.home() / ".robotar" / "server_psk.key"
 }

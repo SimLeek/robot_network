@@ -95,6 +95,32 @@ filed as confirmed bugs.
   touched for this work (a couple of section-header comments in
   buffer_objects.py that were being edited anyway).
 
+## Fixed after initial review (flagged by Simleek)
+
+- **wired_pair had no client-side.** Initial version only configured the
+  brain's own interface, reasoning (documented in the module's own
+  docstring at the time) that a direct cable has no server/client role
+  asymmetry so one function could serve both ends. That missed the actual
+  point: the *brain* configuring *its own* interface doesn't put any IP
+  on the *endpoint's* interface -- RobotRadio's DISH socket binding to
+  0.0.0.0 still needs the OS to have an address on that interface at all
+  to route packets to it. Fixed by adding `robonet/wired_pair/client.py`
+  (`connect_wired()`), reusing the same `set_wired_static()` the brain
+  side already uses, plus matching `wired_endpoint_ip`/`wired_subnet`
+  settings on the endpoint side.
+
+  Worth noting while looking into this: `adhoc_pair`, `local_wifi_pair`,
+  and `localhost_pair` all *do* have a `client.py`, but all three are
+  standalone scripts built on an older `client_unicast_communication`/
+  `client_udp_discovery` pattern (see robonet/util.py) that predates
+  RobotRadio/RobotNode, and none of them are referenced anywhere in
+  `robonet/endpoint/` or `examples/` -- confirmed by grep. So the
+  existing convention isn't "client.py is wired into the current
+  architecture automatically," it's "client.py is a standalone step you
+  run yourself" -- which is the pattern the new wired_pair/client.py
+  actually follows (run once via `python -m robonet.wired_pair.client`),
+  just built on RobotRadio-era primitives instead of the older ones.
+
 ## Deferred (thought through, not implemented -- see reasoning below)
 
 - **examples/setup_vnc_client.sh**: explicitly marked "untested

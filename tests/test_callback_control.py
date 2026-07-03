@@ -321,5 +321,229 @@ class TestShutdownCallbacks(unittest.TestCase):
         self.assertEqual(order, ['ran'])
 
 
+class _FakeModifiers:
+    def __init__(self, ctrl=False, shift=False, alt=False):
+        self.ctrl = ctrl
+        self.shift = shift
+        self.alt = alt
+
+
+class _FakeWKeys:
+    ACTION_PRESS = 'PRESS'
+    ACTION_RELEASE = 'RELEASE'
+    ACTION_REPEAT = 'REPEAT'
+
+
+def _make_fake_root(with_displayer=True, menu_visible=False):
+    root = MagicMock()
+    root.menu.visible = menu_visible
+    if with_displayer:
+        root.displayer.displayer.displayer.config.wnd.keys = _FakeWKeys
+    else:
+        root.displayer = None
+    return root
+
+
+class TestDesktopSubSystemLifecycle(unittest.TestCase):
+
+    def test_init_state(self):
+        from robonet.brain.desktop_system import DesktopSubSystem
+        ep = MagicMock()
+
+        sub = DesktopSubSystem(endpoint=ep)
+
+        self.assertIs(sub._endpoint, ep)
+        self.assertIsNone(sub._root)
+        self.assertFalse(sub._running)
+        self.assertFalse(sub._bound)
+        self.assertEqual(sub.handlers, {})
+
+    def test_setup_stores_root(self):
+        from robonet.brain.desktop_system import DesktopSubSystem
+        sub = DesktopSubSystem(endpoint=MagicMock())
+        root = MagicMock()
+
+        sub.setup(root)
+
+        self.assertIs(sub._root, root)
+
+    def test_start_binds_input_and_sets_running(self):
+        from robonet.brain.desktop_system import DesktopSubSystem
+        sub = DesktopSubSystem(endpoint=MagicMock())
+        sub._root = _make_fake_root()
+
+        sub.start()
+
+        self.assertTrue(sub._running)
+        self.assertTrue(sub._bound)
+        sub._root.displayer.af_thru.bind_keyboard.assert_called_once_with(sub._on_keyboard)
+        sub._root.displayer.af_thru.bind_mouse_move.assert_called_once_with(sub._on_mouse_move)
+        sub._root.displayer.af_thru.bind_mouse_click.assert_called_once_with(sub._on_mouse_click)
+        sub._root.displayer.af_thru.bind_mouse_scroll.assert_called_once_with(sub._on_mouse_scroll)
+
+    def test_bind_input_noop_for_ai_driven_session(self):
+        from robonet.brain.desktop_system import DesktopSubSystem
+        sub = DesktopSubSystem(endpoint=MagicMock())
+        sub._root = _make_fake_root(with_displayer=False)
+
+        sub.start()
+
+        self.assertFalse(sub._bound)  # nothing to bind to yet
+
+    def test_stop_unbinds_and_clears_running(self):
+        from robonet.brain.desktop_system import DesktopSubSystem
+        sub = DesktopSubSystem(endpoint=MagicMock())
+        sub._root = _make_fake_root()
+        sub.start()
+
+        sub.stop()
+
+        self.assertFalse(sub._running)
+        self.assertFalse(sub._bound)
+        sub._root.displayer.af_thru.unbind_keyboard.assert_called_once()
+        sub._root.displayer.af_thru.unbind_mouse_move.assert_called_once()
+        sub._root.displayer.af_thru.unbind_mouse_click.assert_called_once()
+        sub._root.displayer.af_thru.unbind_mouse_scroll.assert_called_once()
+
+    def test_unbind_when_never_bound_is_a_noop(self):
+        from robonet.brain.desktop_system import DesktopSubSystem
+        sub = DesktopSubSystem(endpoint=MagicMock())
+        sub._root = _make_fake_root()
+
+        sub.stop()  # never called start() -- must not raise or call unbind
+
+        sub._root.displayer.af_thru.unbind_keyboard.assert_not_called()
+
+    def test_async_loops_is_empty(self):
+        from robonet.brain.desktop_system import DesktopSubSystem
+        sub = DesktopSubSystem(endpoint=MagicMock())
+        self.assertEqual(sub.async_loops(MagicMock()), [])
+
+
+class TestDesktopSubSystemKeyboardForwarding(unittest.TestCase):
+
+    def _make_sub(self, **root_kwargs):
+        from robonet.brain.desktop_system import DesktopSubSystem
+        sub = DesktopSubSystem(endpoint=MagicMock())
+        sub._root = _make_fake_root(**root_kwargs)
+        return sub
+
+    def test_press_sends_key_event_pressed_true(self):
+        sub = self._make_sub()
+
+        sub._on_keyboard(ord('a'), _FakeWKeys.ACTION_PRESS, _FakeModifiers())
+
+        sub._root.radio.burst.assert_called_once()
+        sent = sub._root.radio.burst.call_args[0][0]
+        self.assertEqual(sent.key, 'a')
+        self.assertTrue(sent.pressed)
+
+    def test_release_sends_key_event_pressed_false(self):
+        sub = self._make_sub()
+
+        sub._on_keyboard(ord('a'), _FakeWKeys.ACTION_RELEASE, _FakeModifiers())
+
+        sent = sub._root.radio.burst.call_args[0][0]
+        self.assertFalse(sent.pressed)
+
+    def test_repeat_action_is_ignored(self):
+        sub = self._make_sub()
+
+        sub._on_keyboard(ord('a'), _FakeWKeys.ACTION_REPEAT, _FakeModifiers())
+
+        sub._root.radio.burst.assert_not_called()
+
+    def test_unmapped_keycode_is_dropped(self):
+        sub = self._make_sub()
+
+        sub._on_keyboard(999999, _FakeWKeys.ACTION_PRESS, _FakeModifiers())
+
+        sub._root.radio.burst.assert_not_called()
+
+    def test_modifiers_encoded_correctly(self):
+        sub = self._make_sub()
+
+        sub._on_keyboard(ord('a'), _FakeWKeys.ACTION_PRESS, _FakeModifiers(ctrl=True, shift=True))
+
+        sent = sub._root.radio.burst.call_args[0][0]
+        self.assertEqual(sent.modifiers, 'ctrl,shift')
+
+    def test_no_modifiers_gives_empty_string(self):
+        sub = self._make_sub()
+
+        sub._on_keyboard(ord('a'), _FakeWKeys.ACTION_PRESS, _FakeModifiers())
+
+        sent = sub._root.radio.burst.call_args[0][0]
+        self.assertEqual(sent.modifiers, '')
+
+    def test_suppressed_while_menu_open(self):
+        sub = self._make_sub(menu_visible=True)
+
+        sub._on_keyboard(ord('a'), _FakeWKeys.ACTION_PRESS, _FakeModifiers())
+
+        sub._root.radio.burst.assert_not_called()
+
+    def test_suppressed_for_ai_driven_session(self):
+        sub = self._make_sub(with_displayer=False)
+
+        sub._on_keyboard(ord('a'), _FakeWKeys.ACTION_PRESS, _FakeModifiers())
+
+        sub._root.radio.burst.assert_not_called()
+
+
+class TestDesktopSubSystemMouseForwarding(unittest.TestCase):
+
+    def _make_sub(self, **root_kwargs):
+        from robonet.brain.desktop_system import DesktopSubSystem
+        sub = DesktopSubSystem(endpoint=MagicMock())
+        sub._root = _make_fake_root(**root_kwargs)
+        return sub
+
+    def test_move_sends_single_event_type_0(self):
+        sub = self._make_sub()
+
+        sub._on_mouse_move(12.7, 34.2)
+
+        sub._root.radio.burst.assert_called_once()
+        sent = sub._root.radio.burst.call_args[0][0]
+        self.assertEqual((sent.event_type, sent.x, sent.y), (0, 12, 34))
+
+    def test_move_suppressed_while_menu_open(self):
+        sub = self._make_sub(menu_visible=True)
+        sub._on_mouse_move(1, 2)
+        sub._root.radio.burst.assert_not_called()
+
+    def test_click_sends_press_then_release(self):
+        sub = self._make_sub()
+
+        sub._on_mouse_click(5, 6, 0)
+
+        self.assertEqual(sub._root.radio.burst.call_count, 2)
+        press, release = [c.args[0] for c in sub._root.radio.burst.call_args_list]
+        self.assertEqual(press.event_type, 1)
+        self.assertEqual(release.event_type, 2)
+        self.assertEqual((press.x, press.y), (5, 6))
+        self.assertEqual((release.x, release.y), (5, 6))
+
+    def test_click_suppressed_while_menu_open(self):
+        sub = self._make_sub(menu_visible=True)
+        sub._on_mouse_click(5, 6, 0)
+        sub._root.radio.burst.assert_not_called()
+
+    def test_scroll_sends_event_type_3_with_delta(self):
+        sub = self._make_sub()
+
+        sub._on_mouse_scroll(-3)
+
+        sent = sub._root.radio.burst.call_args[0][0]
+        self.assertEqual(sent.event_type, 3)
+        self.assertEqual(sent.delta, -3)
+
+    def test_scroll_suppressed_for_ai_driven_session(self):
+        sub = self._make_sub(with_displayer=False)
+        sub._on_mouse_scroll(-3)
+        sub._root.radio.burst.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

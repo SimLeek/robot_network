@@ -14,6 +14,14 @@ One-time setup before first use:
     ./examples/desktop/setup_desktop_capture.sh
 (loads the v4l2loopback and snd-aloop kernel modules -- needs sudo once).
 
+If connecting over a direct wired (ethernet) link rather than wifi or
+localhost, also run this once after plugging in the cable, on this same
+machine:
+    python -m robonet.wired_pair.client
+(gives this machine's ethernet interface a static IP so the brain side's
+WhoAreYou probes have something to reach -- see that module's docstring
+for why this is needed.)
+
 Network mode and ports are read from ~/.robotar/settings.json, same as
 robot_endpoint.py.
 """

@@ -4,22 +4,13 @@ robonet/wired_pair/server.py
 Ethernet interface detection and static-IP setup for wired pairing, used
 by RadioSubSystem.NetMode.WIRED (robonet/brain/radio_system.py).
 
-Unlike adhoc_pair (a wifi hotspot, where the AP side and the joining
-station side genuinely do different things), a direct ethernet cable has
-no server/client role at the network-setup level -- both ends just need a
-static IPv4 address in the same /24, no SSID or AP mode involved. So
-there's a single set_wired_static() here rather than a separate
-client.py; call it with whatever IP is appropriate for whichever machine
-it's running on (see wired_our_ip in robonet/brain/settings.py for the
-brain side's address).
-
-There's currently no equivalent call on the endpoint side -- "wired mode"
-today only configures the brain's own interface and points the scanner at
-the resulting subnet (see radio_system.py _setup_mode/_teardown_mode). If
-the endpoint machine doesn't already land on an address in that subnet
-(e.g. via its own DHCP-with-link-local-fallback), call set_wired_static()
-here from the endpoint side too, with the endpoint's own address in the
-same subnet (e.g. wired_subnet's .2).
+There's no server/client role split the way adhoc_pair has one (a wifi
+hotspot's AP side and joining station side genuinely do different
+things) -- both ends of a direct cable just need a static IP in the same
+/24. So there's a single set_wired_static() here that both
+robonet/brain/radio_system.py (brain side, via this module) and
+robonet/wired_pair/client.py (endpoint side) call with their own
+respective addresses, rather than two separate implementations.
 """
 
 from __future__ import annotations

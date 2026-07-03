@@ -14,9 +14,14 @@ Tests:
 """
 
 import asyncio
+import os
+import shutil
+import tempfile
 import unittest
 from enum import Enum
 from unittest.mock import MagicMock, patch
+
+import numpy as np
 
 from robonet.brain.menu_system import MenuSubSystem
 from robonet.brain.util.selection_menu import SelectionMenu, MenuVisState
@@ -286,6 +291,108 @@ class TestSelectionMenuWiredModeIndexOffsets(unittest.TestCase):
             result = menu._handle_radio_key('enter')
 
         self.assertIsNone(result)
+
+
+class TestMenuSubSystemConstruction(unittest.TestCase):
+    """MenuSubSystem's real constructor needs real psk key files (it
+    builds its own GstSender/GstReceiver pair) -- provide temp ones and a
+    mocked settings object rather than requiring ~/.robobrain to exist."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix='robonet_menu_test_')
+        self.psk_path = os.path.join(self.tmpdir, 'psk.key')
+        self.server_psk_path = os.path.join(self.tmpdir, 'server_psk.key')
+        with open(self.psk_path, 'wb') as f:
+            f.write(os.urandom(32))
+        with open(self.server_psk_path, 'wb') as f:
+            f.write(os.urandom(32))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _make_settings(self, **overrides):
+        vals = {
+            'psk_file': self.psk_path, 'server_psk_file': self.server_psk_path,
+            'ai_res': [640, 480], 'ai_fps': 30,
+            'auto_shutdown_enabled': False,
+            'auto_shutdown_no_endpoints_timeout': 30.0,
+            'auto_shutdown_idle_timeout': 600.0,
+        }
+        vals.update(overrides)
+        fake = MagicMock()
+        fake.__getitem__.side_effect = vals.__getitem__
+        return fake
+
+    def _construct(self, **setting_overrides):
+        with patch('robonet.brain.menu_system.settings', self._make_settings(**setting_overrides)):
+            return MenuSubSystem()
+
+    def test_shutdown_settings_wired_from_settings(self):
+        menu = self._construct(auto_shutdown_enabled=True,
+                               auto_shutdown_no_endpoints_timeout=15.0,
+                               auto_shutdown_idle_timeout=300.0)
+        self.assertTrue(menu.does_timeout)
+        self.assertEqual(menu.no_endpoints_timeout, 15.0)
+        self.assertEqual(menu.idle_timeout, 300.0)
+
+    def test_default_does_timeout_is_false(self):
+        menu = self._construct(auto_shutdown_enabled=False)
+        self.assertFalse(menu.does_timeout)
+
+    def test_does_timeout_can_still_be_overridden_programmatically(self):
+        # "set to true for AI runs" -- the settings default must not
+        # prevent overriding it directly after construction.
+        menu = self._construct(auto_shutdown_enabled=False)
+        menu.does_timeout = True
+        self.assertTrue(menu.does_timeout)
+
+    def test_on_img_logs_first_frame_once_then_stays_quiet_at_info_level(self):
+        menu = self._construct()
+        with patch('robonet.brain.menu_system.log') as mock_log:
+            menu.on_img(np.zeros((4, 4, 3), dtype=np.uint8))
+            menu.on_img(np.zeros((4, 4, 3), dtype=np.uint8))
+            menu.on_img(np.zeros((4, 4, 3), dtype=np.uint8))
+
+        self.assertEqual(mock_log.info.call_count, 1)  # only the first frame
+        self.assertEqual(mock_log.debug.call_count, 2)  # the rest are DEBUG (silent by default)
+
+    def test_on_img_none_logs_error_but_does_not_update_last_img(self):
+        menu = self._construct()
+        original = menu.last_img
+        menu.on_img(None)
+        self.assertIs(menu.last_img, original)
+
+    def test_on_audio_logs_first_chunk_once_then_stays_quiet(self):
+        menu = self._construct()
+        with patch('robonet.brain.menu_system.log') as mock_log:
+            menu.on_audio(np.zeros(100, dtype=np.float32))
+            menu.on_audio(np.zeros(100, dtype=np.float32))
+
+        self.assertEqual(mock_log.info.call_count, 1)
+        self.assertEqual(mock_log.debug.call_count, 1)
+        np.testing.assert_array_equal(menu.last_audio, np.zeros(100, dtype=np.float32))
+
+
+class TestSubSystemRegistryForConnect(unittest.TestCase):
+    """The registry _connect() picks a SubSystem class from -- importing
+    menu_system.py registers both 'robot' and 'desktop' as a module-level
+    side effect (see the top of that file)."""
+
+    def test_robot_and_desktop_are_registered(self):
+        import robonet.brain.menu_system  # noqa: F401 -- triggers registration
+        from robonet.brain.util.system_base import SubSystem
+        from robonet.brain.robot_system import RobotSubSystem
+        from robonet.brain.desktop_system import DesktopSubSystem
+
+        self.assertIs(SubSystem.for_endpoint_type('robot'), RobotSubSystem)
+        self.assertIs(SubSystem.for_endpoint_type('desktop'), DesktopSubSystem)
+
+    def test_unregistered_type_raises_keyerror(self):
+        import robonet.brain.menu_system  # noqa: F401
+        from robonet.brain.util.system_base import SubSystem
+
+        with self.assertRaises(KeyError):
+            SubSystem.for_endpoint_type('unknown')
 
 
 if __name__ == '__main__':

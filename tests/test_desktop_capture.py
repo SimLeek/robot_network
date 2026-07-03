@@ -239,5 +239,80 @@ class TestDesktopAudioFeederBuild(unittest.TestCase):
         self.assertEqual(desc.count('pulsesrc'), 1)
 
 
+class _FakeGstSenderForSourceSwitch:
+    """Minimal GstSender stand-in for set_source_device -- just the
+    attributes that method actually touches."""
+    def __init__(self, src_device, acked=True, receiver_ip='10.0.0.1', has_candidates=True):
+        self._src_device = src_device
+        self._acked = acked
+        self._receiver_ip = receiver_ip
+        self._video_candidates = ['h264'] if has_candidates else []
+        self._vpipe = None
+        self.started_pipelines = []
+
+    def _start_video_pipeline(self):
+        pipe = MagicMock(name=f'pipeline-for-{self._src_device}')
+        self.started_pipelines.append((self._src_device, pipe))
+        return pipe
+
+
+class TestGstSenderSetSourceDevice(unittest.TestCase):
+    """robonet/gst_io/streamer_unencrypted.py's GstSender.set_source_device,
+    the mechanism behind the desktop-mode camera/desktop-capture switch."""
+
+    def _bind(self, fake):
+        from robonet.gst_io.streamer_unencrypted import GstSender
+        return GstSender.set_source_device.__get__(fake)
+
+    def test_same_device_is_a_no_op(self):
+        fake = _FakeGstSenderForSourceSwitch('/dev/video42')
+        set_source_device = self._bind(fake)
+
+        set_source_device('/dev/video42')
+
+        self.assertEqual(fake.started_pipelines, [])
+
+    def test_not_yet_streaming_just_stores_device_no_pipeline_restart(self):
+        fake = _FakeGstSenderForSourceSwitch('/dev/video42', acked=False)
+        set_source_device = self._bind(fake)
+
+        set_source_device('/dev/video0')
+
+        self.assertEqual(fake._src_device, '/dev/video0')
+        self.assertEqual(fake.started_pipelines, [])
+
+    def test_streaming_switches_device_and_restarts_pipeline(self):
+        old_pipe = MagicMock()
+        fake = _FakeGstSenderForSourceSwitch('/dev/video42', acked=True)
+        fake._vpipe = old_pipe
+        set_source_device = self._bind(fake)
+
+        set_source_device('/dev/video0')
+
+        old_pipe.stop.assert_called_once()
+        self.assertEqual(fake._src_device, '/dev/video0')
+        self.assertEqual(len(fake.started_pipelines), 1)
+        self.assertEqual(fake.started_pipelines[0][0], '/dev/video0')
+        self.assertIsNotNone(fake._vpipe)
+
+    def test_streaming_but_no_prior_pipeline_still_starts_new_one(self):
+        fake = _FakeGstSenderForSourceSwitch('/dev/video42', acked=True)
+        fake._vpipe = None  # e.g. video encoder never successfully started before
+        set_source_device = self._bind(fake)
+
+        set_source_device('/dev/video0')
+
+        self.assertEqual(len(fake.started_pipelines), 1)
+
+    def test_no_receiver_ip_does_not_attempt_pipeline_start(self):
+        fake = _FakeGstSenderForSourceSwitch('/dev/video42', acked=True, receiver_ip=None)
+        set_source_device = self._bind(fake)
+
+        set_source_device('/dev/video0')
+
+        self.assertEqual(fake.started_pipelines, [])
+        self.assertEqual(fake._src_device, '/dev/video0')  # device is still updated though
+
+
 if __name__ == '__main__':
     unittest.main()
