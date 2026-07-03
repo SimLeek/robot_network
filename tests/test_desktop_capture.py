@@ -502,5 +502,113 @@ class TestDesktopHwSwitchVideoSource(unittest.TestCase):
         fake._gst_sender.set_source_device.assert_not_called()
 
 
+    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
+    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
+    def test_start_builds_if_not_already_built(self, mock_pactl, mock_parse):
+        mock_pactl.return_value = 'some_device'
+        fake_pipeline = MagicMock()
+        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.SUCCESS
+        mock_parse.return_value = fake_pipeline
+        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
+
+        with patch('robonet.endpoint.desktop_capture.GLib.MainLoop') as mock_loop_cls, \
+             patch('robonet.endpoint.desktop_capture.threading.Thread') as mock_thread_cls:
+            mock_loop_cls.return_value = MagicMock()
+            mock_thread_cls.return_value = MagicMock()
+            ok = feeder.start()
+
+        self.assertTrue(ok)
+        fake_pipeline.set_state.assert_called_with(dc.Gst.State.PLAYING)
+
+    @patch.object(dc.DesktopAudioFeeder, '_pactl_get', return_value=None)
+    def test_start_returns_false_when_build_fails(self, _pactl):
+        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
+        self.assertFalse(feeder.start())
+
+    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
+    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
+    def test_start_returns_false_when_state_change_fails(self, mock_pactl, mock_parse):
+        mock_pactl.return_value = 'some_device'
+        fake_pipeline = MagicMock()
+        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.FAILURE
+        mock_parse.return_value = fake_pipeline
+        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
+
+        self.assertFalse(feeder.start())
+
+    def test_stop_before_start_does_not_raise(self):
+        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
+        feeder.stop()
+
+    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
+    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
+    def test_stop_after_start_tears_down_pipeline_and_loop(self, mock_pactl, mock_parse):
+        mock_pactl.return_value = 'some_device'
+        fake_pipeline = MagicMock()
+        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.SUCCESS
+        mock_parse.return_value = fake_pipeline
+        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
+        fake_loop = MagicMock()
+        fake_loop.is_running.return_value = True
+        with patch('robonet.endpoint.desktop_capture.GLib.MainLoop', return_value=fake_loop), \
+             patch('robonet.endpoint.desktop_capture.threading.Thread', return_value=MagicMock()):
+            feeder.start()
+
+        feeder.stop()
+
+        fake_pipeline.set_state.assert_called_with(dc.Gst.State.NULL)
+        fake_loop.quit.assert_called_once()
+        self.assertIsNone(feeder._pipeline)
+        self.assertIsNone(feeder._glib_loop)
+
+
+class TestFeederBusMessageHandling(unittest.TestCase):
+    """_on_bus_message for both feeders -- logs errors/warnings, ignores
+    everything else, never raises regardless of message type."""
+
+    def _make_message(self, msg_type, parsed=('boom', 'debug info')):
+        msg = MagicMock()
+        msg.type = msg_type
+        msg.parse_error.return_value = parsed
+        msg.parse_warning.return_value = parsed
+        return msg
+
+    def test_video_feeder_logs_error_message(self):
+        feeder = dc.DesktopVideoFeeder('/dev/video42')
+        msg = self._make_message(dc.Gst.MessageType.ERROR)
+        with patch('robonet.endpoint.desktop_capture.log') as mock_log:
+            feeder._on_bus_message(MagicMock(), msg)
+        mock_log.error.assert_called_once()
+
+    def test_video_feeder_logs_warning_message(self):
+        feeder = dc.DesktopVideoFeeder('/dev/video42')
+        msg = self._make_message(dc.Gst.MessageType.WARNING)
+        with patch('robonet.endpoint.desktop_capture.log') as mock_log:
+            feeder._on_bus_message(MagicMock(), msg)
+        mock_log.warning.assert_called_once()
+
+    def test_video_feeder_ignores_other_message_types(self):
+        feeder = dc.DesktopVideoFeeder('/dev/video42')
+        msg = self._make_message(dc.Gst.MessageType.EOS)
+        with patch('robonet.endpoint.desktop_capture.log') as mock_log:
+            feeder._on_bus_message(MagicMock(), msg)
+        mock_log.error.assert_not_called()
+        mock_log.warning.assert_not_called()
+
+    def test_audio_feeder_logs_error_message(self):
+        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
+        msg = self._make_message(dc.Gst.MessageType.ERROR)
+        with patch('robonet.endpoint.desktop_capture.log') as mock_log:
+            feeder._on_bus_message(MagicMock(), msg)
+        mock_log.error.assert_called_once()
+
+    def test_audio_feeder_logs_warning_message(self):
+        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
+        msg = self._make_message(dc.Gst.MessageType.WARNING)
+        with patch('robonet.endpoint.desktop_capture.log') as mock_log:
+            feeder._on_bus_message(MagicMock(), msg)
+        mock_log.warning.assert_called_once()
+
+
 if __name__ == '__main__':
     unittest.main()
