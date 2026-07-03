@@ -12,8 +12,13 @@ Tests robonet/endpoint/desktop_capture.py:
     environment concern, not a logic concern).
 """
 
+import os
+import shutil
+import tempfile
 import unittest
 from unittest.mock import patch, mock_open, MagicMock
+
+import numpy as np
 
 from robonet.endpoint import desktop_capture as dc
 
@@ -312,6 +317,189 @@ class TestGstSenderSetSourceDevice(unittest.TestCase):
 
         self.assertEqual(fake.started_pipelines, [])
         self.assertEqual(fake._src_device, '/dev/video0')  # device is still updated though
+
+
+class TestDesktopHwConstruction(unittest.TestCase):
+    """DesktopHw's __init__ calls into CamMicSpkRobotHardware.__init__,
+    which needs a real psk key file to exist (endpoint/settings.py has
+    no advanced-settings restriction, unlike the brain side, so we can
+    just point it at a temp one directly and restore it after)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix='robonet_desktop_hw_test_')
+        self.psk_path = os.path.join(self.tmpdir, 'psk.key')
+        with open(self.psk_path, 'wb') as f:
+            f.write(os.urandom(32))
+        import robonet.endpoint.settings as settings_
+        self._settings = settings_.get()
+        self._orig_psk = self._settings['psk_file']
+        self._settings['psk_file'] = self.psk_path
+
+    def tearDown(self):
+        self._settings['psk_file'] = self._orig_psk
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _construct(self, **kwargs):
+        with patch('robonet.endpoint.desktop_hardware.pyautogui', MagicMock()), \
+             patch('robonet.endpoint.desktop_hardware.ensure_v4l2loopback_device',
+                  return_value='/dev/video42'), \
+             patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
+                  return_value=('hw:1,0,0', 'hw:1,1,0')), \
+             patch('robonet.endpoint.desktop_hardware.find_real_webcam', return_value=None):
+            from robonet.endpoint.desktop_hardware import DesktopHw
+            return DesktopHw(**kwargs)
+
+    def test_construction_succeeds_and_wires_devices(self):
+        hw = self._construct()
+        self.assertEqual(hw._loopback_video, '/dev/video42')
+        self.assertEqual(hw._current_source, 'desktop')
+        self.assertIsNone(hw._webcam_device)
+
+    def test_construction_raises_clear_error_when_pyautogui_unavailable(self):
+        with patch('robonet.endpoint.desktop_hardware.pyautogui', None), \
+             patch('robonet.endpoint.desktop_hardware._PYAUTOGUI_IMPORT_ERROR', KeyError('DISPLAY')), \
+             patch('robonet.endpoint.desktop_hardware.ensure_v4l2loopback_device',
+                  return_value='/dev/video42'), \
+             patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
+                  return_value=('hw:1,0,0', 'hw:1,1,0')):
+            from robonet.endpoint.desktop_hardware import DesktopHw, DesktopCaptureError
+            with self.assertRaises(DesktopCaptureError) as ctx:
+                DesktopHw()
+            self.assertIn('DISPLAY', str(ctx.exception))
+
+    def test_construction_propagates_missing_v4l2loopback(self):
+        from robonet.endpoint.desktop_capture import DesktopCaptureError as CaptureErr
+        with patch('robonet.endpoint.desktop_hardware.pyautogui', MagicMock()), \
+             patch('robonet.endpoint.desktop_hardware.ensure_v4l2loopback_device',
+                  side_effect=CaptureErr('no loopback device')):
+            from robonet.endpoint.desktop_hardware import DesktopHw
+            with self.assertRaises(CaptureErr):
+                DesktopHw()
+
+    def test_real_webcam_detected_when_present(self):
+        with patch('robonet.endpoint.desktop_hardware.pyautogui', MagicMock()), \
+             patch('robonet.endpoint.desktop_hardware.ensure_v4l2loopback_device',
+                  return_value='/dev/video42'), \
+             patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
+                  return_value=('hw:1,0,0', 'hw:1,1,0')), \
+             patch('robonet.endpoint.desktop_hardware.find_real_webcam', return_value='/dev/video0'):
+            from robonet.endpoint.desktop_hardware import DesktopHw
+            hw = DesktopHw()
+        self.assertEqual(hw._webcam_device, '/dev/video0')
+
+    def test_build_capabilities_matches_module_function(self):
+        hw = self._construct()
+        caps = hw.build_capabilities()
+        self.assertEqual(caps.endpoint_type, 'desktop')
+        self.assertEqual(caps.axes(), [])
+
+    def test_handlers_include_desktop_specific_and_inherited(self):
+        hw = self._construct()
+        handlers = hw.handlers
+        self.assertIn('KeyEvent', handlers)
+        self.assertIn('MouseEvent', handlers)
+        self.assertIn('SwitchVideoSource', handlers)
+        self.assertIn('SparseVectorBuffer', handlers)  # inherited from RobotHardware
+
+    def test_apply_tensor_with_entries_does_not_raise(self):
+        hw = self._construct()
+        hw.apply_tensor(np.array([1, 2]), np.array([0.5, 0.5]))  # should just log, not crash
+
+    def test_apply_tensor_empty_does_not_raise(self):
+        hw = self._construct()
+        hw.apply_tensor(np.array([]), np.array([]))
+
+    def test_setup_starts_feeders(self):
+        hw = self._construct()
+        hw._video_feeder = MagicMock()
+        hw._audio_feeder = MagicMock()
+
+        hw.setup(MagicMock())
+
+        hw._video_feeder.start.assert_called_once()
+        hw._audio_feeder.start.assert_called_once()
+
+    def test_stop_releases_held_input_and_stops_feeders(self):
+        hw = self._construct()
+        hw._video_feeder = MagicMock()
+        hw._audio_feeder = MagicMock()
+        hw._held_keys = {'a'}
+        hw._held_buttons = {'left'}
+        with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pag:
+            hw.stop()
+            mock_pag.keyUp.assert_called_once_with('a')
+            mock_pag.mouseUp.assert_called_once_with(button='left')
+        hw._video_feeder.stop.assert_called_once()
+        hw._audio_feeder.stop.assert_called_once()
+        self.assertEqual(hw._held_keys, set())
+        self.assertEqual(hw._held_buttons, set())
+
+    def test_halt_releases_held_input_without_stopping_feeders(self):
+        hw = self._construct()
+        hw._video_feeder = MagicMock()
+        hw._held_keys = {'shift'}
+        with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pag:
+            hw.halt()
+            mock_pag.keyUp.assert_called_once_with('shift')
+        hw._video_feeder.stop.assert_not_called()  # halt is not a full stop
+
+    def test_release_all_held_swallows_pyautogui_errors(self):
+        hw = self._construct()
+        hw._held_keys = {'a', 'b'}
+        with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pag:
+            mock_pag.keyUp.side_effect = Exception('X server gone')
+            hw._release_all_held()  # must not raise
+        self.assertEqual(hw._held_keys, set())
+
+
+class TestDesktopHwSwitchVideoSource(unittest.TestCase):
+    """_on_switch_video_source against a lightweight fake, matching the
+    existing _on_key_event/_on_mouse_event test style in
+    test_callback_control.py -- no need for the full constructor here."""
+
+    def _make_fake(self, current_source='desktop', webcam_device='/dev/video0'):
+        from robonet.endpoint.desktop_hardware import DesktopHw
+        fake = MagicMock()
+        fake._current_source = current_source
+        fake._webcam_device = webcam_device
+        fake._loopback_video = '/dev/video42'
+        fake._on_switch_video_source = DesktopHw._on_switch_video_source.__get__(fake)
+        return fake
+
+    def test_switch_to_camera_when_available(self):
+        from robonet.buffers.buffer_objects import SwitchVideoSource
+        fake = self._make_fake(current_source='desktop', webcam_device='/dev/video0')
+
+        fake._on_switch_video_source('host', SwitchVideoSource(source='camera'))
+
+        fake._gst_sender.set_source_device.assert_called_once_with('/dev/video0')
+        self.assertEqual(fake._current_source, 'camera')
+
+    def test_switch_to_camera_when_none_available_is_a_noop(self):
+        from robonet.buffers.buffer_objects import SwitchVideoSource
+        fake = self._make_fake(current_source='desktop', webcam_device=None)
+
+        fake._on_switch_video_source('host', SwitchVideoSource(source='camera'))
+
+        fake._gst_sender.set_source_device.assert_not_called()
+        self.assertEqual(fake._current_source, 'desktop')  # unchanged
+
+    def test_switch_to_desktop(self):
+        from robonet.buffers.buffer_objects import SwitchVideoSource
+        fake = self._make_fake(current_source='camera', webcam_device='/dev/video0')
+
+        fake._on_switch_video_source('host', SwitchVideoSource(source='desktop'))
+
+        fake._gst_sender.set_source_device.assert_called_once_with('/dev/video42')
+        self.assertEqual(fake._current_source, 'desktop')
+
+    def test_switch_to_same_source_is_a_noop(self):
+        from robonet.buffers.buffer_objects import SwitchVideoSource
+        fake = self._make_fake(current_source='desktop')
+
+        fake._on_switch_video_source('host', SwitchVideoSource(source='desktop'))
+
+        fake._gst_sender.set_source_device.assert_not_called()
 
 
 if __name__ == '__main__':
