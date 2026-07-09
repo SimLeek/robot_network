@@ -31,7 +31,7 @@ class ActionInfo:
 
 class ActionFactory:
     """
-    Maps ActionBinding → callable and dispatches from multiple input
+    Maps ActionBinding -> callable and dispatches from multiple input
     modalities (keyboard, AI tokens, AI neurons).
     """
 

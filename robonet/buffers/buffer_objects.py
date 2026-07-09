@@ -13,7 +13,7 @@ Every class inherits BufferBase and declares two class variables:
 
     field_codecs  List of (pack_fn, unpack_fn) pairs, indexed the same
                   way as type_list.  BufferBase.pack_type / unpack_type
-                  just index into this list — no per-class dispatch needed.
+                  just index into this list -- no per-class dispatch needed.
 
 Codec functions are plain module-level callables with signatures:
     pack_fn(value)              -> bytes
@@ -149,7 +149,7 @@ def ndarray_codec(dtype):
 def ndarray_list_codec(dtype):
     """
     Returns (pack_fn, unpack_fn) for a *list* of numpy arrays of *dtype*.
-    Wire format: count(4) | [ndim(4) | shape(4*ndim) | raw_bytes] × count
+    Wire format: count(4) | [ndim(4) | shape(4*ndim) | raw_bytes] x count
     """
     _pack_one, _unpack_one = ndarray_codec(dtype)
 
@@ -195,8 +195,8 @@ _c128_arr_list  = ndarray_list_codec(np.complex128)
 class BufferBase:
     """
     Inherit from this and set:
-        type_list    — for the buffer_handling framework
-        field_codecs — list of (pack_fn, unpack_fn), same length as
+        type_list    -- for the buffer_handling framework
+        field_codecs -- list of (pack_fn, unpack_fn), same length as
                        the number of distinct type_index values used.
     """
     type_list:    list = []
@@ -260,7 +260,7 @@ class CVCamFrame(BufferBase):
 class MJpegCamFrame(BufferBase):
     """MJPEG-compressed camera frame with brightness and exposure.
 
-    TODO: mjpeg has 8×8 FFTs — consider translating directly into image pyramids
+    TODO: mjpeg has 8x8 FFTs -- consider translating directly into image pyramids
     on the GPU (parallelize the JPEG codec into GLSL/Vulkan).
     """
     type_list    = [bytes, int, str]
@@ -358,7 +358,7 @@ class TemperatureMonitorBuffer(BufferBase):
 
 
 class IMUBuffer(BufferBase):
-    """Accelerometer, gyroscope, and magnetometer — each an optional (x,y,z)."""
+    """Accelerometer, gyroscope, and magnetometer -- each an optional (x,y,z)."""
     type_list    = [Optional[Tuple[float, float, float]]]
     field_codecs = [_opt_float3]
 
@@ -372,7 +372,7 @@ class IMUBuffer(BufferBase):
 
 
 # ============================================================
-# Desktop client — remote capture config (server -> client)
+# Desktop client -- remote capture config (server -> client)
 # ============================================================
 
 class SwitchVideoSource(BufferBase):
@@ -439,7 +439,7 @@ class SetInputMicChannels(BufferBase):
 
 
 # ============================================================
-# Desktop client — input events (server -> client)
+# Desktop client -- input events (server -> client)
 # ============================================================
 
 class KeyEvent(BufferBase):
@@ -500,7 +500,7 @@ class WhoAreYouAck(BufferBase):
 
 class RobotCapabilities(BufferBase):  # noqa: F821
     """
-    Robot → brain.  Describes all control axes and sensor streams.
+    Robot -> brain.  Describes all control axes and sensor streams.
 
     json_axes: JSON list of axis descriptors:
         [{"name": "forward",
@@ -561,7 +561,7 @@ class RobotStart(BufferBase):
 
 
 class SudoRequest(BufferBase):
-    """Server → client: request a sudo password via the UI."""
+    """Server -> client: request a sudo password via the UI."""
     type_list    = [str]
     field_codecs = [_str_]
 
@@ -570,7 +570,7 @@ class SudoRequest(BufferBase):
 
 
 class SudoResponse(BufferBase):
-    """Client → server: password reply for a SudoRequest."""
+    """Client -> server: password reply for a SudoRequest."""
     type_list    = [str]
     field_codecs = [_str_]
 

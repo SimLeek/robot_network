@@ -1,5 +1,5 @@
 """
-robotar/robot_model.py — MasterPi robot node (robotar example).
+robotar/robot_model.py -- MasterPi robot node (robotar example).
 
 Network mode and ports are read from ~/.robobrain/settings.json.
 """
@@ -14,7 +14,7 @@ from typing import Union, Optional
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from robonet.buffers.buffer_objects import RobotCapabilities
 import threading
@@ -94,7 +94,7 @@ class MasterPiHw(CamMicSpkRobotHardware):
 
     def setup(self, parent):
         super().setup(parent)
-        # Hardware always needs to be running — serial, audio, position polling.
+        # Hardware always needs to be running -- serial, audio, position polling.
         # This is independent of whether a server ever connects.
         self._robot.start()
         log.info('MasterPi hardware started')
@@ -124,7 +124,7 @@ class MasterPiHw(CamMicSpkRobotHardware):
     def apply_tensor(self, idx_vec: np.ndarray, val_vec: np.ndarray):
         n = len(idx_vec)
         if n < 1:
-            log.warning("Control vector empty — ignoring", n)
+            log.warning("Control vector empty -- ignoring", n)
             return
 
         drive_mappings = {

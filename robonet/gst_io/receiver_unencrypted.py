@@ -7,10 +7,10 @@ for testing / local-network use. Identical interface; just strips
 srtpdec and plain-RTP caps instead of x-srtp.
 
 Pipeline graphs:
-    Video: udpsrc(caps=x-rtp,pt=96) → <rtpdepay> → [parse] → <decoder>
-               → videoconvert → capsfilter(BGR) → appsink
-    Audio: udpsrc(caps=x-rtp,pt=97) → <rtpdepay> → <decoder>
-               → audioconvert → capsfilter(raw) → alsasink / appsink
+    Video: udpsrc(caps=x-rtp,pt=96) -> <rtpdepay> -> [parse] -> <decoder>
+               -> videoconvert -> capsfilter(BGR) -> appsink
+    Audio: udpsrc(caps=x-rtp,pt=97) -> <rtpdepay> -> <decoder>
+               -> audioconvert -> capsfilter(raw) -> alsasink / appsink
 """
 
 from __future__ import annotations
@@ -85,8 +85,8 @@ class _VideoRecvPipeline:
     """
     Plain-RTP video receive pipeline (no encryption).
 
-    udpsrc(x-rtp,pt=96) → <rtpdepay> → [h264/h265parse] → <decoder>
-        → videoconvert → capsfilter(BGR) → appsink
+    udpsrc(x-rtp,pt=96) -> <rtpdepay> -> [h264/h265parse] -> <decoder>
+        -> videoconvert -> capsfilter(BGR) -> appsink
     """
 
     def __init__(self, info: GstStreamInfo, dec_name: str,
@@ -170,7 +170,7 @@ class _VideoRecvPipeline:
                                      Gst.MessageType.ERROR | Gst.MessageType.WARNING)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst-recv] {self._dec_name}: probe error: {err} — {dbg}')
+            log.warning(f'[gst-recv] {self._dec_name}: probe error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, _ = msg.parse_warning()
@@ -185,7 +185,7 @@ class _VideoRecvPipeline:
         self._pipeline.set_state(Gst.State.NULL)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst-recv] {self._dec_name}: probe (PLAYING) error: {err} — {dbg}')
+            log.warning(f'[gst-recv] {self._dec_name}: probe (PLAYING) error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, _ = msg.parse_warning()
@@ -243,8 +243,8 @@ class _AudioRecvPipeline:
     """
     Plain-RTP audio receive pipeline (no encryption).
 
-    udpsrc(x-rtp,pt=97) → <rtpdepay> → <decoder>
-        → audioconvert → capsfilter(raw) → alsasink / appsink
+    udpsrc(x-rtp,pt=97) -> <rtpdepay> -> <decoder>
+        -> audioconvert -> capsfilter(raw) -> alsasink / appsink
     """
 
     def __init__(self, info: GstStreamInfo, dec_name: str,
@@ -332,7 +332,7 @@ class _AudioRecvPipeline:
                                      Gst.MessageType.ERROR | Gst.MessageType.WARNING)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst-recv] {self._dec_name}: audio probe error: {err} — {dbg}')
+            log.warning(f'[gst-recv] {self._dec_name}: audio probe error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, _ = msg.parse_warning()
@@ -347,7 +347,7 @@ class _AudioRecvPipeline:
         self._pipeline.set_state(Gst.State.NULL)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst-recv] {self._dec_name}: audio probe (PLAYING) error: {err} — {dbg}')
+            log.warning(f'[gst-recv] {self._dec_name}: audio probe (PLAYING) error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, _ = msg.parse_warning()
@@ -446,7 +446,7 @@ class GstReceiver:
                 and obj.audio_port  == self._info.audio_port)
 
         if same and (self._vpipe or self._apipe):
-            log.debug(f'[gst-recv] re-announce from {obj.hostname!r}, unchanged — re-acking')
+            log.debug(f'[gst-recv] re-announce from {obj.hostname!r}, unchanged -- re-acking')
             self._ack(obj)
             return
 
@@ -472,16 +472,16 @@ class GstReceiver:
                 pipe.play()
                 break
             else:
-                log.error('[gst-recv] all video decoders failed — no video will be displayed')
+                log.error('[gst-recv] all video decoders failed -- no video will be displayed')
         elif not obj.video_codec:
-            log.info('[gst-recv] no video codec in stream info — skipping video pipeline')
+            log.info('[gst-recv] no video codec in stream info -- skipping video pipeline')
         else:
-            log.info('[gst-recv] recv_img_callback is None — skipping video pipeline (no screen)')
+            log.info('[gst-recv] recv_img_callback is None -- skipping video pipeline (no screen)')
 
         if obj.audio_codec:
             self._build_audio_pipeline()
         else:
-            log.info('[gst-recv] no audio codec in stream info — skipping audio pipeline')
+            log.info('[gst-recv] no audio codec in stream info -- skipping audio pipeline')
 
         self._ack(obj)
 
@@ -510,7 +510,7 @@ class GstReceiver:
             self._apipe = pipe
             pipe.play()
             return
-        log.error('[gst-recv] all audio decoders failed — no audio will be played')
+        log.error('[gst-recv] all audio decoders failed -- no audio will be played')
 
     def set_direct_audio(self, direct_audio: bool, audio_device: Optional[str] = None):
         """Switch whether received audio plays straight to a device (e.g.

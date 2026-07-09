@@ -1,5 +1,5 @@
 """
-robonet/endpoint/gst_stream.py — robot-side GStreamer sender.
+robonet/endpoint/gst_stream.py -- robot-side GStreamer sender.
 
 Codec selection probes the GStreamer registry at startup, preferring hardware
 encoders. Bitrate adjusts live via RTCP feedback without pipeline restarts.
@@ -38,8 +38,8 @@ BITRATE_DEFAULT = 2_000_000
 BITRATE_STEP_DN = 0.75
 BITRATE_STEP_UP = 1.10
 
-# rb-fractionlost is 0–255 (RFC 3550 §6.4.1), where 255 = 100% loss.
-# 5/255 ≈ 2% packet loss is our threshold to start backing off.
+# rb-fractionlost is 0-255 (RFC 3550 section 6.4.1), where 255 = 100% loss.
+# 5/255 ~ 2% packet loss is our threshold to start backing off.
 RTCP_LOSS_THRESHOLD = 5
 RTCP_DROP_COUNT     = 2
 RTCP_GOOD_COUNT     = 10
@@ -81,11 +81,11 @@ def _video_encoder_candidates() -> list:
         ('amfh264enc',   'h264'),   # AMD AMF
         ('mfh264enc',    'h264'),   # Windows Media Foundation
         ('vtenc_h264',   'h264'),   # Apple VideoToolbox
-        ('omxh264enc',   'h264'),   # OMX — RPi, Jetson legacy, Rockchip, etc.
+        ('omxh264enc',   'h264'),   # OMX -- RPi, Jetson legacy, Rockchip, etc.
         ('omxh265enc',   'h265'),
         ('omxvp8enc',    'vp8'),
         ('omxvp9enc',    'vp9'),
-        ('v4l2h264enc',  'h264'),   # V4L2 M2M — RPi 4/5, RK3588, etc.
+        ('v4l2h264enc',  'h264'),   # V4L2 M2M -- RPi 4/5, RK3588, etc.
         ('v4l2h265enc',  'h265'),
         ('v4l2vp8enc',   'vp8'),
         ('v4l2vp9enc',   'vp9'),
@@ -100,7 +100,7 @@ def _video_encoder_candidates() -> list:
         ('vaapih265enc', 'h265'),
         ('vaapivp8enc',  'vp8'),
         ('vaapivp9enc',  'vp9'),
-        ('openh264enc',  'h264'),   # software — fastest first
+        ('openh264enc',  'h264'),   # software -- fastest first
         ('vp8enc',       'vp8'),
         ('x264enc',      'h264'),
     ]
@@ -126,7 +126,7 @@ def _audio_encoder_candidates() -> list:
         ('avenc_aac',  'aac'),
         ('omxmp3enc',  'mp3'),
         ('lamemp3enc', 'mp3'),
-        ('flacenc',    'flac'),   # lossless — last resort, high bandwidth
+        ('flacenc',    'flac'),   # lossless -- last resort, high bandwidth
     ]
     found = [(n, c) for n, c in ordered if _has(n)]
     if not found:
@@ -141,7 +141,7 @@ def _srtp_key_from_psk(psk: bytes) -> bytes:
     Derive a 30-byte SRTP master-key+salt from the robonet PSK using BLAKE2b.
 
     AES-128 ICM SRTP requires exactly 16 bytes key + 14 bytes salt = 30 bytes.
-    Both sides derive the same value independently — no extra key exchange needed.
+    Both sides derive the same value independently -- no extra key exchange needed.
 
     >>> key = _srtp_key_from_psk(b'test-psk')
     >>> len(key)
@@ -162,7 +162,7 @@ def _apply_bitrate(enc: Gst.Element, enc_name: str, bitrate: int):
 
     Each encoder family uses a different property name and unit (bps vs kbps).
     V4L2 and OMX encoders expose bitrate through a GstStructure passed to
-    extra-controls rather than a plain property — this is a V4L2 kernel API
+    extra-controls rather than a plain property -- this is a V4L2 kernel API
     convention rather than a GStreamer one.
     """
     v4l2_omx = ('v4l2h264enc','v4l2h265enc','v4l2vp8enc','v4l2vp9enc',
@@ -202,8 +202,8 @@ class _VideoPipeline:
 
     Pipeline graph::
 
-        v4l2src → videoscale → capsfilter → videoconvert → <encoder>
-            → [h264parse/h265parse] → <rtppay> → rtpbin → srtpenc → udpsink
+        v4l2src -> videoscale -> capsfilter -> videoconvert -> <encoder>
+            -> [h264parse/h265parse] -> <rtppay> -> rtpbin -> srtpenc -> udpsink
 
     rtpbin handles RTP sequencing and maintains the RTCP session used for
     packet-loss feedback. srtpenc encrypts each RTP packet in-place using
@@ -257,7 +257,7 @@ class _VideoPipeline:
         sink    = Gst.ElementFactory.make('udpsink',      'vsink')
 
         if None in (src, scale, capsflt, conv, enc, rtpbin, pay, srtp, sink):
-            log.error('[gst] could not instantiate all video pipeline elements — '
+            log.error('[gst] could not instantiate all video pipeline elements -- '
                       'check gst-plugins-bad and gst-plugin-rsrtp are installed')
             return False
 
@@ -313,7 +313,7 @@ class _VideoPipeline:
         rtpbin.link_pads('send_rtp_src_0', srtp, 'rtp_sink_0')
         srtp.link_pads('rtp_src_0', sink, 'sink')
 
-        # Bus handler intentionally not attached here — probe() reads the bus
+        # Bus handler intentionally not attached here -- probe() reads the bus
         # directly to detect runtime failures before we commit to PLAYING.
         self._enc_elem = enc
         self._rtpbin   = rtpbin
@@ -345,13 +345,13 @@ class _VideoPipeline:
                                      Gst.MessageType.ERROR | Gst.MessageType.WARNING)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst] {self._enc_name}: probe (PAUSED) error: {err} — {dbg}')
+            log.warning(f'[gst] {self._enc_name}: probe (PAUSED) error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, dbg = msg.parse_warning()
             log.info(f'[gst] {self._enc_name}: probe (PAUSED) warning (non-fatal): {warn}')
 
-        # 2. Short PLAYING test — this catches real encoder failures
+        # 2. Short PLAYING test -- this catches real encoder failures
         log.debug(f'[gst] {self._enc_name}: starting 1 s PLAYING probe test')
         ret = self._pipeline.set_state(Gst.State.PLAYING)
         if ret == Gst.StateChangeReturn.FAILURE:
@@ -367,7 +367,7 @@ class _VideoPipeline:
 
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst] {self._enc_name}: probe test (PLAYING) error: {err} — {dbg}')
+            log.warning(f'[gst] {self._enc_name}: probe test (PLAYING) error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, dbg = msg.parse_warning()
@@ -420,7 +420,7 @@ class _AudioPipeline:
 
     Pipeline graph::
 
-        alsasrc → capsfilter → <encoder> → <rtppay> → srtpenc → udpsink
+        alsasrc -> capsfilter -> <encoder> -> <rtppay> -> srtpenc -> udpsink
 
     Audio bitrate is not dynamically adjusted; the encoder's default is used
     because audio is a small fraction of total bandwidth and latency matters
@@ -459,7 +459,7 @@ class _AudioPipeline:
         sink   = Gst.ElementFactory.make('udpsink',      'asink')
 
         if None in (src, capsflt, enc, pay, srtp, sink):
-            log.error('[gst] could not instantiate all audio pipeline elements — '
+            log.error('[gst] could not instantiate all audio pipeline elements -- '
                       'check gst-plugins-bad and gst-plugin-srtp are installed')
             return False
 
@@ -510,7 +510,7 @@ class _AudioPipeline:
                                      Gst.MessageType.ERROR | Gst.MessageType.WARNING)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst] {self._enc_name}: audio probe (PAUSED) error: {err} — {dbg}')
+            log.warning(f'[gst] {self._enc_name}: audio probe (PAUSED) error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, dbg = msg.parse_warning()
@@ -532,7 +532,7 @@ class _AudioPipeline:
 
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst] {self._enc_name}: audio probe test (PLAYING) error: {err} — {dbg}')
+            log.warning(f'[gst] {self._enc_name}: audio probe test (PLAYING) error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, dbg = msg.parse_warning()
@@ -692,29 +692,29 @@ class GstSender:
 
     def _on_ack(self, hostname: str, obj: GstStreamInfoAck):
         if obj.hostname != HOSTNAME:
-            log.debug(f'[gst] GstStreamInfoAck for {obj.hostname!r}, not us — ignoring')
+            log.debug(f'[gst] GstStreamInfoAck for {obj.hostname!r}, not us -- ignoring')
             return
         if self._acked:
-            log.debug('[gst] duplicate GstStreamInfoAck — pipelines already running')
+            log.debug('[gst] duplicate GstStreamInfoAck -- pipelines already running')
             return
-        log.info('[gst] stream acked — starting pipelines')
+        log.info('[gst] stream acked -- starting pipelines')
         self._acked = True
 
         if self._src_device and self._receiver_ip and self._video_candidates:
-            log.info(f'[gst] video send → {self._receiver_ip}:{VIDEO_PORT} from {self._src_device}')
+            log.info(f'[gst] video send -> {self._receiver_ip}:{VIDEO_PORT} from {self._src_device}')
             self._vpipe = self._start_video_pipeline()
             if self._vpipe is None:
-                log.error('[gst] all video encoders failed probe — no video will be sent')
+                log.error('[gst] all video encoders failed probe -- no video will be sent')
         else:
             log.info(f'[gst] skipping video pipeline '
                      f'(candidates={[n for n,_ in self._video_candidates]}, '
                      f'device={self._src_device!r}, server={self._receiver_ip!r})')
 
         if self._receiver_ip and self._audio_candidates:
-            log.info(f'[gst] audio send → {self._receiver_ip}:{AUDIO_PORT} from {self._mic_device}')
+            log.info(f'[gst] audio send -> {self._receiver_ip}:{AUDIO_PORT} from {self._mic_device}')
             self._apipe = self._start_audio_pipeline()
             if self._apipe is None:
-                log.error('[gst] all audio encoders failed probe — no audio will be sent')
+                log.error('[gst] all audio encoders failed probe -- no audio will be sent')
         else:
             log.info(f'[gst] skipping audio pipeline '
                      f'(candidates={[n for n,_ in self._audio_candidates]}, '
@@ -766,8 +766,8 @@ class GstSender:
         """
         Fired by rtpbin each time a RTCP Receiver Report arrives from the server.
 
-        rb-fractionlost is a fixed-point 0–255 value representing the fraction
-        of RTP packets lost since the last RR (RFC 3550 §6.4.1). We accumulate
+        rb-fractionlost is a fixed-point 0-255 value representing the fraction
+        of RTP packets lost since the last RR (RFC 3550 section 6.4.1). We accumulate
         consecutive lossy or clean reports before acting to avoid thrashing.
         """
         session = rtpbin.emit('get-internal-session', session_id)
@@ -805,8 +805,8 @@ class GstSender:
         if new == self._bitrate:
             log.debug(f'[gst] bitrate already at limit ({new//1000} kbps), not adjusting')
             return
-        log.info(f'[gst] bitrate {"↓" if factor < 1 else "↑"} '
-                 f'{self._bitrate//1000}→{new//1000} kbps')
+        log.info(f'[gst] bitrate {"DN" if factor < 1 else "UP"} '
+                 f'{self._bitrate//1000}->{new//1000} kbps')
         self._bitrate = new
         if self._vpipe:
             self._vpipe.set_bitrate(new)

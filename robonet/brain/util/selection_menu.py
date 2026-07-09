@@ -23,7 +23,7 @@ class MenuVisState(Enum):
 
 
 class MenuStateMachine(StateChart):
-    """Full menu state machine — defines the sub-menu hierarchy."""
+    """Full menu state machine -- defines the sub-menu hierarchy."""
 
     main_menu     = State(initial=True)
     radio_menu    = State()
@@ -343,7 +343,7 @@ class SelectionMenu:
         items = self._settings_items()
         n     = len(items)
 
-        # ── editing a value ────────────────────────────────────────────
+        # -- editing a value --------------------------------------------
         if self._settings_edit:
             if key == 'backspace':
                 self._edit_buffer = self._edit_buffer[:-1]
@@ -353,7 +353,7 @@ class SelectionMenu:
                 self._commit_edit()
             return
 
-        # ── browsing ───────────────────────────────────────────────────
+        # -- browsing ---------------------------------------------------
         if key == 'up':
             self._cursor = max(0, self._cursor - 1)
         elif key == 'down':
@@ -364,13 +364,13 @@ class SelectionMenu:
         elif key == 'enter' and items:
             k, v, enabled = items[self._cursor]
             if not enabled:
-                self.set_status('Advanced setting — read-only')
+                self.set_status('Advanced setting -- read-only')
                 return
             if isinstance(v, bool):
                 # bools toggle immediately; no text entry needed
                 self._cfg[k] = not v
                 self._cfg.save()
-                self.set_status(f'{k} → {not v}')
+                self.set_status(f'{k} -> {not v}')
             else:
                 self._edit_key    = k
                 self._edit_buffer = str(v)
@@ -481,13 +481,13 @@ class SelectionMenu:
     def _draw_centered_list(self, img, title: str, items: List[str],
                             cursor: int,
                             base_colors: Optional[List] = None,
-                            footer: str = '[↑↓]=nav [Esc]=back',
+                            footer: str = '[Up/Dn]=nav [Esc]=back',
                             reserve_rows: int = 2):
         """
         Draw a scrollable list keeping the cursor row at vertical centre.
 
-        base_colors  — per-item fallback color; cursor always overrides to _SEL.
-        reserve_rows — rows reserved at the bottom (footer + status + extras).
+        base_colors  -- per-item fallback color; cursor always overrides to _SEL.
+        reserve_rows -- rows reserved at the bottom (footer + status + extras).
                        Footer lands at height - ch*reserve_rows.
                        Status always lands at height - ch (last row).
         """
@@ -612,7 +612,7 @@ class SelectionMenu:
             items=items,
             cursor=self._cursor,
             base_colors=colors,
-            footer='[←→]=page  [↑↓]=scroll  [Esc]=back',
+            footer='[<-/->]=page  [Up/Dn]=scroll  [Esc]=back',
         )
 
     def _draw_sudo(self, img):

@@ -51,7 +51,7 @@ systemctl --user enable "$SERVICE_NAME.service"
 systemctl --user restart "$SERVICE_NAME.service"
 
 echo "------------------------------------------------"
-echo "✅ Installation Successful!"
+echo "[OK] Installation Successful!"
 echo "Service is running as a user unit."
 echo "View logs: journalctl --user -u $SERVICE_NAME -f"
 echo "------------------------------------------------"

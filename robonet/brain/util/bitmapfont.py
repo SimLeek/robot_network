@@ -6,14 +6,14 @@ from typing import Optional, Tuple, List
 
 def _build_minimal_font() -> np.ndarray:
     """
-    Returns a (256, 8, 8) uint8 array where each slice [c] is the 8×8
+    Returns a (256, 8, 8) uint8 array where each slice [c] is the 8x8
     bitmap for character code c.  Non-printable chars and chars > 127
     are blank.  Data taken from the classic public-domain 8x8 font
     used in many VGA/CP437 renderers (only the printable range 0x20-0x7E).
     """
     glyphs = np.zeros((256, 8, 8), dtype=np.uint8)
 
-    # Character data: 8 rows × 8-bit integers (MSB = leftmost pixel)
+    # Character data: 8 rows x 8-bit integers (MSB = leftmost pixel)
     _DATA: dict = {
         ord(' '): [0x00]*8,
         ord('!'): [0x18,0x18,0x18,0x18,0x00,0x00,0x18,0x00],
@@ -115,7 +115,7 @@ def _build_minimal_font() -> np.ndarray:
     for code, rows in _DATA.items():
         for row_idx, byte in enumerate(rows):
             for bit in range(8):
-                # MSB left → column 0
+                # MSB left -> column 0
                 #glyphs[code, row_idx, 7 - bit] = 255 if (byte >> bit) & 1 else 0
                 glyphs[code, row_idx, bit] = 255 if (byte >> bit) & 1 else 0
 
@@ -138,7 +138,7 @@ def render_text(text: str,
                 scale: int = 1) -> np.ndarray:
     """
     Render *text* (single line) as a BGRA numpy image.
-    scale=1 → 8 px per char; scale=2 → 16 px, etc.
+    scale=1 -> 8 px per char; scale=2 -> 16 px, etc.
     """
     f = _font()
     ch = 8 * scale
@@ -147,13 +147,13 @@ def render_text(text: str,
     img = np.zeros((ch, w, 4), dtype=np.uint8)
 
     if bg is not None:
-        # RGB tuple → BGRA channels
+        # RGB tuple -> BGRA channels
         img[:, :, 0] = bg[2]   # B
         img[:, :, 1] = bg[1]   # G
         img[:, :, 2] = bg[0]   # R
         img[:, :, 3] = 255
 
-    # Pre-compute BGRA for text pixels (RGB input → BGRA)
+    # Pre-compute BGRA for text pixels (RGB input -> BGRA)
     text_bgra = np.array([color[2], color[1], color[0], 255], dtype=np.uint8)
 
     for i, char in enumerate(text):

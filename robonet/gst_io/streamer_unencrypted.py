@@ -7,9 +7,9 @@ for testing / local-network use. Identical interface; strips srtpenc and
 rtpbin, sends raw RTP directly over UDP.
 
 Pipeline graphs:
-    Video: v4l2src → videoscale → capsfilter → videoconvert → capsfilter(I420)
-               → <encoder> → [parse] → <rtppay> → udpsink
-    Audio: alsasrc → capsfilter → <encoder> → <rtppay> → udpsink
+    Video: v4l2src -> videoscale -> capsfilter -> videoconvert -> capsfilter(I420)
+               -> <encoder> -> [parse] -> <rtppay> -> udpsink
+    Audio: alsasrc -> capsfilter -> <encoder> -> <rtppay> -> udpsink
 """
 
 from __future__ import annotations
@@ -142,8 +142,8 @@ class _VideoPipeline:
     """
     Plain-RTP video encode+send pipeline (no encryption).
 
-    v4l2src → videoscale → capsfilter → videoconvert → capsfilter(I420)
-        → <encoder> → [h264/h265parse] → <rtppay> → udpsink
+    v4l2src -> videoscale -> capsfilter -> videoconvert -> capsfilter(I420)
+        -> <encoder> -> [h264/h265parse] -> <rtppay> -> udpsink
     """
 
     def __init__(self, src_device, enc_name, video_codec,
@@ -223,7 +223,7 @@ class _VideoPipeline:
                                      Gst.MessageType.ERROR | Gst.MessageType.WARNING)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst] {self._enc_name}: probe error: {err} — {dbg}')
+            log.warning(f'[gst] {self._enc_name}: probe error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, _ = msg.parse_warning()
@@ -238,7 +238,7 @@ class _VideoPipeline:
         self._pipeline.set_state(Gst.State.NULL)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst] {self._enc_name}: probe test (PLAYING) error: {err} — {dbg}')
+            log.warning(f'[gst] {self._enc_name}: probe test (PLAYING) error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, _ = msg.parse_warning()
@@ -282,7 +282,7 @@ class _AudioPipeline:
     """
     Plain-RTP audio encode+send pipeline (no encryption).
 
-    alsasrc → capsfilter → <encoder> → <rtppay> → udpsink
+    alsasrc -> capsfilter -> <encoder> -> <rtppay> -> udpsink
     """
 
     def __init__(self, mic_device, enc_name, audio_codec,
@@ -336,7 +336,7 @@ class _AudioPipeline:
                                      Gst.MessageType.ERROR | Gst.MessageType.WARNING)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst] {self._enc_name}: audio probe error: {err} — {dbg}')
+            log.warning(f'[gst] {self._enc_name}: audio probe error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, _ = msg.parse_warning()
@@ -351,7 +351,7 @@ class _AudioPipeline:
         self._pipeline.set_state(Gst.State.NULL)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst] {self._enc_name}: audio probe test (PLAYING) error: {err} — {dbg}')
+            log.warning(f'[gst] {self._enc_name}: audio probe test (PLAYING) error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, _ = msg.parse_warning()
@@ -474,26 +474,26 @@ class GstSender:
         if obj.hostname != HOSTNAME:
             return
         if self._acked:
-            log.debug('[gst] duplicate GstStreamInfoAck — pipelines already running')
+            log.debug('[gst] duplicate GstStreamInfoAck -- pipelines already running')
             return
-        log.info('[gst] stream acked — starting pipelines')
+        log.info('[gst] stream acked -- starting pipelines')
         self._acked = True
 
         if self._src_device and self._receiver_ip and self._video_candidates:
-            log.info(f'[gst] video send → {self._receiver_ip}:{VIDEO_PORT} from {self._src_device}')
+            log.info(f'[gst] video send -> {self._receiver_ip}:{VIDEO_PORT} from {self._src_device}')
             self._vpipe = self._start_video_pipeline()
             if self._vpipe is None:
-                log.error('[gst] all video encoders failed probe — no video will be sent')
+                log.error('[gst] all video encoders failed probe -- no video will be sent')
         else:
             log.info(f'[gst] skipping video pipeline '
                      f'(candidates={[n for n,_ in self._video_candidates]}, '
                      f'device={self._src_device!r}, server={self._receiver_ip!r})')
 
         if self._receiver_ip and self._audio_candidates:
-            log.info(f'[gst] audio send → {self._receiver_ip}:{AUDIO_PORT} from {self._mic_device}')
+            log.info(f'[gst] audio send -> {self._receiver_ip}:{AUDIO_PORT} from {self._mic_device}')
             self._apipe = self._start_audio_pipeline()
             if self._apipe is None:
-                log.error('[gst] all audio encoders failed probe — no audio will be sent')
+                log.error('[gst] all audio encoders failed probe -- no audio will be sent')
         else:
             log.info(f'[gst] skipping audio pipeline '
                      f'(candidates={[n for n,_ in self._audio_candidates]}, '

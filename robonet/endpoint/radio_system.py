@@ -52,7 +52,7 @@ class RobotState(StateMachine):
 
     def on_transition(self, event, source, target):
         if source is not target:
-            log.info("handshake: %s → %s  [%s]", source.id, target.id, event)
+            log.info("handshake: %s -> %s  [%s]", source.id, target.id, event)
         else:
             log.debug("handshake: %s  [%s, ignored]", source.id, event)
 
@@ -223,7 +223,7 @@ class RobotRadio:
                     self.is_streaming()
                     and time.monotonic() - self._last_ctrl > WATCHDOG_TIMEOUT
             ):
-                log.warning("watchdog timeout — halting")
+                log.warning("watchdog timeout -- halting")
                 self.root.stop()
                 self._radio_connected = False
                 self._sm.stop_received()  # allow discovery, and server should know to send a RobotStart request

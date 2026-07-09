@@ -107,7 +107,7 @@ class ServerSystem:
         new_sub.start()
 
         new_sub._tasks = [asyncio.ensure_future(c) for c in new_sub.async_loops(self)]
-        print(f"[ServerSystem] active SubSystem → {type(new_sub).__name__}")
+        print(f"[ServerSystem] active SubSystem -> {type(new_sub).__name__}")
 
     def register_default_human_controls(self, af: ActionFactory):
         self.menu.register_default_human_controls(af)

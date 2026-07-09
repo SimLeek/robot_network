@@ -106,7 +106,7 @@ class RadioSubSystem(SubSystem):
         self._adhoc_prev_conn = None  # internal for switching back to wifi
         self._wifi_prev_conn = settings["wifi_prev_connection"]
 
-        # Public discovery callbacks — MenuSubSystem subscribes to these
+        # Public discovery callbacks -- MenuSubSystem subscribes to these
         #self.on_endpoint_found = lambda ep: None
         #self.on_endpoint_lost  = lambda ep: None
 
@@ -119,7 +119,7 @@ class RadioSubSystem(SubSystem):
             probe_port=self._their_port,
         )
 
-        # Bind to all interfaces — works across modes without rebind
+        # Bind to all interfaces -- works across modes without rebind
         self.dish  = self.ctx.socket(zmq.DISH)
         self.radio = self.ctx.socket(zmq.RADIO)
         for sock in (self.dish, self.radio):

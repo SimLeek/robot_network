@@ -70,7 +70,7 @@ class Settings:
 
     def _load(self):
         if not self._path.exists():
-            log.info("Settings file not found at %s — using defaults", self._path)
+            log.info("Settings file not found at %s -- using defaults", self._path)
             return
         try:
             with open(self._path, encoding="utf-8") as fh:
@@ -78,7 +78,7 @@ class Settings:
             self._data.update(on_disk)
             log.debug("Settings loaded from %s", self._path)
         except (json.JSONDecodeError, OSError) as exc:
-            log.warning("Could not load settings (%s) — using defaults", exc)
+            log.warning("Could not load settings (%s) -- using defaults", exc)
 
     def save(self):
         """Persist current settings to disk (all keys, including file-only ones)."""

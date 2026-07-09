@@ -72,7 +72,7 @@ class DisplaySubSystem(SubSystem):
         try:
             chunk = self._audio_queue.get_nowait()
         except queue.Empty:
-            # No data ready — output silence rather than blocking the audio thread
+            # No data ready -- output silence rather than blocking the audio thread
             outdata[:] = 0
             return
         # chunk may be shorter or longer than frames; fit it safely
@@ -121,4 +121,4 @@ class DisplaySubSystem(SubSystem):
         try:
             self._audio_queue.put_nowait(aud)
         except queue.Full:
-            log.debug('[display] audio queue full — dropping chunk')
+            log.debug('[display] audio queue full -- dropping chunk')

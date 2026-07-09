@@ -191,7 +191,7 @@ def unwrap_topic_from_packet(server_aesgcm: 'AESGCM', raw: bytes):
         topic = server_aesgcm.decrypt(block[:12], block[12:], None).decode('utf-8')
         return topic, rest
     except Exception:
-        return None, raw  # wrong key or corrupted — pass raw through unchanged
+        return None, raw  # wrong key or corrupted -- pass raw through unchanged
 
 def receive_objs_encrypted(
     psk: bytes,
