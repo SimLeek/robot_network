@@ -28,7 +28,7 @@ _DEFAULT_ADVANCED_SETTINGS: dict[str, Any] = {
 
     # Wired (ethernet) pairing. Same static-address philosophy as adhoc's
     # wifi hotspot above, just for a direct/point-to-point cable instead
-    # of a wifi AP -- see robonet/wired_pair/server.py.
+    # of a wifi AP -- see robonet/wired/util.py.
     "wired_our_ip": "169.254.90.1",
     "wired_subnet": "169.254.90.0/24",
 

@@ -242,27 +242,40 @@ class TestWiredNetModeSetupTeardown(unittest.TestCase):
 
     def test_setup_configures_interface_when_cable_plugged_in(self):
         radio = self._make_fake()
-        with patch('robonet.wired_pair.server.find_connected_ethernet_interface', return_value='eth0'), \
-             patch('robonet.wired_pair.server.set_wired_static') as mock_set:
+        with patch('robonet.wired.util.find_connected_ethernet_interface', return_value='eth0'), \
+             patch('robonet.wired.util.set_wired_static') as mock_set:
             RadioSubSystem._setup_mode(radio, RadioSubSystem.NetMode.WIRED)
 
         mock_set.assert_called_once_with('eth0', '169.254.90.1', 24)
         self.assertEqual(radio._wired_iface, 'eth0')
-        radio._scanner.set_subnet.assert_called_once_with('169.254.90.0/24', iface='eth0')
+        # set_subnet may legitimately be called more than once (once
+        # unconditionally on entering WIRED mode, again once the
+        # interface is confirmed) -- what matters is every call keeps
+        # scanning restricted to the wired subnet specifically, never
+        # falling through to auto-detecting every local subnet (wifi
+        # included).
+        self.assertGreaterEqual(radio._scanner.set_subnet.call_count, 1)
+        for call_args in radio._scanner.set_subnet.call_args_list:
+            self.assertEqual(call_args.args[0], '169.254.90.0/24')
 
     def test_setup_handles_no_cable_plugged_in_gracefully(self):
         radio = self._make_fake()
-        with patch('robonet.wired_pair.server.find_connected_ethernet_interface', return_value=None), \
-             patch('robonet.wired_pair.server.set_wired_static') as mock_set:
+        with patch('robonet.wired.util.find_connected_ethernet_interface', return_value=None), \
+             patch('robonet.wired.util.set_wired_static') as mock_set:
             RadioSubSystem._setup_mode(radio, RadioSubSystem.NetMode.WIRED)  # must not raise
 
         mock_set.assert_not_called()
         self.assertIsNone(radio._wired_iface)
+        # The actual bug this regression-tests: previously, with no cable
+        # found, set_subnet() was never called at all, so the scanner
+        # silently fell back to auto-detecting every local subnet
+        # (including wifi) instead of staying restricted to wired.
+        radio._scanner.set_subnet.assert_called_once_with('169.254.90.0/24')
 
     def test_setup_swallows_nmcli_failure(self):
         radio = self._make_fake()
-        with patch('robonet.wired_pair.server.find_connected_ethernet_interface', return_value='eth0'), \
-             patch('robonet.wired_pair.server.set_wired_static', side_effect=RuntimeError('nmcli exploded')):
+        with patch('robonet.wired.util.find_connected_ethernet_interface', return_value='eth0'), \
+             patch('robonet.wired.util.set_wired_static', side_effect=RuntimeError('nmcli exploded')):
             RadioSubSystem._setup_mode(radio, RadioSubSystem.NetMode.WIRED)  # must not raise
 
         self.assertIsNone(radio._wired_iface)
@@ -270,7 +283,7 @@ class TestWiredNetModeSetupTeardown(unittest.TestCase):
     def test_teardown_only_runs_if_wired_was_actually_set_up(self):
         radio = self._make_fake()
         radio._wired_iface = None  # never configured
-        with patch('robonet.wired_pair.server.teardown_wired_static') as mock_teardown:
+        with patch('robonet.wired.util.teardown_wired_static') as mock_teardown:
             RadioSubSystem._teardown_mode(radio, RadioSubSystem.NetMode.WIRED)
 
         mock_teardown.assert_not_called()
@@ -278,7 +291,7 @@ class TestWiredNetModeSetupTeardown(unittest.TestCase):
     def test_teardown_clears_iface_on_success(self):
         radio = self._make_fake()
         radio._wired_iface = 'eth0'
-        with patch('robonet.wired_pair.server.teardown_wired_static') as mock_teardown:
+        with patch('robonet.wired.util.teardown_wired_static') as mock_teardown:
             RadioSubSystem._teardown_mode(radio, RadioSubSystem.NetMode.WIRED)
 
         mock_teardown.assert_called_once()

@@ -11,13 +11,13 @@ side connects to it like any other endpoint. Toggle between the desktop
 capture and a physical webcam (if present) from the brain's main menu.
 
 One-time setup before first use:
-    ./examples/desktop/setup_desktop_capture.sh
+    ./examples/setup_desktop_capture.sh
 (loads the v4l2loopback and snd-aloop kernel modules -- needs sudo once).
 
 If connecting over a direct wired (ethernet) link rather than wifi or
 localhost, also run this once after plugging in the cable, on this same
 machine:
-    python -m robonet.wired_pair.client
+    python -m examples.setup_eth_client
 (gives this machine's ethernet interface a static IP so the brain side's
 WhoAreYou probes have something to reach -- see that module's docstring
 for why this is needed.)

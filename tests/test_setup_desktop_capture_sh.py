@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCRIPT = REPO_ROOT / 'examples' / 'desktop' / 'setup_desktop_capture.sh'
+SCRIPT = REPO_ROOT / 'examples' / 'setup_desktop_capture.sh'
 
 _STUB_TEMPLATE = """#!/bin/bash
 echo "{name} $*" >> "$CALL_LOG"

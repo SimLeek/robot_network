@@ -38,16 +38,13 @@ def make_window_config_for_server(sm, af_thru: ActionFactory = None, af_edit: Ac
     """
     Build a PassthruMglWindowConfig subclass wired to *sm*.
 
-    If *af* is None a new ActionFactory is created and stored on sm.actions.
     All key events in both pass-through and edit mode go through af.on_key().
     """
     if af_thru is None:
         af_thru = ActionFactory()
-        sm.actions = af_thru
 
     if af_edit is None:
         af_edit = ActionFactory()
-        sm.actions = af_edit
 
     register_desktop_actions(af_thru, af_edit, sm)
 
@@ -93,12 +90,10 @@ def make_window_config_for_server_main(sm, af: ActionFactory, obj):
     """
     Build a PassthruMglWindowConfig subclass wired to *sm*.
 
-    If *af* is None a new ActionFactory is created and stored on sm.actions.
     All key events in both pass-through and edit mode go through af.on_key().
     """
     if af is None:
         af = ActionFactory()
-        sm.actions = af
 
     register_desktop_actions(af, sm)
 

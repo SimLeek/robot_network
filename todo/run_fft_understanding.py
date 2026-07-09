@@ -151,7 +151,7 @@ async def run_client(callback):
 
 if __name__ == '__main__':
     from displayarray import display
-    from robonet.receive_callbacks import receive_objs
+    from todo.plain_receive_callbacks import receive_objs
     obj_dict = dict()
     with display() as d:
         obj_dict['AudioBuffer'] = display_fftnet(d)

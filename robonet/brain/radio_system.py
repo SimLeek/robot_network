@@ -171,12 +171,20 @@ class RadioSubSystem(SubSystem):
         elif mode == self.NetMode.WIFI:
             pass   # scanner handles wifi discovery
         elif mode == self.NetMode.WIRED:
+            # Always restrict scanning to the wired subnet in this mode,
+            # cable plugged in or not -- previously this only happened
+            # inside the "iface found" branch below, so with no cable
+            # detected the scanner silently fell back to auto-detecting
+            # every local subnet (wifi included), which makes no sense
+            # once the human has explicitly picked "Wired".
+            self._scanner.set_subnet(self._wired_subnet)
             try:
-                from robonet.wired_pair.server import (
+                from robonet.wired.util import (
                     find_connected_ethernet_interface, set_wired_static)
                 iface = find_connected_ethernet_interface()
                 if iface is None:
-                    print('[radio] wired mode: no ethernet interface with a cable plugged in')
+                    print('[radio] wired mode: no ethernet interface with a cable plugged in '
+                         'yet -- still restricting scanning to the wired subnet')
                 else:
                     ip = self._wired_our_ip
                     prefix = int(self._wired_subnet.split('/')[1])
@@ -190,7 +198,7 @@ class RadioSubSystem(SubSystem):
             try:
                 from robonet.buffers.buffer_objects import WifiSetupInfo
                 from robonet.util import get_local_ip, get_connection_info
-                from robonet.adhoc_pair.server import lazy_pirate_send_con_info, set_hotspot
+                from robonet.adhoc.util import lazy_pirate_send_con_info, set_hotspot
                 wifi = WifiSetupInfo(
                     ssid=self._adhoc_ssid,
                     server_ip=self._adhoc_our_ip,
@@ -208,7 +216,7 @@ class RadioSubSystem(SubSystem):
         """Synchronous teardown for the given mode."""
         if mode == self.NetMode.WIRED and self._wired_iface is not None:
             try:
-                from robonet.wired_pair.server import teardown_wired_static
+                from robonet.wired.util import teardown_wired_static
                 teardown_wired_static()
                 self._wired_iface = None
                 print('[radio] wired torn down')

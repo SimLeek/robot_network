@@ -1,8 +1,10 @@
 """
-robonet/gst_receiver_unencrypted.py — plain RTP receiver (no SRTP).
+robonet/gst_io/receiver_unencrypted.py -- plain RTP receiver (no SRTP).
 
-Drop-in replacement for receiver_encrypted.py for testing / local-network use.
-Identical interface; just strips srtpdec and plain-RTP caps instead of x-srtp.
+Drop-in replacement for todo/gst_io/receiver_encrypted.py (moved there --
+unused by the active RobotRadio/RadioSubSystem path, see todo/TODO.md)
+for testing / local-network use. Identical interface; just strips
+srtpdec and plain-RTP caps instead of x-srtp.
 
 Pipeline graphs:
     Video: udpsrc(caps=x-rtp,pt=96) → <rtpdepay> → [parse] → <decoder>

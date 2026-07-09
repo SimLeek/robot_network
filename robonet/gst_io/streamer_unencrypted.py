@@ -1,8 +1,10 @@
 """
-robonet/gst_streamer_unencrypted.py — plain RTP sender (no SRTP).
+robonet/gst_io/streamer_unencrypted.py -- plain RTP sender (no SRTP).
 
-Drop-in replacement for streamer_encrypted.py for testing / local-network use.
-Identical interface; strips srtpenc and rtpbin, sends raw RTP directly over UDP.
+Drop-in replacement for todo/gst_io/streamer_encrypted.py (moved there --
+unused by the active RobotRadio/RadioSubSystem path, see todo/TODO.md)
+for testing / local-network use. Identical interface; strips srtpenc and
+rtpbin, sends raw RTP directly over UDP.
 
 Pipeline graphs:
     Video: v4l2src → videoscale → capsfilter → videoconvert → capsfilter(I420)
@@ -37,15 +39,7 @@ log = setup_logging()
 VIDEO_PORT  = 5600
 AUDIO_PORT  = 5601
 
-BITRATE_MIN     = 200_000
-BITRATE_MAX     = 8_000_000
 BITRATE_DEFAULT = 2_000_000
-BITRATE_STEP_DN = 0.75
-BITRATE_STEP_UP = 1.10
-
-RTCP_LOSS_THRESHOLD = 5
-RTCP_DROP_COUNT     = 2
-RTCP_GOOD_COUNT     = 10
 
 
 def _has(name: str) -> bool:
@@ -588,13 +582,3 @@ class GstSender:
             pipe.play()
             return pipe
         return None
-
-    def _step_bitrate(self, factor: float):
-        new = max(BITRATE_MIN, min(BITRATE_MAX, int(self._bitrate * factor)))
-        if new == self._bitrate:
-            return
-        log.info(f'[gst] bitrate {"↓" if factor < 1 else "↑"} '
-                 f'{self._bitrate//1000}→{new//1000} kbps')
-        self._bitrate = new
-        if self._vpipe:
-            self._vpipe.set_bitrate(new)

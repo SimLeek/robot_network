@@ -22,7 +22,7 @@ def lazy_pirate_send_con_info(ctx, obj, local_ip):
 
 
 def set_hotspot(wifi_obj: WifiSetupInfo, devices):
-    """Set up an adhoc_pair hotspot that matches the wifi_obj."""
+    """Set up an adhoc hotspot that matches the wifi_obj."""
 
     try:
         result = subprocess.run(

@@ -104,7 +104,7 @@ class RobotRadio:
         # must never prevent listening on whatever other interfaces exist.
         if settings["auto_wired_setup"]:
             try:
-                from robonet.wired_pair.client import connect_wired
+                from robonet.wired.util import connect_wired
                 wired_iface = connect_wired()
                 log.info("wired static IP configured on %s", wired_iface)
             except Exception as e:

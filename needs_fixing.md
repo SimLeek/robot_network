@@ -54,35 +54,33 @@ filed as confirmed bugs.
 
 ## Code smells / things that look intentional but are worth a second look
 
-- **robonet/brain/main_system.py + desktop_window_config.py**:
-  `make_window_config_for_server(sm, af_thru, af_edit)` does `sm.actions
-  = af_thru` and then, a few lines later, `sm.actions = af_edit` -- the
-  second assignment always wins, so `sm.actions` ends up permanently
-  `af_edit` regardless of which factory was actually newly created.
-  Separately, `ServerSystem.__init__` also sets `self.actions =
-  ActionFactory()` (a third, distinct instance) which doesn't appear to
-  be read anywhere. `sm.actions` may just be vestigial.
+- ~~**robonet/brain/main_system.py + desktop_window_config.py**: `.actions`
+  vestigial code~~ -- **confirmed and removed.** Simleek checked with an
+  IDE-wide search: `pass_through_cb`/`edit_cb` close over `af_thru`/
+  `af_edit` directly and are what's actually used; `sm.actions` (both the
+  `ServerSystem.__init__` instance and the two assignments in
+  `desktop_window_config.py`, one of which always overwrote the other
+  anyway) had no reads anywhere. Removed all three.
 
-- **robonet/util.py**: `send_burst`/`receive_burst` (module-level plain
-  functions, unencrypted) and `SecureRadioEngine.send_burst`/
-  `process_raw_packet` (class methods, AES-GCM encrypted) implement very
-  similar burst-assembly logic twice, with the plain version's docstring
-  noting "use this only for internal communication, such as wired or
-  radio within a faraday cage." Only `SecureRadioEngine` is actually
-  wired up anywhere currently (both endpoint and brain always use the
-  encrypted path, including in LOCALHOST mode). Worth deciding
-  explicitly whether the plain path is meant to be reachable somewhere
-  (e.g. for wired mode specifically, given the docstring) or is dead
-  duplicate code to remove.
+- ~~**robonet/util.py**: `send_burst`/`receive_burst` + `PlainRadioEngine`
+  duplicate `SecureRadioEngine`~~ -- **confirmed dead and moved.**
+  Simleek: "I was expecting the lack of encryption to speed things up,
+  but in practice it didn't, and using gstreamer made things much
+  faster." Grepped the whole repo -- genuinely unreferenced anywhere in
+  the active `RobotRadio`/`RadioSubSystem` path. Moved to
+  `todo/plain_radio.py` (along with `receive_objs`/
+  `unwrap_topic_from_plain_packet` from `receive_callbacks.py`, now
+  `todo/plain_receive_callbacks.py`, and `tests/run_fft_understanding.py`,
+  the only thing that used them, now `todo/run_fft_understanding.py`).
+  See `todo/TODO.md`.
 
-- **Non-ASCII characters scattered through existing comments/UI
-  strings**: em dashes and arrows appear throughout the pre-existing
-  codebase (e.g. selection_menu.py's UI glyphs `-> . |`, doc comment
-  arrows, one checkmark emoji in examples/setup_vnc_client.sh). Given
-  the standing ASCII-only rule, these are pre-existing debt worth a
-  cleanup pass at some point. Left alone except in the exact lines
-  touched for this work (a couple of section-header comments in
-  buffer_objects.py that were being edited anyway).
+- ~~**Non-ASCII characters scattered through existing comments/UI
+  strings**~~ -- **confirmed, swept this pass.** Em dashes and arrows
+  throughout the pre-existing codebase (e.g. selection_menu.py's UI
+  glyphs, doc comment arrows, one checkmark emoji in
+  examples/setup_vnc_client.sh). Simleek: "those are all bad and should
+  be removed and replaced with equivalent ascii." See the ASCII sweep
+  section further down for what was actually touched.
 
 ## Fixed after initial review (flagged by Simleek)
 
@@ -123,6 +121,27 @@ filed as confirmed bugs.
   `adhoc_pair/server.py`, since `robonet/brain/radio_system.py`'s ADHOC
   mode genuinely still calls `set_hotspot()`/`lazy_pirate_send_con_info()`
   from it -- that one's real production code, not a leftover test.
+
+## Fixed (confirmed real, per direct request)
+
+- **`tests/test_buffers.py` -- fully fixed, not just noted.** Two
+  separate stale-test bugs, both from the test file drifting out of
+  sync with the actual buffer classes rather than anything wrong with
+  the classes themselves: (1) imported/constructed `CamFrame`, which
+  doesn't exist -- the actual class is `CVCamFrame`; renamed. (2)
+  `AudioBuffer(audio_data=..., sample_rate=...)` -- `AudioBuffer`'s real
+  fields are `fft_data`/`sample_rate`/`samples_per_sec`, not
+  `audio_data`; fixed the keyword and the test data's dtype
+  (`np.complex128`, matching the field's actual codec).
+
+- **`AudioBuffer.fft_data`'s declared type hint doesn't match its
+  codec.** `type_list = [List[npt.NDArray[np.complex64]], ...]` says
+  complex64, but the codec is `_c128_arr_list = ndarray_list_codec(np.complex128)`
+  -- complex128. Runtime behavior follows the codec (confirmed while
+  fixing the test above -- complex64 data fails an internal dtype
+  assert, complex128 doesn't), so the type hint is just wrong/stale, not
+  currently causing incorrect behavior. Left the class alone; noting it
+  since I don't know which precision was actually intended.
 
 ## Found and fixed via testing (this session, own new code)
 

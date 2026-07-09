@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 from robonet.buffers.buffer_handling import pack_obj, unpack_obj
-from robonet.buffers.buffer_objects import WifiSetupInfo, CamFrame, AudioBuffer, HumidityWaterBuffer, \
+from robonet.buffers.buffer_objects import WifiSetupInfo, CVCamFrame, AudioBuffer, HumidityWaterBuffer, \
     TemperatureMonitorBuffer, IMUBuffer, TensorBuffer
 
 
@@ -19,7 +19,7 @@ class TestBufferObjects(unittest.TestCase):
 
     def test_cam_frame(self):
         image = np.random.randint(0, 256, size=(480, 640, 3), dtype=np.uint8)
-        original = CamFrame(cv_image=image, brightness=50, exposure=100)
+        original = CVCamFrame(cv_image=image, brightness=50, exposure=100)
         packed = pack_obj(original)
         unpacked = unpack_obj(packed)
 
@@ -28,8 +28,8 @@ class TestBufferObjects(unittest.TestCase):
         self.assertEqual(original.exposure, unpacked.exposure)
 
     def test_audio_buffer(self):
-        audio_data = [np.random.rand(1000).astype(np.float32) for _ in range(2)]  # Stereo audio
-        original = AudioBuffer(audio_data=audio_data, sample_rate=44100)
+        audio_data = [np.random.rand(1000).astype(np.complex128) for _ in range(2)]  # Stereo audio
+        original = AudioBuffer(fft_data=audio_data, sample_rate=44100)
         packed = pack_obj(original)
         unpacked = unpack_obj(packed)
 

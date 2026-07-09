@@ -1,15 +1,15 @@
 """
-robonet/wired_pair/server.py
+robonet/wired/util.py
 
-Ethernet interface detection and static-IP setup for wired pairing, used
-by RadioSubSystem.NetMode.WIRED (robonet/brain/radio_system.py).
+Ethernet interface detection and static-IP setup for wired networking,
+used by RadioSubSystem.NetMode.WIRED (robonet/brain/radio_system.py).
 
-There's no server/client role split the way adhoc_pair has one (a wifi
-hotspot's AP side and joining station side genuinely do different
+There's no server/client role split the way the adhoc module has one (a
+wifi hotspot's AP side and joining station side genuinely do different
 things) -- both ends of a direct cable just need a static IP in the same
 /24. So there's a single set_wired_static() here that both
 robonet/brain/radio_system.py (brain side, via this module) and
-robonet/wired_pair/client.py (endpoint side) call with their own
+examples/setup_eth_client.py (endpoint side) call with their own
 respective addresses, rather than two separate implementations.
 """
 
@@ -62,7 +62,7 @@ def find_connected_ethernet_interface() -> Optional[str]:
 def set_wired_static(iface: str, ip: str, prefix: int = 24,
                      con_name: str = 'robonet_wired'):
     """Bring up iface with a fixed static IPv4 address via nmcli. Mirrors
-    adhoc_pair.server.set_hotspot's approach (delete-if-exists, add,
+    adhoc.util.set_hotspot's approach (delete-if-exists, add,
     modify, up) but for a plain wired link -- no SSID or wifi mode."""
     try:
         result = subprocess.run(
@@ -94,9 +94,52 @@ def teardown_wired_static(con_name: str = 'robonet_wired'):
         subprocess.run(f"nmcli con down {con_name}", shell=True,
                        check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
-        print(f"[wired_pair] could not bring down {con_name}: {e.stderr}")
+        print(f"[wired] could not bring down {con_name}: {e.stderr}")
     try:
         subprocess.run(f"nmcli con delete {con_name}", shell=True,
                        check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
-        print(f"[wired_pair] could not delete {con_name}: {e.stderr}")
+        print(f"[wired] could not delete {con_name}: {e.stderr}")
+
+
+def connect_wired(iface: Optional[str] = None, ip: Optional[str] = None,
+                  prefix: Optional[int] = None, con_name: str = 'robonet_wired') -> str:
+    """Endpoint-side convenience wrapper: assign this machine's ethernet
+    interface a static IP in the shared wired subnet, via
+    set_wired_static() above, defaulting to the endpoint-side settings
+    (robonet/endpoint/settings.py's wired_endpoint_ip/wired_subnet).
+
+    Used by RobotRadio.__init__ (when auto_wired_setup is on) and by
+    examples/setup_eth_client.py, the standalone one-time-setup script
+    for machines that don't want auto_wired_setup running on every boot.
+
+    iface: which interface to configure. Auto-detects the first one with
+        a cable plugged in if not given.
+    ip/prefix: defaults to settings['wired_endpoint_ip']/the prefix from
+        settings['wired_subnet'] -- override if you've changed those to
+        something other than the shared default on both sides.
+
+    Returns the interface name used. Raises RuntimeError if no connected
+    ethernet interface was found, or if nmcli itself fails.
+    """
+    import robonet.endpoint.settings as settings_
+    settings = settings_.get()
+
+    if iface is None:
+        iface = find_connected_ethernet_interface()
+        if iface is None:
+            raise RuntimeError(
+                'No ethernet interface with a cable plugged in was found. '
+                'Check the physical connection and try again.'
+            )
+    if ip is None:
+        ip = settings['wired_endpoint_ip']
+    if prefix is None:
+        prefix = int(settings['wired_subnet'].split('/')[1])
+    set_wired_static(iface, ip, prefix, con_name=con_name)
+    return iface
+
+
+def disconnect_wired(con_name: str = 'robonet_wired'):
+    """Undo connect_wired() -- tear down the connection profile it created."""
+    teardown_wired_static(con_name=con_name)

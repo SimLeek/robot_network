@@ -34,7 +34,6 @@ class ServerSystem:
         self.displayer = displayer
         self.ai = ai
         self.active_sub = None
-        self.actions = ActionFactory()
 
         self._shutdown_callbacks: list = []
         self._shutting_down = False
