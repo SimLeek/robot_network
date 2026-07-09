@@ -7,6 +7,12 @@ it feeds this machine's own screen/audio out as a camera/mic stream (via
 desktop_capture.py's feeders and a v4l2loopback + ALSA-loopback pair) and
 replays keyboard/mouse events received from the brain via pyautogui, so
 the brain can remote-control this machine.
+
+Built on MultiAVRobotHardware (any number of video/audio sources)
+instead of CamMicSpkRobotHardware (fixed one of each) -- a desktop
+machine naturally has more than one plausible video source (the desktop
+capture, plus a real webcam if one exists) and this doesn't need to be a
+special case bolted onto a single-source class.
 """
 
 from __future__ import annotations
@@ -16,16 +22,15 @@ from typing import Optional
 
 import numpy as np
 
-from robonet.buffers.buffer_objects import (
-    KeyEvent, MouseEvent, SwitchVideoSource, RobotCapabilities,
-)
+from robonet.buffers.buffer_objects import KeyEvent, MouseEvent, RobotCapabilities
 from robonet.endpoint.desktop_capture import (
     DesktopVideoFeeder, DesktopAudioFeeder,
     ensure_v4l2loopback_device, ensure_alsa_loopback, find_real_webcam,
     DesktopCaptureError,
 )
-from robonet.endpoint.hardware_system import CamMicSpkRobotHardware
+from robonet.endpoint.hardware_system import MultiAVRobotHardware
 from robonet.endpoint.radio_system import HOSTNAME
+from robonet.gst_io.devices import get_first_speaker_device, DeviceNotFoundError
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +59,9 @@ except Exception as _e:
 
 _MOUSE_BUTTON_NAMES = {0: 'left', 1: 'right', 2: 'middle'}
 
+DESKTOP_VIDEO_ID = 'desktop'
+DESKTOP_AUDIO_IN_ID = 'desktop-audio'
+
 
 def build_desktop_capabilities() -> RobotCapabilities:
     """Desktop endpoints don't use the axis/key-binding control model
@@ -63,13 +71,21 @@ def build_desktop_capabilities() -> RobotCapabilities:
     return RobotCapabilities.build(axes=[], streams=[], hostname=HOSTNAME, endpoint_type='desktop')
 
 
-class DesktopHw(CamMicSpkRobotHardware):
+class DesktopHw(MultiAVRobotHardware):
     """Endpoint hardware for 'desktop mode': streams the screen and audio
-    out, and replays received keyboard/mouse events via pyautogui."""
+    out, and replays received keyboard/mouse events via pyautogui.
+
+    Video sources offered: the desktop capture itself, plus a real
+    webcam if one is found (excluding the virtual loopback device we
+    create for the desktop capture, so it's never mistaken for a second
+    real camera). Audio input offered: the desktop-audio/mic mix feeder
+    already builds. Audio output offered: a real speaker, if one is
+    found, for the brain's own audio to play back to.
+    """
 
     def __init__(self,
-                 capture_width: int = 1280, capture_height: int = 720,
-                 capture_fps: int = 15, include_mic: bool = True):
+                capture_width: int = -1, capture_height: int = -1,
+                capture_fps: int = 15, include_mic: bool = True):
         if pyautogui is None:
             raise DesktopCaptureError(
                 "pyautogui could not be imported (it needs a live, connectable "
@@ -81,24 +97,37 @@ class DesktopHw(CamMicSpkRobotHardware):
         loopback_video = ensure_v4l2loopback_device()
         loopback_audio_playback, loopback_audio_capture = ensure_alsa_loopback()
 
+        webcam_device = find_real_webcam(exclude_device=loopback_video)
+        video_sources = {DESKTOP_VIDEO_ID: loopback_video}
+        if webcam_device:
+            video_sources[f'webcam:{webcam_device}'] = webcam_device
+
+        audio_inputs = {DESKTOP_AUDIO_IN_ID: loopback_audio_capture}
+
+        audio_outputs = {}
+        try:
+            speaker = get_first_speaker_device()
+            audio_outputs[f'speaker:{speaker}'] = speaker
+        except DeviceNotFoundError:
+            log.error("Could not find a speaker device. Will be starting without one.")
+
         # Two separate resolutions, on purpose:
         #  - capture_width/height/fps (here) is how big a frame the feeder
-        #    grabs off the real X11 desktop into the *loopback* device.
-        #  - settings['cam_res']/['cam_fps'] (read inside super().__init__,
-        #    completely untouched here) is what CamMicSpkRobotHardware's
+        #    grabs off the real X11 desktop into the *loopback* device --
+        #    -1/-1 (the default) means passthrough: no forced size/format
+        #    at all, see DesktopVideoFeeder.
+        #  - settings['cam_res']/['cam_fps'] (read inside
+        #    MultiAVRobotHardware.__init__, untouched here) is what
         #    GstSender actually *transmits* -- its existing v4l2src ->
-        #    videoscale chain downscales from whatever the loopback device
-        #    provides down to cam_res on its own, same as it would for a
-        #    real webcam. Its small default (640x480) is intentional, not a
-        #    bug: most AI consumers can't usefully handle 1920x1080@30fps,
-        #    and it's the setting a human would already know to raise for
-        #    their own viewing if they want more detail transmitted. Do not
-        #    override it here.
-        super().__init__(camera=loopback_video, mic=loopback_audio_capture, speaker=None)
-
-        self._loopback_video = loopback_video
-        self._webcam_device  = find_real_webcam(exclude_device=loopback_video)
-        self._current_source = 'desktop'
+        #    videoscale chain downscales from whatever the loopback
+        #    device provides down to cam_res on its own, same as it
+        #    would for a real webcam. Its small default (640x480) is
+        #    intentional, not a bug: most AI consumers can't usefully
+        #    handle 1920x1080@30fps, and it's the setting a human would
+        #    already know to raise for their own viewing if they want
+        #    more detail transmitted. Do not override it here.
+        super().__init__(video_sources=video_sources, audio_inputs=audio_inputs,
+                         audio_outputs=audio_outputs, sample_rate=48000)
 
         self._video_feeder = DesktopVideoFeeder(
             loopback_video, capture_width, capture_height, capture_fps)
@@ -116,7 +145,7 @@ class DesktopHw(CamMicSpkRobotHardware):
         # to be used.
         self._video_feeder.start()
         self._audio_feeder.start()
-        log.info(f'Desktop hardware started (video source: {self._current_source})')
+        log.info(f'Desktop hardware started (video source: {self._active_video})')
 
     def build_capabilities(self) -> RobotCapabilities:
         return build_desktop_capabilities()
@@ -126,7 +155,6 @@ class DesktopHw(CamMicSpkRobotHardware):
         return super().handlers | {
             'KeyEvent': self._on_key_event,
             'MouseEvent': self._on_mouse_event,
-            'SwitchVideoSource': self._on_switch_video_source,
         }
 
     # -- input replay ------------------------------------------------------
@@ -161,20 +189,6 @@ class DesktopHw(CamMicSpkRobotHardware):
             log.warning('pyautogui failsafe triggered (mouse in corner) -- ignoring mouse event')
         except Exception as e:
             log.error(f'MouseEvent replay failed (type={obj.event_type}): {e}')
-
-    def _on_switch_video_source(self, hostname: str, obj: SwitchVideoSource):
-        if obj.source == self._current_source:
-            return
-        if obj.source == 'camera':
-            if self._webcam_device is None:
-                log.warning('SwitchVideoSource(camera) requested but no physical webcam was found')
-                return
-            self._gst_sender.set_source_device(self._webcam_device)
-            self._current_source = 'camera'
-        else:
-            self._gst_sender.set_source_device(self._loopback_video)
-            self._current_source = 'desktop'
-        log.info(f'video source switched -> {self._current_source}')
 
     # -- lifecycle -----------------------------------------------------------
 

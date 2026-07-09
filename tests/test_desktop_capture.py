@@ -243,6 +243,65 @@ class TestDesktopAudioFeederBuild(unittest.TestCase):
         desc = mock_parse.call_args[0][0]
         self.assertEqual(desc.count('pulsesrc'), 1)
 
+    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
+    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
+    def test_start_builds_if_not_already_built(self, mock_pactl, mock_parse):
+        mock_pactl.return_value = 'some_device'
+        fake_pipeline = MagicMock()
+        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.SUCCESS
+        mock_parse.return_value = fake_pipeline
+        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
+
+        with patch('robonet.endpoint.desktop_capture.GLib.MainLoop') as mock_loop_cls, \
+             patch('robonet.endpoint.desktop_capture.threading.Thread') as mock_thread_cls:
+            mock_loop_cls.return_value = MagicMock()
+            mock_thread_cls.return_value = MagicMock()
+            ok = feeder.start()
+
+        self.assertTrue(ok)
+        fake_pipeline.set_state.assert_called_with(dc.Gst.State.PLAYING)
+
+    @patch.object(dc.DesktopAudioFeeder, '_pactl_get', return_value=None)
+    def test_start_returns_false_when_build_fails(self, _pactl):
+        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
+        self.assertFalse(feeder.start())
+
+    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
+    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
+    def test_start_returns_false_when_state_change_fails(self, mock_pactl, mock_parse):
+        mock_pactl.return_value = 'some_device'
+        fake_pipeline = MagicMock()
+        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.FAILURE
+        mock_parse.return_value = fake_pipeline
+        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
+
+        self.assertFalse(feeder.start())
+
+    def test_stop_before_start_does_not_raise(self):
+        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
+        feeder.stop()
+
+    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
+    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
+    def test_stop_after_start_tears_down_pipeline_and_loop(self, mock_pactl, mock_parse):
+        mock_pactl.return_value = 'some_device'
+        fake_pipeline = MagicMock()
+        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.SUCCESS
+        mock_parse.return_value = fake_pipeline
+        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
+        fake_loop = MagicMock()
+        fake_loop.is_running.return_value = True
+        with patch('robonet.endpoint.desktop_capture.GLib.MainLoop', return_value=fake_loop), \
+             patch('robonet.endpoint.desktop_capture.threading.Thread', return_value=MagicMock()):
+            feeder.start()
+
+        feeder.stop()
+
+        fake_pipeline.set_state.assert_called_with(dc.Gst.State.NULL)
+        fake_loop.quit.assert_called_once()
+        self.assertIsNone(feeder._pipeline)
+        self.assertIsNone(feeder._glib_loop)
+
 
 class _FakeGstSenderForSourceSwitch:
     """Minimal GstSender stand-in for set_source_device -- just the
@@ -374,7 +433,7 @@ class TestGstSenderSetSourceDevice(unittest.TestCase):
 
 
 class TestDesktopHwConstruction(unittest.TestCase):
-    """DesktopHw's __init__ calls into CamMicSpkRobotHardware.__init__,
+    """DesktopHw's __init__ calls into MultiAVRobotHardware.__init__,
     which needs a real psk key file to exist (endpoint/settings.py has
     no advanced-settings restriction, unlike the brain side, so we can
     just point it at a temp one directly and restore it after)."""
@@ -399,15 +458,17 @@ class TestDesktopHwConstruction(unittest.TestCase):
                   return_value='/dev/video42'), \
              patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
                   return_value=('hw:1,0,0', 'hw:1,1,0')), \
-             patch('robonet.endpoint.desktop_hardware.find_real_webcam', return_value=None):
+             patch('robonet.endpoint.desktop_hardware.find_real_webcam', return_value=None), \
+             patch('robonet.endpoint.desktop_hardware.get_first_speaker_device',
+                  return_value='hw:0,0'):
             from robonet.endpoint.desktop_hardware import DesktopHw
             return DesktopHw(**kwargs)
 
     def test_construction_succeeds_and_wires_devices(self):
         hw = self._construct()
-        self.assertEqual(hw._loopback_video, '/dev/video42')
-        self.assertEqual(hw._current_source, 'desktop')
-        self.assertIsNone(hw._webcam_device)
+        self.assertEqual(hw._video_sources['desktop'], '/dev/video42')
+        self.assertEqual(hw._active_video, 'desktop')
+        self.assertNotIn('webcam', str(list(hw._video_sources)))  # no webcam entry when none found
 
     def test_construction_raises_clear_error_when_pyautogui_unavailable(self):
         with patch('robonet.endpoint.desktop_hardware.pyautogui', None), \
@@ -460,10 +521,27 @@ class TestDesktopHwConstruction(unittest.TestCase):
                   return_value='/dev/video42'), \
              patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
                   return_value=('hw:1,0,0', 'hw:1,1,0')), \
-             patch('robonet.endpoint.desktop_hardware.find_real_webcam', return_value='/dev/video0'):
+             patch('robonet.endpoint.desktop_hardware.find_real_webcam', return_value='/dev/video0'), \
+             patch('robonet.endpoint.desktop_hardware.get_first_speaker_device',
+                  return_value='hw:0,0'):
             from robonet.endpoint.desktop_hardware import DesktopHw
             hw = DesktopHw()
-        self.assertEqual(hw._webcam_device, '/dev/video0')
+        self.assertIn('webcam:/dev/video0', hw._video_sources)
+        self.assertEqual(hw._video_sources['webcam:/dev/video0'], '/dev/video0')
+
+    def test_no_speaker_found_degrades_gracefully(self):
+        from robonet.gst_io.devices import DeviceNotFoundError
+        with patch('robonet.endpoint.desktop_hardware.pyautogui', MagicMock()), \
+             patch('robonet.endpoint.desktop_hardware.ensure_v4l2loopback_device',
+                  return_value='/dev/video42'), \
+             patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
+                  return_value=('hw:1,0,0', 'hw:1,1,0')), \
+             patch('robonet.endpoint.desktop_hardware.find_real_webcam', return_value=None), \
+             patch('robonet.endpoint.desktop_hardware.get_first_speaker_device',
+                  side_effect=DeviceNotFoundError('no speaker')):
+            from robonet.endpoint.desktop_hardware import DesktopHw
+            hw = DesktopHw()  # must not raise
+        self.assertEqual(hw._audio_outputs, {})
 
     def test_build_capabilities_matches_module_function(self):
         hw = self._construct()
@@ -476,7 +554,7 @@ class TestDesktopHwConstruction(unittest.TestCase):
         handlers = hw.handlers
         self.assertIn('KeyEvent', handlers)
         self.assertIn('MouseEvent', handlers)
-        self.assertIn('SwitchVideoSource', handlers)
+        self.assertIn('SelectAVSource', handlers)
         self.assertIn('SparseVectorBuffer', handlers)  # inherited from RobotHardware
 
     def test_apply_tensor_with_entries_does_not_raise(self):
@@ -530,114 +608,60 @@ class TestDesktopHwConstruction(unittest.TestCase):
         self.assertEqual(hw._held_keys, set())
 
 
-class TestDesktopHwSwitchVideoSource(unittest.TestCase):
-    """_on_switch_video_source against a lightweight fake, matching the
-    existing _on_key_event/_on_mouse_event test style in
-    test_callback_control.py -- no need for the full constructor here."""
+class TestDesktopHwSourceSelection(unittest.TestCase):
+    """DesktopHw's video/audio source selection now goes through the
+    generic MultiAVRobotHardware.select_video_source/select_audio_input/
+    select_audio_output (and _on_select_source for the SelectAVSource
+    wire handler), not a desktop-specific binary toggle -- these are
+    already covered in general by tests/test_hardware_system.py, so this
+    class just confirms DesktopHw wires into that machinery correctly
+    (right device strings for its own sources) rather than re-testing
+    the general mechanism's own logic.
+    """
 
-    def _make_fake(self, current_source='desktop', webcam_device='/dev/video0'):
-        from robonet.endpoint.desktop_hardware import DesktopHw
+    def _make_fake(self, active_video='desktop', webcam_id='webcam:/dev/video0'):
+        from robonet.endpoint.hardware_system import MultiAVRobotHardware
         fake = MagicMock()
-        fake._current_source = current_source
-        fake._webcam_device = webcam_device
-        fake._loopback_video = '/dev/video42'
-        fake._on_switch_video_source = DesktopHw._on_switch_video_source.__get__(fake)
+        fake._video_sources = {'desktop': '/dev/video42'}
+        if webcam_id:
+            fake._video_sources[webcam_id] = '/dev/video0'
+        fake._active_video = active_video
+        fake.root = None
+        fake.select_video_source = MultiAVRobotHardware.select_video_source.__get__(fake)
         return fake
 
-    def test_switch_to_camera_when_available(self):
-        from robonet.buffers.buffer_objects import SwitchVideoSource
-        fake = self._make_fake(current_source='desktop', webcam_device='/dev/video0')
+    def test_switch_to_webcam_when_available(self):
+        fake = self._make_fake(active_video='desktop', webcam_id='webcam:/dev/video0')
 
-        fake._on_switch_video_source('host', SwitchVideoSource(source='camera'))
+        fake.select_video_source('webcam:/dev/video0')
 
         fake._gst_sender.set_source_device.assert_called_once_with('/dev/video0')
-        self.assertEqual(fake._current_source, 'camera')
+        self.assertEqual(fake._active_video, 'webcam:/dev/video0')
 
-    def test_switch_to_camera_when_none_available_is_a_noop(self):
-        from robonet.buffers.buffer_objects import SwitchVideoSource
-        fake = self._make_fake(current_source='desktop', webcam_device=None)
+    def test_switch_to_unknown_id_raises_and_does_not_change_state(self):
+        fake = self._make_fake(active_video='desktop', webcam_id=None)
 
-        fake._on_switch_video_source('host', SwitchVideoSource(source='camera'))
+        with self.assertRaises(KeyError):
+            fake.select_video_source('webcam:/dev/video0')  # not in _video_sources
 
         fake._gst_sender.set_source_device.assert_not_called()
-        self.assertEqual(fake._current_source, 'desktop')  # unchanged
+        self.assertEqual(fake._active_video, 'desktop')  # unchanged
 
-    def test_switch_to_desktop(self):
-        from robonet.buffers.buffer_objects import SwitchVideoSource
-        fake = self._make_fake(current_source='camera', webcam_device='/dev/video0')
+    def test_switch_back_to_desktop(self):
+        fake = self._make_fake(active_video='webcam:/dev/video0', webcam_id='webcam:/dev/video0')
 
-        fake._on_switch_video_source('host', SwitchVideoSource(source='desktop'))
+        fake.select_video_source('desktop')
 
         fake._gst_sender.set_source_device.assert_called_once_with('/dev/video42')
-        self.assertEqual(fake._current_source, 'desktop')
+        self.assertEqual(fake._active_video, 'desktop')
 
     def test_switch_to_same_source_is_a_noop(self):
-        from robonet.buffers.buffer_objects import SwitchVideoSource
-        fake = self._make_fake(current_source='desktop')
+        fake = self._make_fake(active_video='desktop')
 
-        fake._on_switch_video_source('host', SwitchVideoSource(source='desktop'))
+        fake.select_video_source('desktop')
 
         fake._gst_sender.set_source_device.assert_not_called()
 
-
-    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
-    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
-    def test_start_builds_if_not_already_built(self, mock_pactl, mock_parse):
-        mock_pactl.return_value = 'some_device'
-        fake_pipeline = MagicMock()
-        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.SUCCESS
-        mock_parse.return_value = fake_pipeline
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
-
-        with patch('robonet.endpoint.desktop_capture.GLib.MainLoop') as mock_loop_cls, \
-             patch('robonet.endpoint.desktop_capture.threading.Thread') as mock_thread_cls:
-            mock_loop_cls.return_value = MagicMock()
-            mock_thread_cls.return_value = MagicMock()
-            ok = feeder.start()
-
-        self.assertTrue(ok)
-        fake_pipeline.set_state.assert_called_with(dc.Gst.State.PLAYING)
-
-    @patch.object(dc.DesktopAudioFeeder, '_pactl_get', return_value=None)
-    def test_start_returns_false_when_build_fails(self, _pactl):
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
-        self.assertFalse(feeder.start())
-
-    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
-    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
-    def test_start_returns_false_when_state_change_fails(self, mock_pactl, mock_parse):
-        mock_pactl.return_value = 'some_device'
-        fake_pipeline = MagicMock()
-        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.FAILURE
-        mock_parse.return_value = fake_pipeline
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
-
-        self.assertFalse(feeder.start())
-
-    def test_stop_before_start_does_not_raise(self):
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
-        feeder.stop()
-
-    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
-    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
-    def test_stop_after_start_tears_down_pipeline_and_loop(self, mock_pactl, mock_parse):
-        mock_pactl.return_value = 'some_device'
-        fake_pipeline = MagicMock()
-        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.SUCCESS
-        mock_parse.return_value = fake_pipeline
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
-        fake_loop = MagicMock()
-        fake_loop.is_running.return_value = True
-        with patch('robonet.endpoint.desktop_capture.GLib.MainLoop', return_value=fake_loop), \
-             patch('robonet.endpoint.desktop_capture.threading.Thread', return_value=MagicMock()):
-            feeder.start()
-
-        feeder.stop()
-
-        fake_pipeline.set_state.assert_called_with(dc.Gst.State.NULL)
-        fake_loop.quit.assert_called_once()
-        self.assertIsNone(feeder._pipeline)
-        self.assertIsNone(feeder._glib_loop)
 
 
 class TestFeederBusMessageHandling(unittest.TestCase):

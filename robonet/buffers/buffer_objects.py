@@ -87,6 +87,21 @@ def _unpack_uint32_list(d, o):
         vals.append(val)
     return vals, o
 
+def _pack_str_list(v):
+    assert isinstance(v, (list, tuple))
+    parts = [struct.pack('!I', len(v))]
+    for s in v:
+        parts.append(_pack_str(s))
+    return b''.join(parts)
+
+def _unpack_str_list(d, o):
+    n = struct.unpack_from('!I', d, o)[0]; o += 4
+    vals = []
+    for _ in range(n):
+        val, o = _unpack_str(d, o)
+        vals.append(val)
+    return vals, o
+
 def _pack_float32_list(v):
     assert isinstance(v, (list, tuple))
     assert isinstance(v[0], (int, float, np.floating))
@@ -177,6 +192,7 @@ _str_          = (_pack_str,         _unpack_str)
 _bytes_        = (_pack_bytes,       _unpack_bytes)
 _uint32_list   = (_pack_uint32_list, _unpack_uint32_list)
 _float32_list  = (_pack_float32_list,_unpack_float32_list)
+_str_list      = (_pack_str_list,    _unpack_str_list)
 _opt_float3    = (_pack_opt_float3,  _unpack_opt_float3)
 
 _f32_arr       = ndarray_codec(np.float32)
@@ -372,22 +388,68 @@ class IMUBuffer(BufferBase):
 
 
 # ============================================================
-# Desktop client -- remote capture config (server -> client)
+# AV source capability/selection protocol (client <-> server)
+#
+# Generalizes what used to be a single binary SwitchVideoSource
+# (desktop/camera only) into N selectable sources per channel kind:
+# any number of video sources (multiple desktops, multiple cameras),
+# audio inputs (mic, desktop-audio loopback, either one), and audio
+# outputs (multiple speakers). Only one source per kind actually streams
+# at a time for now -- true simultaneous multi-source streaming (e.g.
+# desktop + webcam at once) is a deferred future feature, see
+# needs_fixing.md -- but enumerating and selecting through a real list
+# from the start means that upgrade won't need a wire-protocol change.
 # ============================================================
 
-class SwitchVideoSource(BufferBase):
-    """Server -> desktop client: swap the outgoing video feed.
-
-    source: 'desktop' (virtual-cam desktop capture, the default for
-    desktop-mode endpoints) or 'camera' (the machine's physical webcam,
-    if one is available). Lets a human briefly show their face instead
-    of the screen, then switch back.
+class AVSourcesAnnounce(BufferBase):
+    """Endpoint -> brain: every available source right now, grouped by
+    kind, plus which one (if any) is currently active per kind. Source
+    ids are self-describing strings (e.g. 'desktop:1920x1080',
+    'webcam:/dev/video0', 'mic:builtin', 'speaker:hdmi') -- there's no
+    separate id/label split, the id doubles as the human-readable label
+    shown in the brain's menu. Echo an id back via SelectAVSource to
+    choose it.
     """
-    type_list    = [str]
-    field_codecs = [_str_]
+    type_list    = [List[str], List[str], List[str], str, str, str]
+    field_codecs = [_str_list, _str_list, _str_list, _str_, _str_, _str_]
 
-    def __init__(self, source: str = 'desktop'):
-        self.source = source
+    def __init__(self, video_ids: List[str] = None, audio_in_ids: List[str] = None,
+                audio_out_ids: List[str] = None, active_video_id: str = '',
+                active_audio_in_id: str = '', active_audio_out_id: str = ''):
+        self.video_ids = video_ids if video_ids is not None else []
+        self.audio_in_ids = audio_in_ids if audio_in_ids is not None else []
+        self.audio_out_ids = audio_out_ids if audio_out_ids is not None else []
+        self.active_video_id = active_video_id
+        self.active_audio_in_id = active_audio_in_id
+        self.active_audio_out_id = active_audio_out_id
+
+
+class SelectAVSource(BufferBase):
+    """Brain -> endpoint: switch to this source id for this kind.
+    kind: 'video' | 'audio_in' | 'audio_out'. source_id must be one from
+    the endpoint's most recent AVSourcesAnnounce for that kind.
+    """
+    type_list    = [str, str]
+    field_codecs = [_str_, _str_]
+
+    def __init__(self, kind: str, source_id: str):
+        self.kind = kind
+        self.source_id = source_id
+
+
+class AVSourceError(BufferBase):
+    """Endpoint -> brain: a requested SelectAVSource failed. The
+    endpoint falls back to whatever source was active before the failed
+    request rather than being left with nothing streaming; reverted_to
+    is that fallback id (may be '' if there was nothing to fall back to,
+    e.g. the very first selection failed)."""
+    type_list    = [str, str, str]
+    field_codecs = [_str_, _str_, _str_]
+
+    def __init__(self, kind: str, message: str, reverted_to: str = ''):
+        self.kind = kind
+        self.message = message
+        self.reverted_to = reverted_to
 
 
 class SetInputCropRes(BufferBase):

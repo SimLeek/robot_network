@@ -10,7 +10,7 @@ import numpy as np
 
 from robonet.brain.util.bitmapfont import cols_for_width, wrap_text
 from robonet.brain.util.network_scanner import Endpoint
-from robonet.buffers.buffer_objects import SwitchVideoSource
+from robonet.buffers.buffer_objects import SelectAVSource
 from statemachine import StateChart, State
 from robonet.brain.util.bitmapfont import render_text
 
@@ -28,14 +28,17 @@ class MenuStateMachine(StateChart):
     main_menu     = State(initial=True)
     radio_menu    = State()
     settings_menu = State()
-    robot_menu    = State()
+    capabilities_menu = State()
+    av_sources_menu   = State()
 
     # escape / back
-    leave    = radio_menu.to(main_menu) | settings_menu.to(main_menu) | robot_menu.to(main_menu)
+    leave    = (radio_menu.to(main_menu) | settings_menu.to(main_menu)
+               | capabilities_menu.to(main_menu) | av_sources_menu.to(main_menu))
     # enter / select
-    radio    = main_menu.to(radio_menu)
-    settings = main_menu.to(settings_menu)
-    robot    = main_menu.to(robot_menu)
+    radio        = main_menu.to(radio_menu)
+    settings     = main_menu.to(settings_menu)
+    capabilities = main_menu.to(capabilities_menu)
+    av_sources   = main_menu.to(av_sources_menu)
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +53,9 @@ _DIM   = (120, 120, 120)
 _KEY   = (100, 220, 130)   # axis key binding highlight
 
 _MAIN_ITEMS_BASE = ['Radio', 'Settings']
-_ROBOT_PAGES = ['Axes', 'Streams']
+_CAPS_PAGES = ['Axes', 'Streams']
+_AV_SOURCE_KINDS = ['video', 'audio_in', 'audio_out']
+_AV_SOURCE_KIND_LABELS = {'video': 'Video', 'audio_in': 'Audio In', 'audio_out': 'Audio Out'}
 
 def _fmt_keycode(kc: int) -> str:
     if 32 <= kc < 127:
@@ -115,13 +120,16 @@ class SelectionMenu:
         self._edit_key      = ''
         self._edit_buffer   = ''
 
-        # Robot capabilities state
-        self._robot_caps: Optional[dict] = None   # {'axes': [...], 'streams': [...]}
-        self._robot_page: int = 0                  # index into _ROBOT_PAGES
+        # Endpoint capabilities state (axes/streams) -- generic across
+        # any endpoint type, not robot-specific.
+        self._endpoint_caps: Optional[dict] = None   # {'axes': [...], 'streams': [...]}
+        self._endpoint_page: int = 0                  # index into _CAPS_PAGES
 
-        # Desktop-mode state (camera vs desktop-capture switch)
-        self._is_desktop = False
-        self._desktop_video_source = 'desktop'   # 'desktop' | 'camera'
+        # AV source selection state -- also generic across any endpoint
+        # type that reports AVSourcesAnnounce (any number of video/audio
+        # sources, not a desktop-specific binary toggle).
+        self._av_sources = None   # most recent AVSourcesAnnounce, or None
+        self._av_kind_index: int = 0   # index into _AV_SOURCE_KINDS
 
         # Derived layout constants
         self._ch   = 8 * font_scale + 2   # character row height in pixels
@@ -160,23 +168,22 @@ class SelectionMenu:
         self._status    = msg
         self._status_ts = time.time()
 
-    def set_robot_capabilities(self, caps: dict):
-        self._robot_caps = caps
-        self._robot_page = 0
+    def set_endpoint_capabilities(self, caps: dict):
+        self._endpoint_caps = caps
+        self._endpoint_page = 0
 
-    def set_desktop_mode(self, is_desktop: bool):
-        """Called by MenuSubSystem._connect() so the main menu knows
-        whether to show the camera/desktop-capture switch item."""
-        self._is_desktop = is_desktop
-        if not is_desktop:
-            self._desktop_video_source = 'desktop'  # reset for the next connection
+    def set_av_sources(self, announce):
+        """Called by MenuSubSystem whenever an AVSourcesAnnounce arrives
+        -- any endpoint type that reports sources gets this menu, not
+        just desktop ones."""
+        self._av_sources = announce
+        self._av_kind_index = 0
 
-    def _toggle_desktop_camera(self):
-        self._desktop_video_source = (
-            'camera' if self._desktop_video_source == 'desktop' else 'desktop')
-        if self.root is not None:
-            self.root.radio.burst(SwitchVideoSource(source=self._desktop_video_source))
-        self.set_status(f'Switching video source -> {self._desktop_video_source}')
+    def clear_av_sources(self):
+        """Called on disconnect so a stale announce from a previous
+        endpoint doesn't linger in the menu."""
+        self._av_sources = None
+        self._av_kind_index = 0
 
     def request_sudo(self, description: str):
         self._sudo_desc = description
@@ -208,19 +215,23 @@ class SelectionMenu:
                 return self._handle_radio_key(key)
             elif self.menu_state.settings_menu.is_active:
                 self._handle_settings_key(key)
-            elif self.menu_state.robot_menu.is_active:
-                self._handle_robot_key(key)
+            elif self.menu_state.capabilities_menu.is_active:
+                self._handle_capabilities_key(key)
+            elif self.menu_state.av_sources_menu.is_active:
+                self._handle_av_sources_key(key)
 
         return None
 
     def _main_items(self) -> List[str]:
-        """Main menu items; 'Robot' appears once capabilities are known,
-        'Camera: ...' appears once connected to a desktop endpoint."""
+        """Main menu items; 'Capabilities' appears once axes/streams are
+        known, 'AV Sources' appears once any endpoint has reported
+        selectable video/audio sources -- both generic across endpoint
+        types, not tied to any specific one."""
         items = list(_MAIN_ITEMS_BASE)
-        if self._robot_caps is not None:
-            items.append('Robot')
-        if self._is_desktop:
-            items.append(f'Camera: {self._desktop_video_source}')
+        if self._endpoint_caps is not None:
+            items.append('Capabilities')
+        if self._av_sources is not None:
+            items.append('AV Sources')
         return items
 
     # ------------------------------------------------------------------
@@ -250,11 +261,8 @@ class SelectionMenu:
             self.state = MenuVisState.HIDDEN
         elif key == 'enter':
             label = items[self._cursor]
-            if label.startswith('Camera:'):
-                self._toggle_desktop_camera()
-            else:
-                self.menu_state.send(label.lower())
-                self._cursor = 0  # fresh cursor for the sub-menu
+            self.menu_state.send(label.lower().replace(' ', '_'))
+            self._cursor = 0  # fresh cursor for the sub-menu
 
     # --- radio ---------------------------------------------------------
 
@@ -399,33 +407,74 @@ class SelectionMenu:
         finally:
             self._settings_edit = False
 
-    def _robot_page_items(self) -> List[str]:
-        if self._robot_caps is None:
+    def _capabilities_page_items(self) -> List[str]:
+        if self._endpoint_caps is None:
             return ['[no capabilities received]']
-        if self._robot_page == 0:
-            return [_fmt_axis(a) for a in self._robot_caps.get('axes', [])] or ['[no axes]']
+        if self._endpoint_page == 0:
+            return [_fmt_axis(a) for a in self._endpoint_caps.get('axes', [])] or ['[no axes]']
         else:
-            return [_fmt_stream(s) for s in self._robot_caps.get('streams', [])] or ['[no streams]']
+            return [_fmt_stream(s) for s in self._endpoint_caps.get('streams', [])] or ['[no streams]']
 
-    def _handle_robot_key(self, key: str):
-        n_pages = len(_ROBOT_PAGES)
-        items = self._robot_page_items()
+    def _handle_capabilities_key(self, key: str):
+        n_pages = len(_CAPS_PAGES)
+        items = self._capabilities_page_items()
         n = len(items)
 
         if key == 'escape':
             self.menu_state.send('leave')
             self._cursor = 0
-            self._robot_page = 0
+            self._endpoint_page = 0
         elif key == 'left':
-            self._robot_page = (self._robot_page - 1) % n_pages
+            self._endpoint_page = (self._endpoint_page - 1) % n_pages
             self._cursor = 0
         elif key == 'right':
-            self._robot_page = (self._robot_page + 1) % n_pages
+            self._endpoint_page = (self._endpoint_page + 1) % n_pages
             self._cursor = 0
         elif key == 'up':
             self._cursor = max(0, self._cursor - 1)
         elif key == 'down':
             self._cursor = min(n - 1, self._cursor + 1)
+
+    def _av_source_items(self) -> List[str]:
+        """Items for whichever kind (video/audio_in/audio_out) is
+        currently paged to -- the active source for that kind is
+        marked, any other id can be Enter-selected."""
+        if self._av_sources is None:
+            return ['[no sources announced]']
+        kind = _AV_SOURCE_KINDS[self._av_kind_index]
+        ids = getattr(self._av_sources, f'{kind}_ids', [])
+        active = getattr(self._av_sources, f'active_{kind}_id', '')
+        if not ids:
+            return ['[none available]']
+        return [f'{"[*]" if sid == active else "[ ]"} {sid}' for sid in ids]
+
+    def _handle_av_sources_key(self, key: str):
+        n_kinds = len(_AV_SOURCE_KINDS)
+        items = self._av_source_items()
+        n = len(items)
+
+        if key == 'escape':
+            self.menu_state.send('leave')
+            self._cursor = 0
+            self._av_kind_index = 0
+        elif key == 'left':
+            self._av_kind_index = (self._av_kind_index - 1) % n_kinds
+            self._cursor = 0
+        elif key == 'right':
+            self._av_kind_index = (self._av_kind_index + 1) % n_kinds
+            self._cursor = 0
+        elif key == 'up':
+            self._cursor = max(0, self._cursor - 1)
+        elif key == 'down':
+            self._cursor = min(n - 1, self._cursor + 1)
+        elif key == 'enter' and self._av_sources is not None:
+            kind = _AV_SOURCE_KINDS[self._av_kind_index]
+            ids = getattr(self._av_sources, f'{kind}_ids', [])
+            if 0 <= self._cursor < len(ids):
+                source_id = ids[self._cursor]
+                if self.root is not None:
+                    self.root.radio.burst(SelectAVSource(kind=kind, source_id=source_id))
+                self.set_status(f'Selecting {kind} -> {source_id}')
 
     # ------------------------------------------------------------------
     # Compositing
@@ -541,8 +590,10 @@ class SelectionMenu:
             self._draw_radio_menu(img)
         elif self.menu_state.settings_menu.is_active:
             self._draw_settings_menu(img)
-        elif self.menu_state.robot_menu.is_active:
-            self._draw_robot_menu(img)
+        elif self.menu_state.capabilities_menu.is_active:
+            self._draw_capabilities_menu(img)
+        elif self.menu_state.av_sources_menu.is_active:
+            self._draw_av_sources_menu(img)
 
     def _draw_main_menu(self, img):
         self._draw_centered_list(
@@ -594,25 +645,42 @@ class SelectionMenu:
             display = f'{self._edit_key}: {self._edit_buffer}|'
             self._blit_line(img, edit_y, display, _TITLE)
 
-    def _draw_robot_menu(self, img):
+    def _draw_capabilities_menu(self, img):
         ch = self._ch
 
         # Tab bar: dim inactive pages, bright active
         tab_parts = []
-        for i, name in enumerate(_ROBOT_PAGES):
-            tab_parts.append(f'[{name}]' if i == self._robot_page else f' {name} ')
+        for i, name in enumerate(_CAPS_PAGES):
+            tab_parts.append(f'[{name}]' if i == self._endpoint_page else f' {name} ')
         tab_line = '  '.join(tab_parts)
 
-        items = self._robot_page_items()
-        colors = [_KEY if self._robot_page == 0 else _FG] * len(items)
+        items = self._capabilities_page_items()
+        colors = [_KEY if self._endpoint_page == 0 else _FG] * len(items)
 
         self._draw_centered_list(
             img,
-            title=f'=== ROBOT: {tab_line} ===',
+            title=f'=== CAPABILITIES: {tab_line} ===',
             items=items,
             cursor=self._cursor,
             base_colors=colors,
             footer='[<-/->]=page  [Up/Dn]=scroll  [Esc]=back',
+        )
+
+    def _draw_av_sources_menu(self, img):
+        tab_parts = []
+        for i, kind in enumerate(_AV_SOURCE_KINDS):
+            label = _AV_SOURCE_KIND_LABELS[kind]
+            tab_parts.append(f'[{label}]' if i == self._av_kind_index else f' {label} ')
+        tab_line = '  '.join(tab_parts)
+
+        items = self._av_source_items()
+
+        self._draw_centered_list(
+            img,
+            title=f'=== AV SOURCES: {tab_line} ===',
+            items=items,
+            cursor=self._cursor,
+            footer='[<-/->]=kind  [Up/Dn]=scroll  [Ent]=select  [Esc]=back',
         )
 
     def _draw_sudo(self, img):

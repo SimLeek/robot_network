@@ -90,3 +90,32 @@ system changes -- see each script's own docstring/comments for specifics):
 
 Wifi and localhost connections need no extra one-time setup on the
 endpoint side.
+
+## Shared secret (PSK) setup
+
+Both sides encrypt the control radio with AES-GCM using two pre-shared
+keys that must be **identical on both machines** -- generate them once
+on either machine, then copy both resulting files to both machines (a
+PSK is a shared secret, not something each side generates on its own;
+independently-generated files on each side would just be two different
+keys that can't talk to each other):
+
+```
+python robonet/gen_psk.py   # writes ./psk.key
+```
+
+Run it twice (renaming the output between runs, or moving it aside) to
+get two distinct keys -- `psk_file` and `server_psk_file` are separate
+secrets, both read on both sides. Then place them at:
+
+- Brain: `~/.robobrain/psk.key` and `~/.robobrain/server_psk.key`
+- Endpoint: `~/.robotar/psk.key` and `~/.robotar/server_psk.key`
+
+(paths come from `psk_file`/`server_psk_file` in
+`robonet/brain/settings.py` and `robonet/endpoint/settings.py` --
+override those if you'd rather keep the keys somewhere else). Whichever
+machine you generate them on, get both files onto the other machine
+some way that isn't the network this project itself sets up (scp over
+an existing trusted connection, a USB drive, etc.) before starting
+either side for the first time -- both `robonet.brain.main` and the
+endpoint scripts fail fast at startup if their psk files don't exist.

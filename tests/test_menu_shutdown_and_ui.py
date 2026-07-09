@@ -25,7 +25,7 @@ import numpy as np
 
 from robonet.brain.menu_system import MenuSubSystem
 from robonet.brain.util.selection_menu import SelectionMenu, MenuVisState
-from robonet.buffers.buffer_objects import SwitchVideoSource
+from robonet.buffers.buffer_objects import AVSourcesAnnounce, SelectAVSource
 
 
 class _FakeMenuUI:
@@ -149,69 +149,87 @@ class TestTimeoutLoopTwoTier(unittest.IsolatedAsyncioTestCase):
         menu.root.shutdown.assert_not_called()
 
 
-class TestSelectionMenuCameraSwitch(unittest.TestCase):
+class TestSelectionMenuAvSources(unittest.TestCase):
+    """The generic AV-sources menu that replaced the desktop-specific
+    camera/desktop binary toggle -- applies to any endpoint type that
+    reports AVSourcesAnnounce, not just desktop ones."""
 
-    def test_set_desktop_mode_true_shows_camera_item(self):
+    def _make_announce(self, video_ids=('desktop', 'webcam:/dev/video0'),
+                       active_video='desktop'):
+        return AVSourcesAnnounce(
+            video_ids=list(video_ids), audio_in_ids=['mic'], audio_out_ids=['spk'],
+            active_video_id=active_video, active_audio_in_id='mic', active_audio_out_id='spk')
+
+    def test_set_av_sources_shows_menu_item(self):
         menu = SelectionMenu(width=320, height=240)
-        menu.set_robot_capabilities({'axes': [], 'streams': []})  # so 'Robot' item logic doesn't interfere
-        menu.set_desktop_mode(True)
+        menu.set_av_sources(self._make_announce())
 
         items = menu._main_items()
 
-        self.assertTrue(any(item.startswith('Camera:') for item in items))
+        self.assertIn('AV Sources', items)
 
-    def test_set_desktop_mode_false_hides_camera_item(self):
+    def test_no_announce_hides_menu_item(self):
         menu = SelectionMenu(width=320, height=240)
-        menu.set_desktop_mode(False)
 
         items = menu._main_items()
 
-        self.assertFalse(any(item.startswith('Camera:') for item in items))
+        self.assertNotIn('AV Sources', items)
 
-    def test_set_desktop_mode_false_resets_source_to_desktop(self):
+    def test_clear_av_sources_hides_menu_item_again(self):
         menu = SelectionMenu(width=320, height=240)
-        menu.set_desktop_mode(True)
-        menu._desktop_video_source = 'camera'
+        menu.set_av_sources(self._make_announce())
 
-        menu.set_desktop_mode(False)
+        menu.clear_av_sources()
 
-        self.assertEqual(menu._desktop_video_source, 'desktop')
+        self.assertNotIn('AV Sources', menu._main_items())
 
-    def test_toggle_sends_switch_video_source_burst(self):
+    def test_av_source_items_marks_active_source(self):
+        menu = SelectionMenu(width=320, height=240)
+        menu.set_av_sources(self._make_announce(active_video='webcam:/dev/video0'))
+
+        items = menu._av_source_items()
+
+        self.assertTrue(any(item.startswith('[*]') and 'webcam' in item for item in items))
+        self.assertTrue(any(item.startswith('[ ]') and item.endswith('desktop') for item in items))
+
+    def test_enter_on_source_sends_select_av_source_burst(self):
         menu = SelectionMenu(width=320, height=240)
         menu.root = MagicMock()
-        menu.set_desktop_mode(True)
+        menu.set_av_sources(self._make_announce())
+        menu.menu_state.send('av_sources')
+        menu._cursor = 1  # 'webcam:/dev/video0', the second video id
 
-        menu._toggle_desktop_camera()
+        menu._handle_av_sources_key('enter')
 
         menu.root.radio.burst.assert_called_once()
         sent = menu.root.radio.burst.call_args[0][0]
-        self.assertIsInstance(sent, SwitchVideoSource)
-        self.assertEqual(sent.source, 'camera')
+        self.assertIsInstance(sent, SelectAVSource)
+        self.assertEqual(sent.kind, 'video')
+        self.assertEqual(sent.source_id, 'webcam:/dev/video0')
 
-    def test_toggle_flips_back_and_forth(self):
+    def test_left_right_switches_kind_and_resets_cursor(self):
+        menu = SelectionMenu(width=320, height=240)
+        menu.set_av_sources(self._make_announce())
+        menu.menu_state.send('av_sources')
+        menu._cursor = 1
+
+        menu._handle_av_sources_key('right')
+
+        self.assertEqual(menu._av_kind_index, 1)  # audio_in
+        self.assertEqual(menu._cursor, 0)
+
+    def test_enter_on_main_menu_navigates_to_av_sources_state(self):
         menu = SelectionMenu(width=320, height=240)
         menu.root = MagicMock()
-        menu.set_desktop_mode(True)
-
-        menu._toggle_desktop_camera()
-        self.assertEqual(menu._desktop_video_source, 'camera')
-        menu._toggle_desktop_camera()
-        self.assertEqual(menu._desktop_video_source, 'desktop')
-
-    def test_enter_on_camera_item_toggles_without_changing_menu_state(self):
-        menu = SelectionMenu(width=320, height=240)
-        menu.root = MagicMock()
-        menu.set_desktop_mode(True)
+        menu.set_av_sources(self._make_announce())
         menu.state = MenuVisState.MAIN
         items = menu._main_items()
-        camera_idx = next(i for i, label in enumerate(items) if label.startswith('Camera:'))
-        menu._cursor = camera_idx
+        av_idx = items.index('AV Sources')
+        menu._cursor = av_idx
 
         menu._handle_main_key('enter')
 
-        menu.root.radio.burst.assert_called_once()
-        self.assertEqual(menu.menu_state.current_state.id, 'main_menu')  # did not navigate away
+        self.assertEqual(menu.menu_state.current_state.id, 'av_sources_menu')
 
 
 class TestSelectionMenuWiredModeIndexOffsets(unittest.TestCase):

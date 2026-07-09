@@ -158,11 +158,38 @@ class DesktopVideoFeeder:
         self._width  = width
         self._height = height
         self._fps    = fps
+        # -1/-1 means passthrough: no forced width/height/format at all,
+        # not even yuy2 -- grab exactly what ximagesrc natively produces
+        # and only touch it with numpy if it turns out to carry an
+        # alpha/padding channel, rather than paying for a real
+        # colorspace conversion via videoconvert. Meant to keep the
+        # feeder's own CPU cost as low as possible, which matters more
+        # the slower the link to the brain is (e.g. ethernet vs a fast
+        # local bus).
+        self._passthrough = (width == -1 or height == -1)
         self._pipeline: Optional[Gst.Pipeline] = None
+        self._appsink = None
+        self._appsrc = None
+        self._negotiated = False
         self._glib_loop:   Optional[GLib.MainLoop]    = None
         self._glib_thread: Optional[threading.Thread] = None
 
+    # BGRx/BGRA/RGBx/RGBA/xRGB/ARGB are the common 4-bytes-per-pixel X11
+    # capture formats -- all just "3 real channels + 1 padding/alpha
+    # byte", so dropping the last channel is enough to get a real,
+    # directly-usable 3-channel format back.
+    _ALPHA_FORMAT_TO_RGB = {
+        'BGRx': 'BGR', 'BGRA': 'BGR',
+        'RGBx': 'RGB', 'RGBA': 'RGB',
+        'xRGB': 'BGR', 'ARGB': 'BGR',
+    }
+
     def build(self) -> bool:
+        if self._passthrough:
+            return self._build_passthrough()
+        return self._build_fixed()
+
+    def _build_fixed(self) -> bool:
         desc = (
             f'ximagesrc use-damage=false ! '
             f'video/x-raw,framerate={self._fps}/1 ! '
@@ -176,6 +203,70 @@ class DesktopVideoFeeder:
             log.error(f'[desktop-capture] failed to build video feeder: {e}')
             return False
         return True
+
+    def _build_passthrough(self) -> bool:
+        # Two segments bridged through Python instead of one straight
+        # pipeline: ximagesrc -> appsink (inspect + fix alpha here) and
+        # appsrc -> v4l2sink (push the possibly-fixed frame onward). No
+        # videoconvert, no videoscale, no forced target caps anywhere.
+        desc = (
+            f'ximagesrc use-damage=false ! '
+            f'video/x-raw,framerate={self._fps}/1 ! '
+            f'appsink name=in_sink emit-signals=true max-buffers=2 drop=true sync=false '
+            f'appsrc name=out_src is-live=true format=time block=false ! '
+            f'v4l2sink device={self._loopback_device} sync=false'
+        )
+        try:
+            self._pipeline = Gst.parse_launch(desc)
+        except GLib.Error as e:
+            log.error(f'[desktop-capture] failed to build passthrough video feeder: {e}')
+            return False
+        self._appsink = self._pipeline.get_by_name('in_sink')
+        self._appsrc = self._pipeline.get_by_name('out_src')
+        self._appsink.connect('new-sample', self._on_new_sample)
+        return True
+
+    def _on_new_sample(self, sink):
+        sample = sink.emit('pull-sample')
+        if sample is None:
+            return Gst.FlowReturn.OK
+        buf = sample.get_buffer()
+        struct_ = sample.get_caps().get_structure(0)
+        fmt    = struct_.get_string('format')
+        width  = struct_.get_value('width')
+        height = struct_.get_value('height')
+
+        ok, mapinfo = buf.map(Gst.MapFlags.READ)
+        if not ok:
+            return Gst.FlowReturn.OK
+        try:
+            out_fmt = fmt
+            if fmt in self._ALPHA_FORMAT_TO_RGB and width and height:
+                arr = np.frombuffer(mapinfo.data, dtype=np.uint8)
+                # Tolerate stride padding: only reshape+slice cleanly if
+                # the buffer is exactly width*height*4, otherwise pass
+                # the raw bytes through unmodified rather than risk a
+                # bad reshape crashing the feeder.
+                if arr.size == width * height * 4:
+                    arr = arr.reshape(height, width, 4)[:, :, :3]
+                    out_bytes = np.ascontiguousarray(arr).tobytes()
+                    out_fmt = self._ALPHA_FORMAT_TO_RGB[fmt]
+                else:
+                    out_bytes = bytes(mapinfo.data)
+            else:
+                out_bytes = bytes(mapinfo.data)
+        finally:
+            buf.unmap(mapinfo)
+
+        if not self._negotiated:
+            out_caps = Gst.Caps.from_string(
+                f'video/x-raw,format={out_fmt},width={width},height={height},framerate={self._fps}/1')
+            self._appsrc.set_property('caps', out_caps)
+            self._negotiated = True
+
+        out_buf = Gst.Buffer.new_wrapped(out_bytes)
+        self._appsrc.emit('push-buffer', out_buf)
+        return Gst.FlowReturn.OK
 
     def _on_bus_message(self, _bus, message):
         if message.type == Gst.MessageType.ERROR:
@@ -200,13 +291,17 @@ class DesktopVideoFeeder:
         self._glib_thread = threading.Thread(
             target=self._glib_loop.run, daemon=True, name='desktop-video-feeder-glib')
         self._glib_thread.start()
-        log.info(f'[desktop-capture] video feeder -> {self._loopback_device} started')
+        log.info(f'[desktop-capture] video feeder -> {self._loopback_device} started'
+                 + (' (passthrough)' if self._passthrough else ''))
         return True
 
     def stop(self):
         if self._pipeline:
             self._pipeline.set_state(Gst.State.NULL)
         self._pipeline = None
+        self._appsink = None
+        self._appsrc = None
+        self._negotiated = False
         if self._glib_loop and self._glib_loop.is_running():
             self._glib_loop.quit()
         self._glib_loop = None

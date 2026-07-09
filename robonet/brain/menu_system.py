@@ -107,7 +107,19 @@ class MenuSubSystem(SubSystem):
         self._menu.root = root
         #root.radio.on_endpoint_found = self._on_endpoint_found
         #root.radio.on_endpoint_lost = self._on_endpoint_lost
-        self.handlers = self._gst_receiver.handlers | self._gst_sender.handlers
+        self.handlers = (self._gst_receiver.handlers | self._gst_sender.handlers | {
+            'AVSourcesAnnounce': self._on_av_sources,
+            'AVSourceError': self._on_av_source_error,
+        })
+
+    def _on_av_sources(self, hostname: str, obj):
+        # Generic across any endpoint type that reports sources -- not
+        # tied to a specific SubSystem.
+        self._menu.set_av_sources(obj)
+
+    def _on_av_source_error(self, hostname: str, obj):
+        self._menu.set_status(
+            f'{obj.kind} source error: {obj.message} (using {obj.reverted_to or "none"})')
 
     def start(self):
         self._start_time = time.time()
@@ -198,10 +210,13 @@ class MenuSubSystem(SubSystem):
             sub_cls = RobotSubSystem  # unknown endpoint_type -- historical default
         new_sub = sub_cls(endpoint=ep)
         sm.swap_subsystem(new_sub)
-        self._menu.set_desktop_mode(ep.endpoint_type == 'desktop')
+        # Stale sources from whatever was connected before shouldn't
+        # linger in the menu until this (possibly different) endpoint
+        # sends its own AVSourcesAnnounce, if it ever does.
+        self._menu.clear_av_sources()
 
         if getattr(ep, 'axes', None) or getattr(ep, 'streams', None):
-            self._menu.set_robot_capabilities(
+            self._menu.set_endpoint_capabilities(
                 {'axes': ep.axes, 'streams': ep.streams})
         self._menu.set_status(f'Connected to {ep.hostname or ep.ip} [{ep.endpoint_type}]')
 
