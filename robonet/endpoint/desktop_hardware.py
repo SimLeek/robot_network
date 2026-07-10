@@ -70,8 +70,8 @@ class DesktopHw(MultiAVRobotHardware):
         loopback_video = ensure_v4l2loopback_device()
         loopback_audio_playback, loopback_audio_capture = ensure_alsa_loopback()
         try:
-            webcam_device = find_camera_devices(exclude_device=loopback_video)[0] # todo: allow switching to any camera
-        except KeyError:
+            webcam_device = find_camera_devices(exclude_devices=[loopback_video])[0] # todo: allow switching to any camera
+        except IndexError:
             log.error("Could not find a webcam device. Will be starting without one.")
             webcam_device = None
         video_sources = {DESKTOP_VIDEO_ID: loopback_video}
