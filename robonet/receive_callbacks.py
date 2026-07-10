@@ -165,15 +165,6 @@ class MessageHandler:
         self.reset()
         return False  # non-block
 
-
-# ---------------------------------------------------------------------------
-# unwrap_topic_from_plain_packet and receive_objs (the unencrypted
-# counterparts to unwrap_topic_from_packet/receive_objs_encrypted below)
-# moved to todo/plain_receive_callbacks.py -- confirmed only ever used by
-# the also-relocated todo/run_fft_understanding.py, not anywhere in the
-# active RobotRadio/RadioSubSystem path. See todo/TODO.md.
-# ---------------------------------------------------------------------------
-
 def unwrap_topic_from_packet(server_aesgcm: 'AESGCM', raw: bytes):
     """
     Strip and decrypt the topic prefix.

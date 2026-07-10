@@ -156,27 +156,7 @@ class CamMicSpkRobotHardware(RobotHardware, ABC):
 
 class MultiAVRobotHardware(RobotHardware, ABC):
     """General audio/video endpoint hardware: any number of selectable
-    video sources, audio inputs, and audio outputs, instead of
-    CamMicSpkRobotHardware's fixed one-of-each. Built as a sibling of
-    CamMicSpkRobotHardware (both extend RobotHardware directly), not a
-    subclass of it -- CamMicSpkRobotHardware's single-device model is a
-    real constraint baked into its constructor signature, not something
-    to inherit and route around.
-
-    Only one source per kind actually streams at a time for now --
-    genuinely simultaneous multi-source streaming (e.g. desktop + webcam
-    together) is a deferred future feature, see needs_fixing.md -- but
-    sources are enumerated and selected through AVSourcesAnnounce/
-    SelectAVSource (any number per kind) from the start, so that upgrade
-    won't need a wire-protocol change later.
-
-    video_sources/audio_inputs/audio_outputs: dict[id, device_string].
-    An id is a self-describing string (e.g. 'desktop:1920x1080',
-    'webcam:/dev/video0') that doubles as the human-readable label shown
-    in the brain's menu -- there's no separate label field.
-    active_video/active_audio_in/active_audio_out: which id starts
-    active; defaults to the first entry of each dict if not given.
-    """
+    video sources, audio inputs, and audio outputs."""
 
     def __init__(self,
                 video_sources: Dict[str, str] = None,
@@ -248,9 +228,7 @@ class MultiAVRobotHardware(RobotHardware, ABC):
             self.root.radio.burst(AVSourceError(kind=kind, message=message, reverted_to=reverted_to))
 
     def select_video_source(self, source_id: str):
-        """Switch the active video source. Falls back to the previous
-        one and reports an AVSourceError if the switch itself fails
-        (e.g. the device disappeared between announce and selection)."""
+        """Switch the active video source."""
         if source_id == self._active_video:
             return
         if source_id not in self._video_sources:
@@ -261,16 +239,12 @@ class MultiAVRobotHardware(RobotHardware, ABC):
             self._gst_sender.set_source_device(device)
             self._active_video = source_id
         except Exception:
-            # Best-effort revert -- if this also fails there's nothing
-            # more we can safely do locally; the AVSourceError report
-            # (from the caller) is the operator's signal either way.
             if previous is not None:
                 self._gst_sender.set_source_device(self._video_sources[previous])
             raise
 
     def select_audio_input(self, source_id: str):
-        """Switch the active audio input (mic). Same fallback behavior
-        as select_video_source."""
+        """Switch the active audio input (mic)"""
         if source_id == self._active_audio_in:
             return
         if source_id not in self._audio_inputs:
@@ -286,9 +260,7 @@ class MultiAVRobotHardware(RobotHardware, ABC):
             raise
 
     def select_audio_output(self, source_id: str):
-        """Switch the active audio output (speaker) -- the device
-        received audio gets played directly to. Same fallback behavior
-        as select_video_source."""
+        """Switch the active audio output (speaker)."""
         if source_id == self._active_audio_out:
             return
         if source_id not in self._audio_outputs:

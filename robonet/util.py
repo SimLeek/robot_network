@@ -168,15 +168,6 @@ async def client_unicast_communication(ctx, local_ip, server_ip, callback_loop):
     unicast_dish.close()
     unicast_radio.close()
 
-
-# ---------------------------------------------------------------------------
-# The unencrypted burst-send/PlainRadioEngine cluster that used to live here
-# (send_burst, receive_burst, HEADER_FMT, HEADER_SIZE, make_plain_topic_block,
-# wrap_packet_with_plain_topic, PlainRadioEngine) moved to
-# todo/plain_radio.py -- confirmed unreferenced anywhere in the active
-# RobotRadio/RadioSubSystem path. See todo/TODO.md.
-# ---------------------------------------------------------------------------
-
 # ---------------------------------------------------------------------------
 # Topic envelope (client -> server only)
 # ---------------------------------------------------------------------------

@@ -1,10 +1,7 @@
 """
 robonet/gst_io/receiver_unencrypted.py -- plain RTP receiver (no SRTP).
 
-Drop-in replacement for todo/gst_io/receiver_encrypted.py (moved there --
-unused by the active RobotRadio/RadioSubSystem path, see todo/TODO.md)
-for testing / local-network use. Identical interface; just strips
-srtpdec and plain-RTP caps instead of x-srtp.
+for testing / local-network use. See todo folder for planned encrypted version.
 
 Pipeline graphs:
     Video: udpsrc(caps=x-rtp,pt=96) -> <rtpdepay> -> [parse] -> <decoder>
@@ -486,10 +483,7 @@ class GstReceiver:
         self._ack(obj)
 
     def _build_audio_pipeline(self):
-        """(Re)build the audio receive pipeline from self._info, honoring
-        the current _direct_audio/_audio_device/_recv_audio_callback
-        settings. Shared by on_stream_info() and set_direct_audio() so
-        the decoder-selection loop only lives in one place."""
+        """(Re)build the audio receive pipeline from self._info."""
         if self._info is None or not self._info.audio_codec:
             return
         on_audio = (self._recv_audio_callback
@@ -513,15 +507,7 @@ class GstReceiver:
         log.error('[gst-recv] all audio decoders failed -- no audio will be played')
 
     def set_direct_audio(self, direct_audio: bool, audio_device: Optional[str] = None):
-        """Switch whether received audio plays straight to a device (e.g.
-        a PipeWire virtual device an AI reads via sounddevice, bypassing
-        Python entirely for the audio data itself) instead of only going
-        through recv_audio_callback, and/or which device it plays to.
-        Rebuilds the audio pipeline immediately if a stream is already
-        active (self._info set); otherwise just takes effect the next
-        time on_stream_info() builds one. The video pipeline is
-        untouched either way.
-        """
+        """Switch whether received audio plays straight to a device, and/or which device it plays to."""
         changed = (direct_audio != self._direct_audio
                   or (audio_device is not None and audio_device != self._audio_device))
         if not changed:

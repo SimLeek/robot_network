@@ -120,14 +120,11 @@ class SelectionMenu:
         self._edit_key      = ''
         self._edit_buffer   = ''
 
-        # Endpoint capabilities state (axes/streams) -- generic across
-        # any endpoint type, not robot-specific.
+        # Endpoint capabilities state (axes/streams)
         self._endpoint_caps: Optional[dict] = None   # {'axes': [...], 'streams': [...]}
         self._endpoint_page: int = 0                  # index into _CAPS_PAGES
 
-        # AV source selection state -- also generic across any endpoint
-        # type that reports AVSourcesAnnounce (any number of video/audio
-        # sources, not a desktop-specific binary toggle).
+        # AV source selection state
         self._av_sources = None   # most recent AVSourcesAnnounce, or None
         self._av_kind_index: int = 0   # index into _AV_SOURCE_KINDS
 
@@ -173,15 +170,12 @@ class SelectionMenu:
         self._endpoint_page = 0
 
     def set_av_sources(self, announce):
-        """Called by MenuSubSystem whenever an AVSourcesAnnounce arrives
-        -- any endpoint type that reports sources gets this menu, not
-        just desktop ones."""
+        """Called by MenuSubSystem whenever an AVSourcesAnnounce arrives"""
         self._av_sources = announce
         self._av_kind_index = 0
 
     def clear_av_sources(self):
-        """Called on disconnect so a stale announce from a previous
-        endpoint doesn't linger in the menu."""
+        """Called on disconnect so a stale announce from a previous endpoint doesn't linger in the menu."""
         self._av_sources = None
         self._av_kind_index = 0
 
@@ -223,10 +217,7 @@ class SelectionMenu:
         return None
 
     def _main_items(self) -> List[str]:
-        """Main menu items; 'Capabilities' appears once axes/streams are
-        known, 'AV Sources' appears once any endpoint has reported
-        selectable video/audio sources -- both generic across endpoint
-        types, not tied to any specific one."""
+        """Main menu items."""
         items = list(_MAIN_ITEMS_BASE)
         if self._endpoint_caps is not None:
             items.append('Capabilities')
@@ -436,9 +427,6 @@ class SelectionMenu:
             self._cursor = min(n - 1, self._cursor + 1)
 
     def _av_source_items(self) -> List[str]:
-        """Items for whichever kind (video/audio_in/audio_out) is
-        currently paged to -- the active source for that kind is
-        marked, any other id can be Enter-selected."""
         if self._av_sources is None:
             return ['[no sources announced]']
         kind = _AV_SOURCE_KINDS[self._av_kind_index]

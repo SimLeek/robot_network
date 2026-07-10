@@ -11,111 +11,78 @@ and an encrypted UDP radio for control/telemetry.
 git clone https://github.com/SimLeek/robot_network.git
 cd robot_network
 ./install.sh
+source venv/bin/activate
 ```
 
-`install.sh` runs three scripts in order:
-
-1. **`network_setup.sh`** -- installs GStreamer and its plugins, opens
-   the firewall ports this project uses (9998/9999 for the control
-   radio, 5600-5603 for GStreamer's RTP streams).
-2. **`pyzmq_setup.sh`** -- builds `pyzmq` from source with ZeroMQ's
-   draft API enabled. This is required, not optional: the control radio
-   uses `zmq.DISH`/`zmq.RADIO` sockets, which only exist in draft-API
-   builds. A plain `pip install pyzmq` will not have these and things
-   will fail with a confusing "no such socket type" style error.
-3. **`pip_install_this_package.sh`** -- creates (or reuses) a `./venv`
-   virtual environment with access to system site-packages (needed for
-   `PyGObject`/GStreamer's Python bindings, which are usually installed
-   at the system level, not via pip), then `pip install -e .`.
+`install.sh` installs GStreamer and its plugins and then creates (or reuses) 
+   a `./venv` virtual environment with access to system site-packages
+   (needed for `PyGObject`/GStreamer's Python bindings
 
 Activate that virtual environment (`source venv/bin/activate`) before
 running anything below, in every new shell.
 
 ## Running -- brain side
 
-The brain is the machine a human (or eventually an AI) operates from.
-Run it as a module, from the repo root:
+The brain is the machine a human or AI operates from.
+
+### Human Control
+For human control, run it as a module, from the repo root:
 
 ```
 python -m robonet.brain.main
 ```
 
-This opens a human-facing window (via `displayarray`) showing whatever
+This opens a human-facing window showing whatever
 endpoint you connect to, with an on-screen menu (default toggle:
 Ctrl+`` ` ``) for picking a network mode and endpoint. Settings live at
 `~/.robobrain/settings.json` (see `robonet/brain/settings.py` for
 every key and its default).
 
+### AI Control
+
+A default AI interface hasn't been created yet. 
+It would require modifying main, 
+and then would need to be modified for any specific AIs
+
 ## Running -- endpoint side
 
-Endpoint scripts can be run either as a module or by direct file path --
-both work the same way (each script fixes up `sys.path` itself so its
-`robonet` imports resolve either way):
+The examples directory has several fully implemented example endpoints:
 
 ```
 python -m examples.desktop.desktop_endpoint
-# or, equivalently:
-python examples/desktop/desktop_endpoint.py
 ```
-
 ```
 python -m examples.basicpibot.robot_endpoint
-# or, equivalently:
-python examples/basicpibot/robot_endpoint.py
 ```
 
-Settings live at `~/.robotar/settings.json` (see
+You can either run these as is or modify them for your specific endpoint.
+
+Endpoint settings live at `~/.robotar/settings.json` (see
 `robonet/endpoint/settings.py`).
 
-### One-time setup, depending on how you're connecting
+### One-time Endpoint Setup
 
-These only need to be run once per machine (or again after certain
-system changes -- see each script's own docstring/comments for specifics):
+These usually only need to be run once per machine:
 
-- **Desktop-mode capture** (before the first run of
-  `desktop_endpoint.py` on a given machine): loads the `v4l2loopback`
-  and `snd-aloop` kernel modules used to expose the desktop's
-  screen/audio as a normal-looking webcam and microphone. Needs sudo.
+- **Desktop-mode capture**
   ```
   ./examples/setup_desktop_capture.sh
   ```
 
-- **Wired (direct ethernet cable) connections** (after plugging the
-  cable in, before starting the endpoint script -- or set
-  `auto_wired_setup: true` in `~/.robotar/settings.json` to have the
-  endpoint do this automatically on every startup instead):
+- **Wired (direct ethernet cable) connections**
   ```
   python -m examples.setup_eth_client
   ```
 
-Wifi and localhost connections need no extra one-time setup on the
-endpoint side.
-
 ## Shared secret (PSK) setup
 
-Both sides encrypt the control radio with AES-GCM using two pre-shared
-keys that must be **identical on both machines** -- generate them once
-on either machine, then copy both resulting files to both machines (a
-PSK is a shared secret, not something each side generates on its own;
-independently-generated files on each side would just be two different
-keys that can't talk to each other):
+generate 2 PSKs on either machine, then copy both files to both machines:
 
 ```
 python robonet/gen_psk.py   # writes ./psk.key
 ```
 
-Run it twice (renaming the output between runs, or moving it aside) to
-get two distinct keys -- `psk_file` and `server_psk_file` are separate
-secrets, both read on both sides. Then place them at:
+Rename as needed and place them at:
 
 - Brain: `~/.robobrain/psk.key` and `~/.robobrain/server_psk.key`
 - Endpoint: `~/.robotar/psk.key` and `~/.robotar/server_psk.key`
-
-(paths come from `psk_file`/`server_psk_file` in
-`robonet/brain/settings.py` and `robonet/endpoint/settings.py` --
-override those if you'd rather keep the keys somewhere else). Whichever
-machine you generate them on, get both files onto the other machine
-some way that isn't the network this project itself sets up (scp over
-an existing trusted connection, a USB drive, etc.) before starting
-either side for the first time -- both `robonet.brain.main` and the
-endpoint scripts fail fast at startup if their psk files don't exist.

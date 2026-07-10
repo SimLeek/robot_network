@@ -1,13 +1,9 @@
 """
 robonet/audio_io.py
 
-The audio equivalent of what cam_res/cam_fps already are for video:
-settings that double as "how many neurons does the AI need, and at what
+Settings that double as "how many neurons does the AI need, and at what
 rate." One audio callback block = one neuron vector; the callback fires
-at sample_rate/blocksize Hz. Lives at the top level (like util.py,
-logging_setup.py) since this is plain math, not specific to the brain or
-endpoint side -- whichever side ends up owning the actual virtual-device
-plumbing, both sides can size their blocksize against the same formula.
+at sample_rate/blocksize Hz.
 """
 
 from __future__ import annotations
@@ -33,10 +29,9 @@ def audio_neuron_spec(sample_rate: int, blocksize: int) -> AudioNeuronSpec:
 
 
 def blocksize_for_max_hz(sample_rate: int, max_hz: float) -> int:
-    """The other direction: if the AI can only process up to max_hz
-    callbacks/second, this is the smallest blocksize that keeps the
-    actual callback rate at or under that ceiling (rounds up -- a larger
-    block means a slower, not faster, callback rate)."""
+    """If the AI can only process up to max_hz
+    callbacks/second, then this is the smallest blocksize that keeps the
+    actual callback rate at or under that ceiling."""
     if max_hz <= 0:
         raise ValueError(f'max_hz must be positive, got {max_hz}')
     return math.ceil(sample_rate / max_hz)

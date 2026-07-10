@@ -47,17 +47,13 @@ class ServerSystem:
             self.ai.setup(self)
 
     def register_shutdown_callback(self, cb):
-        """Register a zero-arg callable to run once, in registration
-        order, when the system shuts down (e.g. auto-shutdown when no
-        endpoints are available). Use this to save AI weights, flush
-        logs, etc. before the process exits. A failing callback is
-        logged and does not block the rest from running."""
+        """Register a zero-arg callable to run once upon shut down.
+         Use this to save AI weights, trigger maintenance, etc., before the process exits.
+         A failing callback is logged and does not block the rest from running."""
         self._shutdown_callbacks.append(cb)
 
     def shutdown(self, reason: str = ''):
-        """Run every registered shutdown callback, stop the active
-        subsystem, and unwind the process. Idempotent -- safe to call
-        from more than one watcher without double-running callbacks."""
+        """Run every registered shutdown callback, stop the active subsystem, and unwind the process."""
         if self._shutting_down:
             return
         self._shutting_down = True
@@ -68,11 +64,7 @@ class ServerSystem:
             except Exception:
                 log.exception('[ServerSystem] a shutdown callback failed')
         self.stop()
-        # Hard-stop the process by unwinding main()'s asyncio.gather(), the
-        # same mechanism the old no-endpoints watchdog used (it raised
-        # RuntimeError directly) -- this repo doesn't have a softer
-        # per-task cancellation path yet, so this remains a hard stop, just
-        # one that now runs the callbacks above first.
+        # Hard-stop the process by unwinding main()'s asyncio.gather() since we don't have a soft exit set up yet
         raise SystemExit(0)
 
     def start(self):

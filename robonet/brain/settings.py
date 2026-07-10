@@ -25,34 +25,17 @@ _DEFAULT_ADVANCED_SETTINGS: dict[str, Any] = {
     "adhoc_subnet": "192.168.2.0/24",
     "psk_file" : Path.home() / ".robobrain" / "psk.key",
     "server_psk_file" : Path.home() / ".robobrain" / "server_psk.key",
-
-    # Wired (ethernet) pairing. Same static-address philosophy as adhoc's
-    # wifi hotspot above, just for a direct/point-to-point cable instead
-    # of a wifi AP -- see robonet/wired/util.py.
     "wired_our_ip": "169.254.90.1",
     "wired_subnet": "169.254.90.0/24",
 
-    # Auto-connect on start. Tries each mode in auto_connect_priority in
-    # order -- "localhost" | "wired" | "wifi" -- giving each up to
-    # auto_connect_attempt_timeout seconds to produce a ready, matching
-    # endpoint before moving to the next. Connects to the first matching,
-    # ready endpoint found this way, exactly as if a human had pressed
-    # Enter on it in the menu. Empty list disables this entirely and
-    # falls back to the original startup behavior (localhost_enabled then
-    # check_wifi_connected() fallback, human picks from the menu).
+    # Auto-connect on start. Tries each mode in list order
     "auto_connect_priority": ["localhost", "wired"],
     # endpoint_type filter for the above: "any" | "robot" | "desktop".
     "auto_connect_endpoint_type": "any",
     "auto_connect_attempt_timeout": 20.0,
 
-    # Auto-shutdown when no endpoints are available (see MenuSubSystem.
-    # timeout_loop). Off by default for interactive human use; meant for
-    # unattended/AI runs, same spirit as the pre-existing does_timeout
-    # flag this now drives the default of. Two tiers: shut down fast if
-    # literally nothing has ever been seen (no point waiting), but give a
-    # much longer grace period if something has been seen (or we're
-    # connected) and then goes away -- an AI could still be working
-    # through the menu.
+    # Auto-shutdown when no endpoints are available.
+    # Off by default for interactive human use
     "auto_shutdown_enabled": False,
     "auto_shutdown_no_endpoints_timeout": 30.0,
     "auto_shutdown_idle_timeout": 600.0,

@@ -1,12 +1,8 @@
 """
 robonet/brain/desktop_system.py
 
-Brain-side counterpart to a 'desktop' endpoint (DesktopHw). Forwards the
-human's raw keyboard and mouse input to the connected endpoint as
-KeyEvent/MouseEvent bursts. Unlike RobotSubSystem's sparse axis-vector
-model (keys mapped to declared control axes, polled at a fixed rate),
-desktop control is direct, event-driven pass-through: there is no axis
-mapping, every raw input event becomes one burst.
+Forwards a human's raw keyboard and mouse input to the connected endpoint as
+KeyEvent/MouseEvent bursts.
 """
 
 from __future__ import annotations
@@ -24,13 +20,8 @@ if typing.TYPE_CHECKING:
     from robonet.brain.util.network_scanner import Endpoint
     from robonet.brain.main_system import ServerSystem
 
-# Best-effort GLFW keycode -> pyautogui key name mapping (moderngl-window,
-# which displayarray's input_mgl backend wraps, uses GLFW key constants).
-# Printable ASCII keys (32-126) map directly via chr() and don't need an
-# entry here -- this table only covers the named/non-printable keys.
-# Verify against the actual windowing backend in your environment; this
-# was written from the standard GLFW key constant list, not verified
-# against a live display here.
+# Best-effort GLFW keycode -> pyautogui key name mapping
+# Printable ASCII keys (32-126) map directly via chr() already
 _NAMED_KEY_MAP: Dict[int, str] = {
     256: 'esc', 257: 'enter', 258: 'tab', 259: 'backspace',
     260: 'insert', 261: 'delete',
@@ -52,8 +43,7 @@ _NAMED_KEY_MAP: Dict[int, str] = {
 
 
 def keycode_to_pyautogui(key: int) -> Optional[str]:
-    """Translate a raw window-backend keycode into a pyautogui key name,
-    or None if there's no reasonable mapping (the event is then dropped)."""
+    """Translate a raw window-backend keycode into a pyautogui key name."""
     if key in _NAMED_KEY_MAP:
         return _NAMED_KEY_MAP[key]
     if 32 <= key <= 126:
@@ -65,27 +55,11 @@ def keycode_to_pyautogui(key: int) -> Optional[str]:
 # Printable ASCII key range, matching keycode_to_pyautogui's fallback branch.
 _PRINTABLE_ASCII_COUNT = 126 - 32 + 1  # 95
 
-# The control-interface size an AI would need to fully drive a desktop
-# endpoint, were bind_ai_token/bind_ai_neuron wired up to it -- not done
-# yet, AI control is explicitly the last step for this whole project.
-# This documents the target shape ahead of that work, computed from the
-# actual key table above rather than hand-counted so it can't drift out
-# of sync with it.
-#
-# Each channel has a very different natural rate -- unlike a robot's
-# fixed-Hz polled axis vector, desktop control is event-driven per
-# channel, so Hz is documented per channel rather than as one number for
-# the whole endpoint (a key press and a mouse-move stream don't remotely
-# share a natural rate).
-#
-# For comparison, a robot endpoint's neuron count is len(ep.axes) --
-# already available on any connected Endpoint (see RobotCapabilities),
-# each axis polled uniformly at RobotSubSystem.CTRL_HZ.
 DESKTOP_CONTROL_INTERFACE_SPEC = {
     'keys_press': {
         'count': len(_NAMED_KEY_MAP) + _PRINTABLE_ASCII_COUNT,
         'hz': 'event-driven, not polled -- one token per key-down. '
-             'Human typing rarely exceeds ~10/s; no hard ceiling.',
+             'Human typing rarely exceeds ~10/s.',
     },
     'keys_release': {
         'count': len(_NAMED_KEY_MAP) + _PRINTABLE_ASCII_COUNT,
@@ -113,25 +87,15 @@ DESKTOP_CONTROL_INTERFACE_SPEC = {
 
 def describe_control_interface() -> str:
     """Human-readable summary of DESKTOP_CONTROL_INTERFACE_SPEC, logged
-    when a desktop connection starts so the interface shape is visible
-    without having to go read this file."""
-    lines = ['Desktop control interface (not yet wired to an AI -- human '
-            'pass-through only for now):']
+    when a desktop connection starts so the interface shape is visible."""
+    lines = ['Desktop control interface:']
     for channel, info in DESKTOP_CONTROL_INTERFACE_SPEC.items():
         lines.append(f"  {channel}: {info['count']} -- {info['hz']}")
     return '\n'.join(lines)
 
 
 class DesktopSubSystem(SubSystem):
-    """Server-side desktop counterpart.
-
-    Handshake: identical to RobotSubSystem (handled by RadioSubSystem);
-    this class only takes over once WhoAreYouAck/RobotCapabilities have
-    already completed and MenuSubSystem has swapped it in.
-
-    Control: every raw keyboard/mouse event from the human, forwarded
-    immediately as a KeyEvent or MouseEvent burst. No polling loop.
-    """
+    """Server-side desktop counterpart."""
     _endpoint_type = 'desktop'
 
     def __init__(self, endpoint: 'Endpoint'):
@@ -158,7 +122,7 @@ class DesktopSubSystem(SubSystem):
 
     def _bind_input(self):
         if self._root.displayer is None:
-            return  # AI-driven session: no local human input to forward (yet)
+            return  # AI-direct-only-driven session: no viewer exists to display to
         af = self._root.displayer.af_thru
         af.bind_keyboard(self._on_keyboard)
         af.bind_mouse_move(self._on_mouse_move)
@@ -201,12 +165,6 @@ class DesktopSubSystem(SubSystem):
     def _on_mouse_click(self, x: float, y: float, button: int):
         if self._root.displayer is None or self._root.menu.visible:
             return
-        # ActionFactory's mouse-click callback only fires on button-down --
-        # there is currently no separate release event coming through the
-        # pass-through window config (see desktop_window_config.py). Send
-        # press immediately followed by release so a normal click works;
-        # click-and-drag will need that callback extended to distinguish
-        # down from up before it can work too.
         self._root.radio.burst(MouseEvent(event_type=1, x=int(x), y=int(y), button=int(button), delta=0))
         self._root.radio.burst(MouseEvent(event_type=2, x=int(x), y=int(y), button=int(button), delta=0))
 

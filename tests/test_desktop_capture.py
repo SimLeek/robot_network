@@ -122,17 +122,17 @@ class TestFindRealWebcam(unittest.TestCase):
     @patch('robonet.gst_io.devices.find_camera_devices')
     def test_excludes_own_loopback_device(self, mock_find):
         mock_find.return_value = ['/dev/video42', '/dev/video0']
-        self.assertEqual(dc.find_real_webcam(exclude_device='/dev/video42'), '/dev/video0')
+        self.assertEqual(dc.find_camera_devices(exclude_device='/dev/video42'), '/dev/video0')
 
     @patch('robonet.gst_io.devices.find_camera_devices')
     def test_returns_none_when_only_loopback_present(self, mock_find):
         mock_find.return_value = ['/dev/video42']
-        self.assertIsNone(dc.find_real_webcam(exclude_device='/dev/video42'))
+        self.assertIsNone(dc.find_camera_devices(exclude_device='/dev/video42'))
 
     @patch('robonet.gst_io.devices.find_camera_devices')
     def test_returns_none_when_no_cameras_at_all(self, mock_find):
         mock_find.return_value = []
-        self.assertIsNone(dc.find_real_webcam(exclude_device='/dev/video42'))
+        self.assertIsNone(dc.find_camera_devices(exclude_device='/dev/video42'))
 
 
 class TestDesktopVideoFeederBuild(unittest.TestCase):

@@ -1,16 +1,7 @@
 """
 robonet/wired/util.py
 
-Ethernet interface detection and static-IP setup for wired networking,
-used by RadioSubSystem.NetMode.WIRED (robonet/brain/radio_system.py).
-
-There's no server/client role split the way the adhoc module has one (a
-wifi hotspot's AP side and joining station side genuinely do different
-things) -- both ends of a direct cable just need a static IP in the same
-/24. So there's a single set_wired_static() here that both
-robonet/brain/radio_system.py (brain side, via this module) and
-examples/setup_eth_client.py (endpoint side) call with their own
-respective addresses, rather than two separate implementations.
+Ethernet interface detection and static-IP setup for wired networking.
 """
 
 from __future__ import annotations
@@ -24,9 +15,11 @@ _VIRTUAL_IFACE_PREFIXES = ('docker', 'veth', 'br-', 'virbr', 'tun', 'tap', 'wg')
 
 
 def find_ethernet_interfaces() -> List[str]:
-    """Ethernet-ish interfaces: has a MAC 'address' file, is not loopback,
-    and does not have a 'wireless' subdirectory (the standard way to tell
-    wifi apart from ethernet without needing the `iw` tool)."""
+    """Returns a list of valid ethernet interfaces"""
+
+    # Ethernet-ish interfaces: has a MAC 'address' file, is not loopback,
+    # and does not have a 'wireless' subdirectory (the standard way to tell
+    # wifi apart from ethernet without needing the `iw` tool).
     ifaces = []
     for path in sorted(glob.glob('/sys/class/net/*')):
         name = os.path.basename(path)
@@ -43,10 +36,12 @@ def find_ethernet_interfaces() -> List[str]:
 
 
 def find_connected_ethernet_interface() -> Optional[str]:
-    """First ethernet-ish interface with a cable actually plugged in
-    (carrier=1), or None. Prefer this over find_ethernet_interfaces()[0]
-    when picking one automatically -- an unplugged NIC will never get a
-    peer no matter what IP you put on it."""
+    """Returns the first connected ethernet device"""
+
+    # First ethernet-ish interface with a cable actually plugged in
+    # (carrier=1), or None. Prefer this over find_ethernet_interfaces()[0]
+    # when picking one automatically since we can't connect through an
+    # un-wired wired connection
     for name in find_ethernet_interfaces():
         carrier_path = f'/sys/class/net/{name}/carrier'
         try:
@@ -61,9 +56,7 @@ def find_connected_ethernet_interface() -> Optional[str]:
 
 def set_wired_static(iface: str, ip: str, prefix: int = 24,
                      con_name: str = 'robonet_wired'):
-    """Bring up iface with a fixed static IPv4 address via nmcli. Mirrors
-    adhoc.util.set_hotspot's approach (delete-if-exists, add,
-    modify, up) but for a plain wired link -- no SSID or wifi mode."""
+    """Bring up iface with a fixed static IPv4 address via nmcli."""
     try:
         result = subprocess.run(
             f"nmcli -t -f connection.id con show {con_name}", shell=True,
@@ -87,9 +80,7 @@ def set_wired_static(iface: str, ip: str, prefix: int = 24,
 
 
 def teardown_wired_static(con_name: str = 'robonet_wired'):
-    """Tear down and remove the connection profile set_wired_static()
-    created. Best-effort -- logs rather than raises, since teardown
-    happens during mode switches / shutdown where we'd rather not throw."""
+    """Tear down and remove the connection profile set_wired_static() created."""
     try:
         subprocess.run(f"nmcli con down {con_name}", shell=True,
                        check=True, capture_output=True, text=True)
@@ -108,10 +99,6 @@ def connect_wired(iface: Optional[str] = None, ip: Optional[str] = None,
     interface a static IP in the shared wired subnet, via
     set_wired_static() above, defaulting to the endpoint-side settings
     (robonet/endpoint/settings.py's wired_endpoint_ip/wired_subnet).
-
-    Used by RobotRadio.__init__ (when auto_wired_setup is on) and by
-    examples/setup_eth_client.py, the standalone one-time-setup script
-    for machines that don't want auto_wired_setup running on every boot.
 
     iface: which interface to configure. Auto-detects the first one with
         a cable plugged in if not given.

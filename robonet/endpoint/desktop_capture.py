@@ -1,36 +1,7 @@
 """
 robonet/endpoint/desktop_capture.py
 
-Turns "the X11 desktop and its audio" into a normal-looking webcam + mic,
-so the existing v4l2src/alsasrc based GstSender (streamer_unencrypted.py)
-can send them without any changes to that pipeline code.
-
-How it works
-------------
-Video: a v4l2loopback virtual camera device is created ahead of time by
-       examples/desktop/setup_desktop_capture.sh (one-time, needs sudo).
-       DesktopVideoFeeder runs "ximagesrc ! ... ! v4l2sink" continuously,
-       writing the live desktop into that virtual camera. GstSender then
-       reads from the virtual camera exactly like it would a webcam.
-
-Audio: an ALSA snd-aloop pair is created the same way. Loopback devices
-       come in matched pairs: whatever is played into the "0,0" side can
-       be captured back out of the "1,0" side. DesktopAudioFeeder mixes
-       the desktop's system audio (the default sink's monitor) with the
-       machine's real microphone (if present) and plays that mix into
-       the "0,0" side. GstSender then captures from "1,0" exactly like
-       it would a real microphone.
-
-This module only finds/feeds the devices. It does not create the kernel
-modules or the v4l2loopback device itself -- that needs root once, and is
-handled by the setup script, not silently from here.
-
-Assumes X11 (ximagesrc) and a PulseAudio-compatible sound server (plain
-PulseAudio, or PipeWire's pipewire-pulse, which is the Arch Linux default
-as of this writing). On Wayland, ximagesrc will not see anything; swap it
-for pipewiresrc once portal permission plumbing is worked out. On a
-system with no PulseAudio-compatible socket, the audio feeder logs a
-warning and is skipped -- video-only desktop capture still works.
+Turns an X11 desktop into a normal-looking webcam + mic for v4l2src/alsasrc based GstSender
 """
 
 from __future__ import annotations
@@ -43,6 +14,8 @@ import threading
 from typing import Optional, Tuple
 
 import gi
+import numpy as np
+
 gi.require_version('Gst', '1.0')
 gi.require_version('GLib', '2.0')
 from gi.repository import Gst, GLib
@@ -57,21 +30,16 @@ DESKTOP_CAM_LABEL = 'RobonetDesktopCam'
 
 
 class DesktopCaptureError(Exception):
-    """Raised when a desktop-capture prerequisite (kernel module, device)
-    is missing. Not raised for things that can degrade gracefully, such
-    as no audio server being present.
-    """
+    """Raised when a desktop-capture prerequisite (kernel module, device) is missing."""
     pass
 
 
-# ---------------------------------------------------------------------------
-# Device discovery -- never modprobes or creates devices itself.
-# See examples/desktop/setup_desktop_capture.sh for the one-time root setup.
-# ---------------------------------------------------------------------------
+# ----------------
+# Device discovery
+# ----------------
 
 def find_v4l2loopback_device(label: str = DESKTOP_CAM_LABEL) -> Optional[str]:
-    """Return /dev/videoN for the v4l2loopback device with this card
-    label, or None if it is not loaded."""
+    """Return /dev/videoN for the v4l2loopback device with this card label, or None if it is not loaded."""
     for name_path in sorted(glob.glob('/sys/class/video4linux/video*/name')):
         try:
             with open(name_path, encoding='utf-8') as f:
@@ -86,8 +54,7 @@ def find_v4l2loopback_device(label: str = DESKTOP_CAM_LABEL) -> Optional[str]:
 
 
 def ensure_v4l2loopback_device(label: str = DESKTOP_CAM_LABEL) -> str:
-    """Find the virtual desktop-capture camera device, or raise a clear,
-    actionable error pointing at the one-time setup script."""
+    """Find the virtual desktop-capture camera device."""
     dev = find_v4l2loopback_device(label)
     if dev is not None:
         return dev
@@ -99,8 +66,7 @@ def ensure_v4l2loopback_device(label: str = DESKTOP_CAM_LABEL) -> str:
 
 
 def find_alsa_loopback_card_index() -> Optional[int]:
-    """Return the ALSA card index of the 'Loopback' card (snd-aloop), or
-    None if it is not loaded."""
+    """Return the ALSA card index of the 'Loopback' card (snd-aloop), or None if it is not loaded."""
     cards_file = '/proc/asound/cards'
     if not os.path.exists(cards_file):
         return None
@@ -118,8 +84,7 @@ def find_alsa_loopback_card_index() -> Optional[int]:
 
 
 def ensure_alsa_loopback() -> Tuple[str, str]:
-    """Return (playback_hw, capture_hw) ALSA device strings for the
-    snd-aloop pair, or raise a clear, actionable error."""
+    """Return (playback_hw, capture_hw) ALSA device strings for the snd-aloop pair."""
     idx = find_alsa_loopback_card_index()
     if idx is None:
         raise DesktopCaptureError(
@@ -130,27 +95,12 @@ def ensure_alsa_loopback() -> Tuple[str, str]:
     return f'hw:{idx},0,0', f'hw:{idx},1,0'
 
 
-def find_real_webcam(exclude_device: Optional[str] = None) -> Optional[str]:
-    """Best-effort: find a physical camera that is not our own virtual
-    loopback device, for the 'switch to camera' menu option. Returns
-    None if there is no physical webcam -- switching is then simply
-    unavailable, not an error."""
-    from robonet.gst_io.devices import find_camera_devices
-    for dev in find_camera_devices():
-        if dev != exclude_device:
-            return dev
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Feeder pipelines
 # ---------------------------------------------------------------------------
 
 class DesktopVideoFeeder:
-    """Continuously captures the X11 desktop and writes it into a
-    v4l2loopback device, so the existing v4l2src-based GstSender can pick
-    it up as if it were a normal webcam. Runs its own GLib main loop
-    thread, matching the pattern GstSender/GstReceiver already use."""
+    """Continuously captures the X11 desktop and writes it into a v4l2loopback device"""
 
     def __init__(self, loopback_device: str,
                  width: int = 1920, height: int = 1080, fps: int = 30):
@@ -158,14 +108,6 @@ class DesktopVideoFeeder:
         self._width  = width
         self._height = height
         self._fps    = fps
-        # -1/-1 means passthrough: no forced width/height/format at all,
-        # not even yuy2 -- grab exactly what ximagesrc natively produces
-        # and only touch it with numpy if it turns out to carry an
-        # alpha/padding channel, rather than paying for a real
-        # colorspace conversion via videoconvert. Meant to keep the
-        # feeder's own CPU cost as low as possible, which matters more
-        # the slower the link to the brain is (e.g. ethernet vs a fast
-        # local bus).
         self._passthrough = (width == -1 or height == -1)
         self._pipeline: Optional[Gst.Pipeline] = None
         self._appsink = None
@@ -174,10 +116,7 @@ class DesktopVideoFeeder:
         self._glib_loop:   Optional[GLib.MainLoop]    = None
         self._glib_thread: Optional[threading.Thread] = None
 
-    # BGRx/BGRA/RGBx/RGBA/xRGB/ARGB are the common 4-bytes-per-pixel X11
-    # capture formats -- all just "3 real channels + 1 padding/alpha
-    # byte", so dropping the last channel is enough to get a real,
-    # directly-usable 3-channel format back.
+    # BGRx/BGRA/RGBx/RGBA/xRGB/ARGB are the common 4-bytes-per-pixel X11 capture formats
     _ALPHA_FORMAT_TO_RGB = {
         'BGRx': 'BGR', 'BGRA': 'BGR',
         'RGBx': 'RGB', 'RGBA': 'RGB',
@@ -205,10 +144,8 @@ class DesktopVideoFeeder:
         return True
 
     def _build_passthrough(self) -> bool:
-        # Two segments bridged through Python instead of one straight
-        # pipeline: ximagesrc -> appsink (inspect + fix alpha here) and
-        # appsrc -> v4l2sink (push the possibly-fixed frame onward). No
-        # videoconvert, no videoscale, no forced target caps anywhere.
+        # ximagesrc -> appsink: inspect + fix alpha here
+        # appsrc -> v4l2sink: push the possibly-fixed frame onward
         desc = (
             f'ximagesrc use-damage=false ! '
             f'video/x-raw,framerate={self._fps}/1 ! '
@@ -310,14 +247,7 @@ class DesktopVideoFeeder:
 class DesktopAudioFeeder:
     """Mixes desktop system audio (the default sink's monitor) with the
     machine's real microphone (if present) and writes the result into an
-    ALSA loopback playback device, so the existing alsasrc-based
-    GstSender can capture 'what the desktop hears and says' as if it
-    were a normal microphone.
-
-    Degrades gracefully: if no PulseAudio-compatible sink/source is
-    found, start() returns False and logs a warning rather than raising
-    -- desktop capture continues with video only.
-    """
+    ALSA loopback playback device. """
 
     def __init__(self, loopback_playback_hw: str,
                  sample_rate: int = 48000, include_mic: bool = True):

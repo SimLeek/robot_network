@@ -23,8 +23,7 @@ from robonet.logging_setup import setup_logging
 log = setup_logging()
 settings = settings_.get()
 
-# 'unknown' deliberately not registered -- falls back to RobotSubSystem in
-# _connect(), matching the historical behavior of always using RobotSubSystem.
+# 'unknown' deliberately not registered -- falls back to RobotSubSystem in _connect()
 SubSystem.register('robot', RobotSubSystem)
 SubSystem.register('desktop', DesktopSubSystem)
 
@@ -92,29 +91,23 @@ class MenuSubSystem(SubSystem):
 
     @property
     def gst_sender(self):
-        """The active GstSender -- e.g. for robonet.brain.ai_audio to
-        redirect its mic source to an AI-driven virtual device."""
+        """The active GstSender"""
         return self._gst_sender
 
     @property
     def gst_receiver(self):
-        """The active GstReceiver -- e.g. for robonet.brain.ai_audio to
-        redirect received audio straight to an AI-driven virtual device."""
+        """The active GstReceiver"""
         return self._gst_receiver
 
     def setup(self, root: 'ServerSystem'):
         self.root = root
         self._menu.root = root
-        #root.radio.on_endpoint_found = self._on_endpoint_found
-        #root.radio.on_endpoint_lost = self._on_endpoint_lost
         self.handlers = (self._gst_receiver.handlers | self._gst_sender.handlers | {
             'AVSourcesAnnounce': self._on_av_sources,
             'AVSourceError': self._on_av_source_error,
         })
 
     def _on_av_sources(self, hostname: str, obj):
-        # Generic across any endpoint type that reports sources -- not
-        # tied to a specific SubSystem.
         self._menu.set_av_sources(obj)
 
     def _on_av_source_error(self, hostname: str, obj):
@@ -207,12 +200,9 @@ class MenuSubSystem(SubSystem):
         try:
             sub_cls = SubSystem.for_endpoint_type(ep.endpoint_type)
         except KeyError:
-            sub_cls = RobotSubSystem  # unknown endpoint_type -- historical default
+            sub_cls = RobotSubSystem  # unknown endpoint_type
         new_sub = sub_cls(endpoint=ep)
         sm.swap_subsystem(new_sub)
-        # Stale sources from whatever was connected before shouldn't
-        # linger in the menu until this (possibly different) endpoint
-        # sends its own AVSourcesAnnounce, if it ever does.
         self._menu.clear_av_sources()
 
         if getattr(ep, 'axes', None) or getattr(ep, 'streams', None):
@@ -228,11 +218,10 @@ class MenuSubSystem(SubSystem):
 
     async def timeout_loop(self):
         """While does_timeout is on: shut down fast (no_endpoints_timeout,
-        default 30s) if no endpoint has EVER been seen -- nothing to wait
-        for. Once anything has been seen (an endpoint appeared, or we
-        connected), switch to the much longer idle_timeout (default 10min)
-        for the rest of the run if we later go idle -- an AI or human
-        could still be working through the menu."""
+         default 30s) if no endpoint has ever been seen.
+        Once anything has been seen, switch to the much longer
+         idle_timeout (default 10min) for the rest of the run if we later
+         go idle: an AI or human could still be working through the menu."""
         ever_seen_anything = False
         last_active = time.time()   # 'active' = connected, or an endpoint currently visible
         while self.does_timeout:
@@ -278,12 +267,6 @@ class MenuSubSystem(SubSystem):
         else:
             log.debug("gst img received")
         with self.screen_lock:
-            #if obj.format == 'MJPG':
-            #    img = cv2.imdecode(np.frombuffer(obj.mjpeg, np.uint8), cv2.IMREAD_COLOR)
-            #else:
-            #    img = np.frombuffer(obj.mjpeg, dtype=np.uint8).reshape((obj.h, obj.w, 3))
-            #if obj.w>settings['ai_res'][0] or obj.h>settings['ai_res'][1]:
-            #    img = cv2.resize(image, settings['ai_res'], interpolation=cv2.INTER_NEAREST)
             if img is None:
                 log.error("Received None image.")
             else:

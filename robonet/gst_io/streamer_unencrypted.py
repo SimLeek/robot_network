@@ -1,10 +1,7 @@
 """
 robonet/gst_io/streamer_unencrypted.py -- plain RTP sender (no SRTP).
 
-Drop-in replacement for todo/gst_io/streamer_encrypted.py (moved there --
-unused by the active RobotRadio/RadioSubSystem path, see todo/TODO.md)
-for testing / local-network use. Identical interface; strips srtpenc and
-rtpbin, sends raw RTP directly over UDP.
+for testing / local-network use. See todo folder for planned encrypted version.
 
 Pipeline graphs:
     Video: v4l2src -> videoscale -> capsfilter -> videoconvert -> capsfilter(I420)
@@ -521,11 +518,7 @@ class GstSender:
         return None
 
     def set_source_device(self, device: str):
-        """Switch the v4l2 source device (e.g. desktop-capture loopback cam
-        vs a physical webcam) and restart the video pipeline against it.
-        No-op on the audio pipeline. Safe to call before start() too --
-        the new device just gets used whenever the pipeline first starts.
-        """
+        """Switch the v4l2 source device"""
         if device == self._src_device:
             return
         self._src_device = device
@@ -540,16 +533,7 @@ class GstSender:
                 log.error('[gst] set_source_device: all video encoders failed probe')
 
     def set_mic_device(self, device: str):
-        """Switch the ALSA mic source device and restart the audio
-        pipeline against it. The audio-channel sibling of
-        set_source_device -- e.g. for redirecting from a real human mic
-        to an AI-driven virtual device (a PipeWire loopback an AI writes
-        synthesized audio into via sounddevice; PipeWire's ALSA
-        compatibility layer is what makes it visible here as a normal
-        alsasrc device). No-op on the video pipeline. Safe to call before
-        start() too -- the new device just gets used whenever the
-        pipeline first starts.
-        """
+        """Switch the ALSA mic source device"""
         if device == self._mic_device:
             return
         self._mic_device = device

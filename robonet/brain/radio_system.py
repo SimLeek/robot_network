@@ -171,13 +171,7 @@ class RadioSubSystem(SubSystem):
         elif mode == self.NetMode.WIFI:
             pass   # scanner handles wifi discovery
         elif mode == self.NetMode.WIRED:
-            # Always restrict scanning to the wired subnet in this mode,
-            # cable plugged in or not -- previously this only happened
-            # inside the "iface found" branch below, so with no cable
-            # detected the scanner silently fell back to auto-detecting
-            # every local subnet (wifi included), which makes no sense
-            # once the human has explicitly picked "Wired".
-            self._scanner.set_subnet(self._wired_subnet)
+            self._scanner.set_subnet(self._wired_subnet) # needed so we don't scan the wifi too
             try:
                 from robonet.wired.util import (
                     find_connected_ethernet_interface, set_wired_static)
@@ -398,12 +392,7 @@ class RadioSubSystem(SubSystem):
         return handler
 
     def _maybe_auto_connect(self, ep: Endpoint):
-        """If auto-connect is on (a non-empty priority list) and nothing is
-        connected yet, connect to the first matching, ready endpoint
-        automatically -- the same path a human pressing Enter in the radio
-        menu would take. Fires regardless of which mode is currently
-        active; auto_connect_sequence_loop is what tries each mode in turn
-        to find something for this to fire on in the first place."""
+        """Connect to the first matching, ready endpoint automatically"""
         if not self._auto_connect_priority:
             return
         if self.root is None or self.root.active_sub is not None:
@@ -478,26 +467,14 @@ class RadioSubSystem(SubSystem):
             self._live_handlers.update(sm.active_sub.handlers)
 
     async def _ensure_mode_active(self, mode: NetMode):
-        """Make sure we're actually in `mode` and, for non-localhost modes,
-        actively scanning -- regardless of whether we were already in that
-        mode (switch_mode() alone no-ops in that case, including never
-        having started the scanner on the very first mode of a run)."""
+        """Make sure we're actually in `mode`."""
         if self._mode != mode:
             await self.switch_mode(mode)
         if mode != self.NetMode.LOCALHOST and not self.is_scanning:
             await self.start_scanner_task()
 
     async def auto_connect_sequence_loop(self):
-        """Try each mode in auto_connect_priority in turn, giving each up
-        to auto_connect_attempt_timeout seconds to produce a ready,
-        matching endpoint (via _maybe_auto_connect, which does the actual
-        connecting) before moving to the next. Stops early the moment
-        something connects. Once the list is exhausted without success,
-        stays in the last mode -- scanning keeps running, so a human can
-        still connect manually via the menu, or a late-arriving endpoint
-        (e.g. a cable plugged in after the wired attempt gave up) can still
-        trigger auto-connect on its own. MenuSubSystem.timeout_loop is what
-        eventually shuts things down if nothing ever shows up."""
+        """Try each mode in auto_connect_priority in turn."""
         if not self._auto_connect_priority:
             return
         for mode_name in self._auto_connect_priority:

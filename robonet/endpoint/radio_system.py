@@ -94,14 +94,11 @@ class RobotRadio:
         self._radio_connected = False
         self._server_ip = None
 
-        # Best-effort wired-mode setup: gives this interface a static IP in
-        # the shared subnet (see wired_endpoint_ip/wired_subnet above) so a
+        # Gives this interface a static IP in the shared subnet so a
         # brain side using NetMode.WIRED (or its auto_connect_priority) has
         # something to actually find -- the dish socket binding to 0.0.0.0
         # above still needs the OS to have an address on the interface at
-        # all to route packets to it. Opt-in and non-fatal: most endpoints
-        # don't use wired mode, and a missing cable or nmcli failure here
-        # must never prevent listening on whatever other interfaces exist.
+        # all to route packets to it.
         if settings["auto_wired_setup"]:
             try:
                 from robonet.wired.util import connect_wired

@@ -2,12 +2,7 @@
 
 # One-time setup for desktop-mode capture: loads the v4l2loopback (virtual
 # camera) and snd-aloop (ALSA loopback) kernel modules, and makes both
-# persistent across reboots. Needs sudo. Run this once before using
-# examples/desktop/desktop_endpoint.py.
-#
-# Run ../../network_setup.sh first (or make sure gstreamer + gst-plugins-good
-# are already installed) -- this script only handles the two extra kernel
-# modules desktop capture needs, not the base gstreamer stack.
+# persistent across reboots. Needs sudo.
 
 set -e
 
@@ -72,8 +67,6 @@ echo "snd-aloop" | sudo tee /etc/modules-load.d/snd-aloop-robonet.conf > /dev/nu
 echo "Loading modules now (this also happens automatically on next boot)..."
 # Unload first in case it's already loaded with different options from an
 # earlier run of this script (e.g. a different video_nr). Fails harmlessly
-# if the device is currently in use -- stop desktop_endpoint.py and re-run
-# this script if you need to change video_nr or the label.
 sudo modprobe -r v4l2loopback 2> /dev/null || true
 sudo modprobe v4l2loopback video_nr=$DESKTOP_CAM_VIDEO_NR card_label="$DESKTOP_CAM_LABEL" exclusive_caps=1
 sudo modprobe snd-aloop

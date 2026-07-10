@@ -1,18 +1,7 @@
 """
 robonet/endpoint/desktop_hardware.py
 
-DesktopHw: the 'desktop' analog of MasterPiHw
-(examples/basicpibot/robot_endpoint.py). Instead of driving robot motors,
-it feeds this machine's own screen/audio out as a camera/mic stream (via
-desktop_capture.py's feeders and a v4l2loopback + ALSA-loopback pair) and
-replays keyboard/mouse events received from the brain via pyautogui, so
-the brain can remote-control this machine.
-
-Built on MultiAVRobotHardware (any number of video/audio sources)
-instead of CamMicSpkRobotHardware (fixed one of each) -- a desktop
-machine naturally has more than one plausible video source (the desktop
-capture, plus a real webcam if one exists) and this doesn't need to be a
-special case bolted onto a single-source class.
+Handles typical desktop hardware such as screens, mics, speakers, keyboards, and mice
 """
 
 from __future__ import annotations
@@ -25,34 +14,31 @@ import numpy as np
 from robonet.buffers.buffer_objects import KeyEvent, MouseEvent, RobotCapabilities
 from robonet.endpoint.desktop_capture import (
     DesktopVideoFeeder, DesktopAudioFeeder,
-    ensure_v4l2loopback_device, ensure_alsa_loopback, find_real_webcam,
+    ensure_v4l2loopback_device, ensure_alsa_loopback,
     DesktopCaptureError,
 )
 from robonet.endpoint.hardware_system import MultiAVRobotHardware
 from robonet.endpoint.radio_system import HOSTNAME
-from robonet.gst_io.devices import get_first_speaker_device, DeviceNotFoundError
+from robonet.gst_io.devices import find_camera_devices, get_first_speaker_device, DeviceNotFoundError
 
 log = logging.getLogger(__name__)
 
-# pyautogui (via its mouseinfo submodule) connects to X at import time, so
-# it hard-crashes on import in any process without a live, connectable
-# DISPLAY -- e.g. a systemd --user service started before the X session is
-# up, or this module simply being imported for testing. Caught like this,
-# the module itself stays importable either way; DesktopHw.__init__ raises
-# a clear DesktopCaptureError instead of a cryptic Xlib traceback if it's
-# actually needed and unavailable.
+# pyautogui (via its mouseinfo submodule) hard-crashes on import in any
+# process without a live, connectable DISPLAY -- e.g. a systemd --user service
+# started before the X session is up, or some testing.
 _PYAUTOGUI_IMPORT_ERROR = None
 try:
     import pyautogui
     # pyautogui adds a 0.1s pause after every single call by default --
-    # much too slow for interactive remote control. We're already
-    # rate-limited by incoming network events, not a tight loop, so this
-    # is safe to zero.
+    # Too slow for interactive remote control.
     pyautogui.PAUSE = 0.0
-    # FAILSAFE stays on (pyautogui default): dragging the physical mouse
-    # into a screen corner is a free physical kill-switch for whoever is
-    # sitting at this machine. We catch the exception it raises below
-    # rather than letting it crash the endpoint process.
+    pyautogui.FAILSAFE = False
+    # Most of the connected machines don't have another interface anyway
+    # so moving the mouse to the corner to end pyautogui is a confusing glitch
+    # and is nearly impossible to do anyway in practice when the mouse
+    # is controlled by an active script
+    # For a better failsafe: disconnect the wifi, eth, or if autostart
+    # and localhost are set up, use a rescue disk to turn those off.
 except Exception as _e:
     pyautogui = None
     _PYAUTOGUI_IMPORT_ERROR = _e
@@ -64,24 +50,11 @@ DESKTOP_AUDIO_IN_ID = 'desktop-audio'
 
 
 def build_desktop_capabilities() -> RobotCapabilities:
-    """Desktop endpoints don't use the axis/key-binding control model
-    robot endpoints use -- input is raw pass-through (KeyEvent/MouseEvent),
-    so axes stays empty. Streams are still auto-populated the normal way
-    once GstStreamInfo goes out, so nothing needed here either."""
     return RobotCapabilities.build(axes=[], streams=[], hostname=HOSTNAME, endpoint_type='desktop')
 
 
 class DesktopHw(MultiAVRobotHardware):
-    """Endpoint hardware for 'desktop mode': streams the screen and audio
-    out, and replays received keyboard/mouse events via pyautogui.
-
-    Video sources offered: the desktop capture itself, plus a real
-    webcam if one is found (excluding the virtual loopback device we
-    create for the desktop capture, so it's never mistaken for a second
-    real camera). Audio input offered: the desktop-audio/mic mix feeder
-    already builds. Audio output offered: a real speaker, if one is
-    found, for the brain's own audio to play back to.
-    """
+    """Streams the screen and audio out, and replays received keyboard/mouse events via pyautogui."""
 
     def __init__(self,
                 capture_width: int = -1, capture_height: int = -1,
@@ -96,8 +69,11 @@ class DesktopHw(MultiAVRobotHardware):
             )
         loopback_video = ensure_v4l2loopback_device()
         loopback_audio_playback, loopback_audio_capture = ensure_alsa_loopback()
-
-        webcam_device = find_real_webcam(exclude_device=loopback_video)
+        try:
+            webcam_device = find_camera_devices(exclude_device=loopback_video)[0] # todo: allow switching to any camera
+        except KeyError:
+            log.error("Could not find a webcam device. Will be starting without one.")
+            webcam_device = None
         video_sources = {DESKTOP_VIDEO_ID: loopback_video}
         if webcam_device:
             video_sources[f'webcam:{webcam_device}'] = webcam_device
@@ -111,21 +87,6 @@ class DesktopHw(MultiAVRobotHardware):
         except DeviceNotFoundError:
             log.error("Could not find a speaker device. Will be starting without one.")
 
-        # Two separate resolutions, on purpose:
-        #  - capture_width/height/fps (here) is how big a frame the feeder
-        #    grabs off the real X11 desktop into the *loopback* device --
-        #    -1/-1 (the default) means passthrough: no forced size/format
-        #    at all, see DesktopVideoFeeder.
-        #  - settings['cam_res']/['cam_fps'] (read inside
-        #    MultiAVRobotHardware.__init__, untouched here) is what
-        #    GstSender actually *transmits* -- its existing v4l2src ->
-        #    videoscale chain downscales from whatever the loopback
-        #    device provides down to cam_res on its own, same as it
-        #    would for a real webcam. Its small default (640x480) is
-        #    intentional, not a bug: most AI consumers can't usefully
-        #    handle 1920x1080@30fps, and it's the setting a human would
-        #    already know to raise for their own viewing if they want
-        #    more detail transmitted. Do not override it here.
         super().__init__(video_sources=video_sources, audio_inputs=audio_inputs,
                          audio_outputs=audio_outputs, sample_rate=48000)
 
@@ -139,10 +100,7 @@ class DesktopHw(MultiAVRobotHardware):
 
     def setup(self, parent):
         super().setup(parent)
-        # Hardware always needs to be running, independent of whether a
-        # server ever connects -- matches MasterPiHw's philosophy, and
-        # matches "keep running in the background" from how this is meant
-        # to be used.
+        # Hardware always needs to be running, independent of whether a server ever connects
         self._video_feeder.start()
         self._audio_feeder.start()
         log.info(f'Desktop hardware started (video source: {self._active_video})')
@@ -218,9 +176,7 @@ class DesktopHw(MultiAVRobotHardware):
         super().stop()
 
     def apply_tensor(self, idx_vec: np.ndarray, val_vec: np.ndarray):
-        # Desktop endpoints are controlled via raw KeyEvent/MouseEvent, not
-        # the sparse axis-tensor model robot endpoints use. Nothing to do,
-        # but the base class requires this method to exist.
+        # The base class requires this method to exist.
         if len(idx_vec):
             log.debug(f'DesktopHw.apply_tensor called with {len(idx_vec)} entries -- ignored '
                      '(desktop control uses KeyEvent/MouseEvent, not SparseVectorBuffer)')

@@ -389,27 +389,10 @@ class IMUBuffer(BufferBase):
 
 # ============================================================
 # AV source capability/selection protocol (client <-> server)
-#
-# Generalizes what used to be a single binary SwitchVideoSource
-# (desktop/camera only) into N selectable sources per channel kind:
-# any number of video sources (multiple desktops, multiple cameras),
-# audio inputs (mic, desktop-audio loopback, either one), and audio
-# outputs (multiple speakers). Only one source per kind actually streams
-# at a time for now -- true simultaneous multi-source streaming (e.g.
-# desktop + webcam at once) is a deferred future feature, see
-# needs_fixing.md -- but enumerating and selecting through a real list
-# from the start means that upgrade won't need a wire-protocol change.
 # ============================================================
 
 class AVSourcesAnnounce(BufferBase):
-    """Endpoint -> brain: every available source right now, grouped by
-    kind, plus which one (if any) is currently active per kind. Source
-    ids are self-describing strings (e.g. 'desktop:1920x1080',
-    'webcam:/dev/video0', 'mic:builtin', 'speaker:hdmi') -- there's no
-    separate id/label split, the id doubles as the human-readable label
-    shown in the brain's menu. Echo an id back via SelectAVSource to
-    choose it.
-    """
+    """Endpoint -> brain: every available source right now."""
     type_list    = [List[str], List[str], List[str], str, str, str]
     field_codecs = [_str_list, _str_list, _str_list, _str_, _str_, _str_]
 
@@ -426,8 +409,7 @@ class AVSourcesAnnounce(BufferBase):
 
 class SelectAVSource(BufferBase):
     """Brain -> endpoint: switch to this source id for this kind.
-    kind: 'video' | 'audio_in' | 'audio_out'. source_id must be one from
-    the endpoint's most recent AVSourcesAnnounce for that kind.
+    kind: 'video' | 'audio_in' | 'audio_out'.
     """
     type_list    = [str, str]
     field_codecs = [_str_, _str_]
@@ -438,11 +420,7 @@ class SelectAVSource(BufferBase):
 
 
 class AVSourceError(BufferBase):
-    """Endpoint -> brain: a requested SelectAVSource failed. The
-    endpoint falls back to whatever source was active before the failed
-    request rather than being left with nothing streaming; reverted_to
-    is that fallback id (may be '' if there was nothing to fall back to,
-    e.g. the very first selection failed)."""
+    """Endpoint -> brain: a requested SelectAVSource failed."""
     type_list    = [str, str, str]
     field_codecs = [_str_, _str_, _str_]
 
