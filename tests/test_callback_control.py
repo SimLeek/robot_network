@@ -378,7 +378,8 @@ class TestDesktopSubSystemLifecycle(unittest.TestCase):
         self.assertTrue(sub._bound)
         sub._root.displayer.af_thru.bind_keyboard.assert_called_once_with(sub._on_keyboard)
         sub._root.displayer.af_thru.bind_mouse_move.assert_called_once_with(sub._on_mouse_move)
-        sub._root.displayer.af_thru.bind_mouse_click.assert_called_once_with(sub._on_mouse_click)
+        sub._root.displayer.af_thru.bind_mouse_press.assert_called_once_with(sub._on_mouse_press)
+        sub._root.displayer.af_thru.bind_mouse_release.assert_called_once_with(sub._on_mouse_release)
         sub._root.displayer.af_thru.bind_mouse_scroll.assert_called_once_with(sub._on_mouse_scroll)
 
     def test_bind_input_noop_for_ai_driven_session(self):
@@ -402,7 +403,8 @@ class TestDesktopSubSystemLifecycle(unittest.TestCase):
         self.assertFalse(sub._bound)
         sub._root.displayer.af_thru.unbind_keyboard.assert_called_once()
         sub._root.displayer.af_thru.unbind_mouse_move.assert_called_once()
-        sub._root.displayer.af_thru.unbind_mouse_click.assert_called_once()
+        sub._root.displayer.af_thru.unbind_mouse_press.assert_called_once()
+        sub._root.displayer.af_thru.unbind_mouse_release.assert_called_once()
         sub._root.displayer.af_thru.unbind_mouse_scroll.assert_called_once()
 
     def test_unbind_when_never_bound_is_a_noop(self):
@@ -513,21 +515,32 @@ class TestDesktopSubSystemMouseForwarding(unittest.TestCase):
         sub._on_mouse_move(1, 2)
         sub._root.radio.burst.assert_not_called()
 
-    def test_click_sends_press_then_release(self):
+    def test_press_sends_event_type_1(self):
         sub = self._make_sub()
 
-        sub._on_mouse_click(5, 6, 0)
+        sub._on_mouse_press(5, 6, 0)
 
-        self.assertEqual(sub._root.radio.burst.call_count, 2)
-        press, release = [c.args[0] for c in sub._root.radio.burst.call_args_list]
-        self.assertEqual(press.event_type, 1)
-        self.assertEqual(release.event_type, 2)
-        self.assertEqual((press.x, press.y), (5, 6))
-        self.assertEqual((release.x, release.y), (5, 6))
+        sub._root.radio.burst.assert_called_once()
+        sent = sub._root.radio.burst.call_args[0][0]
+        self.assertEqual((sent.event_type, sent.x, sent.y), (1, 5, 6))
 
-    def test_click_suppressed_while_menu_open(self):
+    def test_release_sends_event_type_2(self):
+        sub = self._make_sub()
+
+        sub._on_mouse_release(5, 6, 0)
+
+        sub._root.radio.burst.assert_called_once()
+        sent = sub._root.radio.burst.call_args[0][0]
+        self.assertEqual((sent.event_type, sent.x, sent.y), (2, 5, 6))
+
+    def test_press_suppressed_while_menu_open(self):
         sub = self._make_sub(menu_visible=True)
-        sub._on_mouse_click(5, 6, 0)
+        sub._on_mouse_press(5, 6, 0)
+        sub._root.radio.burst.assert_not_called()
+
+    def test_release_suppressed_while_menu_open(self):
+        sub = self._make_sub(menu_visible=True)
+        sub._on_mouse_release(5, 6, 0)
         sub._root.radio.burst.assert_not_called()
 
     def test_scroll_sends_event_type_3_with_delta(self):

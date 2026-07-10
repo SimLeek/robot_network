@@ -1,7 +1,7 @@
 """
 tests/test_setup_desktop_capture_sh.py
 
-Dry-run tests for examples/desktop/setup_desktop_capture.sh: static
+Dry-run tests for examples/setup_desktop_capture.sh: static
 checks (bash -n, shellcheck if available) plus an actual execution of
 the script's control flow with pacman/paru/apt-get/sudo/tee/modprobe/
 pactl/dpkg/command all replaced by logging stubs on a fake PATH, so we

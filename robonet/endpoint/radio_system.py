@@ -39,6 +39,13 @@ class RobotState(StateMachine):
 
     who_are_you_received = listening.to(greeting)
 
+    # A previous brain session can die at any point after greeting --
+    # a fresh WhoAreYou from a new session should restart the handshake
+    # rather than being refused because we're stuck waiting on a session
+    # that no longer exists.
+    restart_handshake = (greeting_acknowledged.to(greeting) | explaining.to(greeting)
+                         | explaining_acknowledged.to(greeting) | streaming.to(greeting))
+
     ack_received = greeting.to(greeting_acknowledged)
 
     what_are_your_capabilities_received = greeting_acknowledged.to(explaining)
@@ -94,18 +101,14 @@ class RobotRadio:
         self._radio_connected = False
         self._server_ip = None
 
-        # Gives this interface a static IP in the shared subnet so a
-        # brain side using NetMode.WIRED (or its auto_connect_priority) has
-        # something to actually find -- the dish socket binding to 0.0.0.0
-        # above still needs the OS to have an address on the interface at
-        # all to route packets to it.
+        # Static IP on the shared wired subnet, for NetMode.WIRED.
         if settings["auto_wired_setup"]:
             try:
                 from robonet.wired.util import connect_wired
                 wired_iface = connect_wired()
                 log.info("wired static IP configured on %s", wired_iface)
             except Exception as e:
-                log.info("wired auto-setup skipped: %s", e)
+                log.info("wired auto-setup skipped: %s -- try examples/setup_eth_client.py", e)
 
     def setup(self, parent: 'RobotNode'):
         self.root = parent
@@ -140,7 +143,6 @@ class RobotRadio:
 
     def _on_who_are_you(self, hostname: str, obj: WhoAreYou):
         log.info("Received who are you")
-        current = self._sm.current_state_value
 
         if not self._radio_connected and obj.ip:
             self._server_ip = obj.ip
@@ -148,14 +150,14 @@ class RobotRadio:
             self._radio.connect(f'udp://{obj.ip}:{settings["their_port"]}')
             self._radio_connected = True
             log.info(f"[radio] learned IP {obj.ip} from WhoAreYou")
-        if self._radio_connected: # no point in sending if we can't talk
+        if self._radio_connected:  # no point in sending if we can't talk
             if self._sm.listening.is_active:
                 self._sm.who_are_you_received()
-                self.burst(WhoAreYou(hostname=HOSTNAME, endpoint_type=self.endpoint_type))
-            elif self._sm.greeting.is_active:
-                self.burst(WhoAreYou(hostname=HOSTNAME, endpoint_type=self.endpoint_type))
-            else:
-                log.error(f"WhoAreYou request received while in {current} state")
+            elif not self._sm.greeting.is_active:
+                # A previous brain session died somewhere past greeting;
+                # this WhoAreYou is a new session starting fresh.
+                self._sm.restart_handshake()
+            self.burst(WhoAreYou(hostname=HOSTNAME, endpoint_type=self.endpoint_type))
 
 
     def _on_who_are_you_ack(self, hostname: str, obj: WhoAreYouAck):

@@ -188,6 +188,9 @@ class RadioSubSystem(SubSystem):
                     print(f'[radio] wired up on {iface} ({ip}), probing...')
             except Exception as e:
                 print(f'[radio] wired setup failed: {e}')
+                if self.root is not None:
+                    self.root.menu.set_status(
+                        'Wired setup failed -- try examples/setup_eth_server.py')
         elif mode == self.NetMode.ADHOC:
             try:
                 from robonet.buffers.buffer_objects import WifiSetupInfo
@@ -383,6 +386,7 @@ class RadioSubSystem(SubSystem):
                 #ep = self._endpoints.get(obj.hostname + ':' + obj.endpoint_type)
                 ep.axes = obj.axes()
                 ep.streams = obj.streams()
+            ep.capabilities_received = True
             log.info(f"capabilities received: {ep.axes}, {ep.streams}")
             self._endpoints[obj.hostname+':'+obj.endpoint_type] = ep  # ensure we have the axes and streams
             all_endpoints = self._endpoints | self._scanner.by_hostname | self._scanner.by_ip
@@ -397,8 +401,8 @@ class RadioSubSystem(SubSystem):
             return
         if self.root is None or self.root.active_sub is not None:
             return  # already connected to something
-        if not (ep.axes or ep.streams):
-            return  # not ready yet -- matches the menu's own readiness gate
+        if not ep.capabilities_received:
+            return
         wanted = self._auto_connect_endpoint_type
         if wanted != 'any' and ep.endpoint_type != wanted:
             return

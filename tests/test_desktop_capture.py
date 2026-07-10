@@ -3,7 +3,7 @@ tests/test_desktop_capture.py
 
 Tests robonet/endpoint/desktop_capture.py:
   - Device discovery (find_v4l2loopback_device, find_alsa_loopback_card_index,
-    ensure_*, find_real_webcam) against a mocked filesystem -- no real
+    ensure_*) against a mocked filesystem -- no real
     v4l2loopback/snd-aloop devices needed.
   - DesktopVideoFeeder/DesktopAudioFeeder pipeline construction against a
     mocked Gst.parse_launch, asserting on the actual pipeline description
@@ -115,24 +115,6 @@ class TestEnsureAlsaLoopback(unittest.TestCase):
         with self.assertRaises(dc.DesktopCaptureError) as ctx:
             dc.ensure_alsa_loopback()
         self.assertIn('setup_desktop_capture.sh', str(ctx.exception))
-
-
-class TestFindRealWebcam(unittest.TestCase):
-
-    @patch('robonet.gst_io.devices.find_camera_devices')
-    def test_excludes_own_loopback_device(self, mock_find):
-        mock_find.return_value = ['/dev/video42', '/dev/video0']
-        self.assertEqual(dc.find_camera_devices(exclude_device='/dev/video42'), '/dev/video0')
-
-    @patch('robonet.gst_io.devices.find_camera_devices')
-    def test_returns_none_when_only_loopback_present(self, mock_find):
-        mock_find.return_value = ['/dev/video42']
-        self.assertIsNone(dc.find_camera_devices(exclude_device='/dev/video42'))
-
-    @patch('robonet.gst_io.devices.find_camera_devices')
-    def test_returns_none_when_no_cameras_at_all(self, mock_find):
-        mock_find.return_value = []
-        self.assertIsNone(dc.find_camera_devices(exclude_device='/dev/video42'))
 
 
 class TestDesktopVideoFeederBuild(unittest.TestCase):
@@ -458,7 +440,7 @@ class TestDesktopHwConstruction(unittest.TestCase):
                   return_value='/dev/video42'), \
              patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
                   return_value=('hw:1,0,0', 'hw:1,1,0')), \
-             patch('robonet.endpoint.desktop_hardware.find_real_webcam', return_value=None), \
+             patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=[]), \
              patch('robonet.endpoint.desktop_hardware.get_first_speaker_device',
                   return_value='hw:0,0'):
             from robonet.endpoint.desktop_hardware import DesktopHw
@@ -521,7 +503,7 @@ class TestDesktopHwConstruction(unittest.TestCase):
                   return_value='/dev/video42'), \
              patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
                   return_value=('hw:1,0,0', 'hw:1,1,0')), \
-             patch('robonet.endpoint.desktop_hardware.find_real_webcam', return_value='/dev/video0'), \
+             patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=['/dev/video0']), \
              patch('robonet.endpoint.desktop_hardware.get_first_speaker_device',
                   return_value='hw:0,0'):
             from robonet.endpoint.desktop_hardware import DesktopHw
@@ -536,7 +518,7 @@ class TestDesktopHwConstruction(unittest.TestCase):
                   return_value='/dev/video42'), \
              patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
                   return_value=('hw:1,0,0', 'hw:1,1,0')), \
-             patch('robonet.endpoint.desktop_hardware.find_real_webcam', return_value=None), \
+             patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=[]), \
              patch('robonet.endpoint.desktop_hardware.get_first_speaker_device',
                   side_effect=DeviceNotFoundError('no speaker')):
             from robonet.endpoint.desktop_hardware import DesktopHw

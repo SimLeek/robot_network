@@ -126,7 +126,8 @@ class DesktopSubSystem(SubSystem):
         af = self._root.displayer.af_thru
         af.bind_keyboard(self._on_keyboard)
         af.bind_mouse_move(self._on_mouse_move)
-        af.bind_mouse_click(self._on_mouse_click)
+        af.bind_mouse_press(self._on_mouse_press)
+        af.bind_mouse_release(self._on_mouse_release)
         af.bind_mouse_scroll(self._on_mouse_scroll)
         self._bound = True
 
@@ -136,7 +137,8 @@ class DesktopSubSystem(SubSystem):
         af = self._root.displayer.af_thru
         af.unbind_keyboard()
         af.unbind_mouse_move()
-        af.unbind_mouse_click()
+        af.unbind_mouse_press()
+        af.unbind_mouse_release()
         af.unbind_mouse_scroll()
         self._bound = False
 
@@ -162,10 +164,14 @@ class DesktopSubSystem(SubSystem):
             return
         self._root.radio.burst(MouseEvent(event_type=0, x=int(x), y=int(y), button=0, delta=0))
 
-    def _on_mouse_click(self, x: float, y: float, button: int):
+    def _on_mouse_press(self, x: float, y: float, button: int):
         if self._root.displayer is None or self._root.menu.visible:
             return
         self._root.radio.burst(MouseEvent(event_type=1, x=int(x), y=int(y), button=int(button), delta=0))
+
+    def _on_mouse_release(self, x: float, y: float, button: int):
+        if self._root.displayer is None or self._root.menu.visible:
+            return
         self._root.radio.burst(MouseEvent(event_type=2, x=int(x), y=int(y), button=int(button), delta=0))
 
     def _on_mouse_scroll(self, y_offset: int):

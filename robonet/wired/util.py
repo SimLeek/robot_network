@@ -54,9 +54,40 @@ def find_connected_ethernet_interface() -> Optional[str]:
     return None
 
 
+def get_slave_type(iface: str) -> Optional[str]:
+    """Returns 'bridge'/'bond'/'team' if iface is currently a slave/port
+    of one, else None."""
+    try:
+        result = subprocess.run(
+            f"nmcli -t -f GENERAL.CONNECTION device show {iface}", shell=True,
+            check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError:
+        return None
+    con_name = result.stdout.strip().split(':', 1)[-1]
+    if not con_name or con_name == '--':
+        return None
+    try:
+        result = subprocess.run(
+            f"nmcli -t -f connection.slave-type con show {con_name}", shell=True,
+            check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError:
+        return None
+    slave_type = result.stdout.strip().split(':', 1)[-1]
+    return slave_type or None
+
+
 def set_wired_static(iface: str, ip: str, prefix: int = 24,
                      con_name: str = 'robonet_wired'):
     """Bring up iface with a fixed static IPv4 address via nmcli."""
+    slave_type = get_slave_type(iface)
+    if slave_type:
+        raise RuntimeError(
+            f"{iface} is currently a {slave_type} port and can't take a direct "
+            f"static-IP connection profile this way. Run "
+            f"examples/setup_eth_server.py (or setup_eth_client.py on an "
+            f"endpoint) for guidance, or pick a different interface."
+        )
+
     try:
         result = subprocess.run(
             f"nmcli -t -f connection.id con show {con_name}", shell=True,

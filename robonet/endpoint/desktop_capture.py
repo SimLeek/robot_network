@@ -60,7 +60,7 @@ def ensure_v4l2loopback_device(label: str = DESKTOP_CAM_LABEL) -> str:
         return dev
     raise DesktopCaptureError(
         "No v4l2loopback device found with card_label='" + label + "'. "
-        "Run examples/desktop/setup_desktop_capture.sh once (it needs sudo "
+        "Run examples/setup_desktop_capture.sh once (it needs sudo "
         "to load the v4l2loopback kernel module), then try again."
     )
 
@@ -89,7 +89,7 @@ def ensure_alsa_loopback() -> Tuple[str, str]:
     if idx is None:
         raise DesktopCaptureError(
             "No ALSA 'Loopback' card found (snd-aloop not loaded). "
-            "Run examples/desktop/setup_desktop_capture.sh once (it needs "
+            "Run examples/setup_desktop_capture.sh once (it needs "
             "sudo to load the snd-aloop kernel module), then try again."
         )
     return f'hw:{idx},0,0', f'hw:{idx},1,0'

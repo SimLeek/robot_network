@@ -19,6 +19,7 @@ class Endpoint:
     reachable: bool        = False
     axes: List              = field(default_factory=list)
     streams: List           = field(default_factory=list)
+    capabilities_received: bool = False
 
 
 # ---------------------------------------------------------------------------

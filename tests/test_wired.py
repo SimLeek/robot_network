@@ -113,10 +113,49 @@ class TestFindConnectedEthernetInterface(unittest.TestCase):
         self.assertIsNone(wp.find_connected_ethernet_interface())
 
 
-class TestSetWiredStatic(unittest.TestCase):
+class TestGetSlaveType(unittest.TestCase):
 
     @patch('robonet.wired.util.subprocess.run')
-    def test_new_connection_skips_delete_and_adds_then_brings_up(self, mock_run):
+    def test_returns_none_for_unenslaved_interface(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(stdout='GENERAL.CONNECTION:eth0-plain'),
+            MagicMock(stdout='connection.slave-type:'),
+        ]
+        self.assertIsNone(wp.get_slave_type('eth0'))
+
+    @patch('robonet.wired.util.subprocess.run')
+    def test_returns_bridge_when_enslaved(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(stdout='GENERAL.CONNECTION:eth0-bridge-slave'),
+            MagicMock(stdout='connection.slave-type:bridge'),
+        ]
+        self.assertEqual(wp.get_slave_type('eth0'), 'bridge')
+
+    @patch('robonet.wired.util.subprocess.run', side_effect=subprocess.CalledProcessError(1, 'x'))
+    def test_returns_none_on_nmcli_failure(self, _run):
+        self.assertIsNone(wp.get_slave_type('eth0'))
+
+    @patch('robonet.wired.util.subprocess.run')
+    def test_returns_none_when_device_has_no_active_connection(self, mock_run):
+        mock_run.side_effect = [MagicMock(stdout='GENERAL.CONNECTION:--')]
+        self.assertIsNone(wp.get_slave_type('eth0'))
+
+
+class TestSetWiredStaticSlaveDetection(unittest.TestCase):
+
+    @patch('robonet.wired.util.get_slave_type', return_value='bridge')
+    def test_raises_clear_error_without_attempting_nmcli(self, _slave):
+        with self.assertRaises(RuntimeError) as ctx:
+            wp.set_wired_static('eth0', '169.254.90.1')
+        self.assertIn('bridge', str(ctx.exception))
+        self.assertIn('setup_eth_server', str(ctx.exception))
+
+
+class TestSetWiredStatic(unittest.TestCase):
+
+    @patch('robonet.wired.util.get_slave_type', return_value=None)
+    @patch('robonet.wired.util.subprocess.run')
+    def test_new_connection_skips_delete_and_adds_then_brings_up(self, mock_run, _slave):
         # First call (existence check) returns empty stdout -> doesn't exist
         mock_run.side_effect = [
             MagicMock(stdout=''),                     # nmcli con show (existence check)
@@ -135,8 +174,9 @@ class TestSetWiredStatic(unittest.TestCase):
         self.assertIn('ipv4.method manual', commands[1])
         self.assertIn('con up robonet_wired', commands[2])
 
+    @patch('robonet.wired.util.get_slave_type', return_value=None)
     @patch('robonet.wired.util.subprocess.run')
-    def test_existing_connection_is_deleted_first(self, mock_run):
+    def test_existing_connection_is_deleted_first(self, mock_run, _slave):
         mock_run.side_effect = [
             MagicMock(stdout='robonet_wired'),          # exists
             MagicMock(stdout='deleted'),                # delete
@@ -150,8 +190,9 @@ class TestSetWiredStatic(unittest.TestCase):
         self.assertEqual(len(commands), 4)
         self.assertIn('con delete robonet_wired', commands[1])
 
+    @patch('robonet.wired.util.get_slave_type', return_value=None)
     @patch('robonet.wired.util.subprocess.run')
-    def test_custom_con_name_used_throughout(self, mock_run):
+    def test_custom_con_name_used_throughout(self, mock_run, _slave):
         mock_run.side_effect = [
             MagicMock(stdout=''),
             MagicMock(stdout='added'),
@@ -165,8 +206,9 @@ class TestSetWiredStatic(unittest.TestCase):
         self.assertIn('con-name my_link', commands[1])
         self.assertIn('con up my_link', commands[2])
 
+    @patch('robonet.wired.util.get_slave_type', return_value=None)
     @patch('robonet.wired.util.subprocess.run')
-    def test_nmcli_failure_raises_runtime_error_with_stderr(self, mock_run):
+    def test_nmcli_failure_raises_runtime_error_with_stderr(self, mock_run, _slave):
         def side_effect(cmd, **kwargs):
             if 'con show' in cmd:
                 return MagicMock(stdout='')

@@ -19,7 +19,8 @@ source venv/bin/activate
    (needed for `PyGObject`/GStreamer's Python bindings
 
 Activate that virtual environment (`source venv/bin/activate`) before
-running anything below, in every new shell.
+running anything below, in every new shell. Re-run `install.sh` (or
+`pip install -e .` in the venv) after pulling if dependencies changed.
 
 ## Running -- brain side
 
@@ -37,6 +38,15 @@ endpoint you connect to, with an on-screen menu (default toggle:
 Ctrl+`` ` ``) for picking a network mode and endpoint. Settings live at
 `~/.robobrain/settings.json` (see `robonet/brain/settings.py` for
 every key and its default).
+
+### One-time Brain Setup
+
+- **Wired (direct ethernet cable) connections**
+  ```
+  python -m examples.setup_eth_server
+  ```
+  If this fails because the interface is already a bridge/bond port,
+  use a different interface or configure the bridge itself instead.
 
 ### AI Control
 

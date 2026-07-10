@@ -37,12 +37,13 @@ class _NetMode(Enum):
 
 class _FakeEndpoint:
     def __init__(self, hostname='desk1', ip='10.0.0.5', endpoint_type='desktop',
-                axes=None, streams=None):
+                axes=None, streams=None, capabilities_received=True):
         self.hostname = hostname
         self.ip = ip
         self.endpoint_type = endpoint_type
         self.axes = axes if axes is not None else []
         self.streams = streams if streams is not None else []
+        self.capabilities_received = capabilities_received
 
 
 class _FakeRadio:
@@ -108,7 +109,7 @@ class TestMaybeAutoConnect(unittest.TestCase):
 
     def test_does_not_fire_when_endpoint_not_ready(self):
         radio = _FakeRadio(priority=['localhost'])
-        ep = _FakeEndpoint(axes=[], streams=[])  # not ready yet
+        ep = _FakeEndpoint(capabilities_received=False)
 
         radio._maybe_auto_connect(ep)
 
@@ -130,9 +131,13 @@ class TestMaybeAutoConnect(unittest.TestCase):
 
         radio.root.menu._connect.assert_called_once_with(ep)
 
-    def test_ready_via_streams_alone_also_counts(self):
+    def test_ready_with_empty_axes_and_streams_still_counts(self):
+        # The actual bug this is a regression test for: desktop endpoints
+        # report permanently empty axes/streams by design (raw KeyEvent/
+        # MouseEvent control, not the axis model), so readiness can't be
+        # gated on axes/streams content -- only on capabilities_received.
         radio = _FakeRadio(priority=['localhost'])
-        ep = _FakeEndpoint(axes=[], streams=['cam'])
+        ep = _FakeEndpoint(axes=[], streams=[], capabilities_received=True)
 
         radio._maybe_auto_connect(ep)
 

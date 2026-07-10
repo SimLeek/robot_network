@@ -326,7 +326,7 @@ class SelectionMenu:
                 ep_idx = ci - 5
                 if 0 <= ep_idx < len(endpoints):
                     ep = endpoints[ep_idx]
-                    if not (getattr(ep, 'axes', None) or getattr(ep, 'streams', None)):
+                    if not getattr(ep, 'capabilities_received', False):
                         self.set_status('Endpoint not ready yet - wait for capabilities')
                         return None
                     return ep

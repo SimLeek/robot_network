@@ -17,7 +17,7 @@ These need testing to be confirmed as real bugs before fixing.
   looks like the device list gets silently overwritten with the
   connection-name grep output instead of the actual device list.
 
-- **robonet/adhoc_pair/server.py, set_hotspot()**: `nmcli con modify
+- **robonet/adhoc/util.py, set_hotspot()**: `nmcli con modify
   ... 802-11-wireless.mode adhoc_pair ...` -- `adhoc_pair` isn't a valid
   nmcli wireless mode (valid values: infrastructure/ap/adhoc/mesh). Looks
   like a search-and-replace accident; probably meant `adhoc`. Would make
@@ -105,5 +105,14 @@ these fixes should be implemented but are either large tasks or are blocked.
   GStreamer's alsasrc/alsasink both see as the device string) could not
   be verified against a live PipeWire server in this environment --
   flagged clearly in that docstring, with `python -m sounddevice` given
-  as the way to check the real device name on an actual machine if it
-  doesn't resolve.
+- **Audio should use direct PCM streams, not FFT.** `AudioBuffer` currently
+  models per-channel FFT data (complex128). Simleek: direct streams
+  perform better with AI than FFT. Not touched yet -- needs a real
+  redesign of `AudioBuffer` (or a new buffer type) plus whatever
+  consumes `display_fftnet`'s FFT-based visualization today.
+
+- **Localhost mode probably shouldn't require matching PSKs.** Same
+  machine talking to itself has no real encryption need; the plain
+  (unencrypted) radio path in `todo/plain_radio.py` may be worth
+  reviving specifically for NetMode.LOCALHOST instead of staying
+  archived.

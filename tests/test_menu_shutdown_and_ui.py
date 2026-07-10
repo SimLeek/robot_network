@@ -281,7 +281,7 @@ class TestSelectionMenuWiredModeIndexOffsets(unittest.TestCase):
         mock_ensure.assert_called_once()
 
     def test_endpoint_list_starts_at_index_5(self):
-        fake_ep = MagicMock(ip='10.0.0.5', axes=['a'], streams=[])
+        fake_ep = MagicMock(ip='10.0.0.5', axes=[], streams=[], capabilities_received=True)
         menu = SelectionMenu(width=320, height=240)
         menu.root = MagicMock()
         menu.root.radio.mode = 'ADHOC'
@@ -297,7 +297,7 @@ class TestSelectionMenuWiredModeIndexOffsets(unittest.TestCase):
         self.assertIs(result, fake_ep)
 
     def test_endpoint_not_ready_returns_none_and_sets_status(self):
-        fake_ep = MagicMock(ip='10.0.0.5', axes=[], streams=[])
+        fake_ep = MagicMock(ip='10.0.0.5', axes=[], streams=[], capabilities_received=False)
         menu = SelectionMenu(width=320, height=240)
         menu.root = MagicMock()
         menu.root.radio.mode = 'ADHOC'

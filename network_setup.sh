@@ -64,6 +64,7 @@ setup_gst() {
     install_package_arch gst-python
     install_package_arch python-gobject
     install_package_arch libv4l
+    install_package_arch tk
   elif [[ "$OS" == "Debian" ]]; then
     install_package_debian libgstreamer1.0-dev
     install_package_debian libgstreamer-plugins-base1.0-dev
@@ -77,6 +78,7 @@ setup_gst() {
     install_package_debian gstreamer1.0-tools
     install_package_debian python3-gst-1.0 python3-gi
     install_package_debian libv4l-dev
+    install_package_debian python3-tk
   fi
 }
 

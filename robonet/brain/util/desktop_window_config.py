@@ -54,17 +54,15 @@ def make_window_config_for_server(sm, af_thru: ActionFactory = None, af_edit: Ac
             af_thru.on_mouse_move(tx, ty)
         elif event_type == 'mouse_press':
             px, py, button = args
-            af_thru.on_mouse_click(px, py, button)
+            af_thru.on_mouse_press(px, py, button)
+        elif event_type == 'mouse_release':
+            px, py, button = args
+            af_thru.on_mouse_release(px, py, button)
         elif event_type == 'mouse_scroll':
             x_offset, y_offset = args
             af_thru.on_mouse_scroll(int(y_offset))
         elif event_type == 'key':
             key, action, modifiers = args
-            #wnd_keys = sm.displayer.displayer.config.wnd.keys
-            # Route through ActionFactory first; if nothing consumed it,
-            # forward the raw key to the remote client.
-            #if action == wnd_keys.ACTION_PRESS:
-            # we actually want both press and release going through
             af_thru.on_keyboard(key, action, modifiers)
 
     def edit_cb(event_type, frame, name, *args):
