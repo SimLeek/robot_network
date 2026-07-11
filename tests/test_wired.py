@@ -19,17 +19,25 @@ from robonet.wired import util as wp
 
 class TestFindEthernetInterfaces(unittest.TestCase):
 
-    def _mock_fs(self, ifaces_with_wireless, ifaces_with_address):
+    def _mock_fs(self, ifaces_with_wireless, ifaces_with_address, ifaces_with_device=None):
         """ifaces_with_wireless: names that should look like wifi (have a
         'wireless' subdir). ifaces_with_address: names that have a MAC
-        'address' file (real ethernet interfaces always do)."""
+        'address' file (real ethernet interfaces always do).
+        ifaces_with_device: names backed by real hardware (a 'device'
+        symlink) -- defaults to the same set as ifaces_with_address."""
+        if ifaces_with_device is None:
+            ifaces_with_device = ifaces_with_address
+
         def fake_isdir(path):
             return path.endswith('/wireless') and any(
                 path == f'/sys/class/net/{n}/wireless' for n in ifaces_with_wireless)
 
         def fake_exists(path):
-            return path.endswith('/address') and any(
-                path == f'/sys/class/net/{n}/address' for n in ifaces_with_address)
+            if path.endswith('/address'):
+                return any(path == f'/sys/class/net/{n}/address' for n in ifaces_with_address)
+            if path.endswith('/device'):
+                return any(path == f'/sys/class/net/{n}/device' for n in ifaces_with_device)
+            return False
 
         return fake_isdir, fake_exists
 
@@ -52,6 +60,25 @@ class TestFindEthernetInterfaces(unittest.TestCase):
         result = wp.find_ethernet_interfaces()
 
         self.assertEqual(result, ['eth0'])
+
+    @patch('robonet.wired.util.os.path.exists')
+    @patch('robonet.wired.util.os.path.isdir', return_value=False)
+    @patch('robonet.wired.util.glob.glob')
+    def test_excludes_arbitrarily_named_bridge_lacking_a_real_device(self, mock_glob, _isdir, mock_exists):
+        # The actual bug this is a regression test for: a bridge named
+        # 'aibr0' doesn't match any name-prefix heuristic (_VIRTUAL_IFACE_
+        # PREFIXES only knows 'br-', not every possible bridge name), but
+        # it's not backed by real hardware -- no 'device' symlink -- and
+        # that's true regardless of what it's named.
+        mock_glob.return_value = ['/sys/class/net/aibr0', '/sys/class/net/enp0s31f6']
+        _, exists_fn = self._mock_fs(
+            ifaces_with_wireless=[], ifaces_with_address=['aibr0', 'enp0s31f6'],
+            ifaces_with_device=['enp0s31f6'])  # aibr0 has an address but no device -- it's the bridge itself
+        mock_exists.side_effect = exists_fn
+
+        result = wp.find_ethernet_interfaces()
+
+        self.assertEqual(result, ['enp0s31f6'])
 
     @patch('robonet.wired.util.os.path.exists', return_value=True)
     @patch('robonet.wired.util.os.path.isdir', return_value=False)

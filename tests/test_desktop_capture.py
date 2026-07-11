@@ -529,7 +529,21 @@ class TestDesktopHwConstruction(unittest.TestCase):
         hw = self._construct()
         caps = hw.build_capabilities()
         self.assertEqual(caps.endpoint_type, 'desktop')
-        self.assertEqual(caps.axes(), [])
+        self.assertGreater(len(caps.axes()), 0)  # keys/mouse are real axes, not a statue
+        self.assertGreater(len(caps.streams()), 0)  # video/audio are real streams
+
+    def test_capabilities_axes_match_control_interface_spec(self):
+        from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC
+        hw = self._construct()
+        axes = hw.build_capabilities().axes()
+        self.assertEqual(len(axes), len(DESKTOP_CONTROL_INTERFACE_SPEC))
+        self.assertEqual({a['name'] for a in axes}, set(DESKTOP_CONTROL_INTERFACE_SPEC))
+
+    def test_capabilities_streams_include_video_and_audio(self):
+        hw = self._construct()
+        streams = hw.build_capabilities().streams()
+        types = {s['type'] for s in streams}
+        self.assertEqual(types, {'video', 'audio'})
 
     def test_handlers_include_desktop_specific_and_inherited(self):
         hw = self._construct()

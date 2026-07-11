@@ -360,8 +360,14 @@ class TestRadioSubSystemInitModeSelection(unittest.TestCase):
         self.assertEqual(radio._auto_connect_priority, [])  # auto-connect disabled entirely
         self.assertEqual(radio._mode, RadioSubSystem.NetMode.ADHOC)  # safe fallback
 
-    def test_empty_priority_falls_back_to_localhost_enabled(self):
-        radio = self._construct(auto_connect_priority=[], localhost_enabled=True)
+    def test_localhost_disabled_removes_it_from_a_nonempty_priority_list(self):
+        radio = self._construct(auto_connect_priority=['localhost', 'wired'], localhost_enabled=False)
+        self.assertEqual(radio._auto_connect_priority, ['wired'])
+        self.assertEqual(radio._mode, RadioSubSystem.NetMode.WIRED)
+
+    def test_localhost_enabled_keeps_it_in_priority_list(self):
+        radio = self._construct(auto_connect_priority=['localhost', 'wired'], localhost_enabled=True)
+        self.assertEqual(radio._auto_connect_priority, ['localhost', 'wired'])
         self.assertEqual(radio._mode, RadioSubSystem.NetMode.LOCALHOST)
 
     def test_empty_priority_and_localhost_disabled_falls_back_to_adhoc_when_no_wifi(self):

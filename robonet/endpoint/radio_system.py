@@ -30,6 +30,23 @@ HOSTNAME = socket.gethostname()
 
 
 class RobotState(StateMachine):
+    """
+    listening -> greeting -> greeting_acknowledged -> explaining ->
+    explaining_acknowledged -> streaming -> (stop) -> listening
+
+    Every event below is defined for every state it could plausibly
+    arrive in, not just the "expected" one -- retransmitted/duplicate/
+    reordered messages are a normal occurrence (the brain side bursts
+    each step a few times for reliability), and a message arriving in
+    an unexpected state must never be a dead end. Two rules used
+    throughout: (1) if we're already at or past a message's target,
+    receiving it again is a same-state self-loop, not an error; (2) if
+    we're earlier than its target, it jumps us forward. who_are_you is
+    the one exception that can move backward (streaming -> greeting):
+    a fresh WhoAreYou after we're already streaming means a new brain
+    session has started and the old one is gone, not a duplicate of the
+    one we already answered.
+    """
     listening = State(initial=True)
     greeting = State()
     greeting_acknowledged = State()
@@ -37,25 +54,63 @@ class RobotState(StateMachine):
     explaining_acknowledged = State()
     streaming = State()
 
-    who_are_you_received = listening.to(greeting)
+    who_are_you_received = (
+        listening.to(greeting)
+        | greeting.to(greeting)
+        | greeting_acknowledged.to(greeting_acknowledged)
+        | explaining.to(explaining)
+        | explaining_acknowledged.to(explaining_acknowledged)
+        | streaming.to(greeting)
+    )
 
-    # A previous brain session can die at any point after greeting --
-    # a fresh WhoAreYou from a new session should restart the handshake
-    # rather than being refused because we're stuck waiting on a session
-    # that no longer exists.
-    restart_handshake = (greeting_acknowledged.to(greeting) | explaining.to(greeting)
-                         | explaining_acknowledged.to(greeting) | streaming.to(greeting))
+    # Not defined from `listening` -- an ack before we've even echoed
+    # WhoAreYou has no sensible target, so the handler skips calling
+    # this at all rather than the state machine having to reject it.
+    ack_received = (
+        greeting.to(greeting_acknowledged)
+        | greeting_acknowledged.to(greeting_acknowledged)
+        | explaining.to(explaining)
+        | explaining_acknowledged.to(explaining_acknowledged)
+        | streaming.to(streaming)
+    )
 
-    ack_received = greeting.to(greeting_acknowledged)
+    # Defined from every state, including listening -- if the brain
+    # asks for capabilities, it already believes greeting succeeded, so
+    # treat receiving this at all as sufficient to skip straight there.
+    what_are_your_capabilities_received = (
+        listening.to(explaining)
+        | greeting.to(explaining)
+        | greeting_acknowledged.to(explaining)
+        | explaining.to(explaining)
+        | explaining_acknowledged.to(explaining_acknowledged)
+        | streaming.to(streaming)
+    )
 
-    what_are_your_capabilities_received = greeting_acknowledged.to(explaining)
+    # Not defined from listening/greeting/greeting_acknowledged -- an
+    # ack for capabilities we haven't sent yet has no sensible target.
+    ack2_received = (
+        explaining.to(explaining_acknowledged)
+        | explaining_acknowledged.to(explaining_acknowledged)
+        | streaming.to(streaming)
+    )
 
-    ack2_received = explaining.to(explaining_acknowledged)
+    chosen_received = (
+        listening.to(streaming)
+        | greeting.to(streaming)
+        | greeting_acknowledged.to(streaming)
+        | explaining.to(streaming)
+        | explaining_acknowledged.to(streaming)
+        | streaming.to(streaming)
+    )
 
-    chosen_received = (explaining_acknowledged.to(streaming) | explaining.to(streaming) | greeting_acknowledged.to(
-        streaming) | greeting.to(streaming) | listening.to(streaming))
-
-    stop_received = streaming.to(listening)
+    stop_received = (
+        listening.to(listening)
+        | greeting.to(listening)
+        | greeting_acknowledged.to(listening)
+        | explaining.to(listening)
+        | explaining_acknowledged.to(listening)
+        | streaming.to(listening)
+    )
 
     def on_transition(self, event, source, target):
         if source is not target:
@@ -151,62 +206,44 @@ class RobotRadio:
             self._radio_connected = True
             log.info(f"[radio] learned IP {obj.ip} from WhoAreYou")
         if self._radio_connected:  # no point in sending if we can't talk
-            if self._sm.listening.is_active:
-                self._sm.who_are_you_received()
-            elif not self._sm.greeting.is_active:
-                # A previous brain session died somewhere past greeting;
-                # this WhoAreYou is a new session starting fresh.
-                self._sm.restart_handshake()
+            self._sm.who_are_you_received()
             self.burst(WhoAreYou(hostname=HOSTNAME, endpoint_type=self.endpoint_type))
-
 
     def _on_who_are_you_ack(self, hostname: str, obj: WhoAreYouAck):
         log.info("received who are you ack")
         if not (obj.hostname == HOSTNAME and obj.endpoint_type == self.endpoint_type):
             return
-        current = self._sm.current_state_value
         log.info("ack was for us")
-        if self._sm.greeting.is_active:
-            self._sm.ack_received()
-        else:
-            log.error(f"WhoAreYouAck received while in {current} state")
+        if self._sm.listening.is_active:
+            return  # too early -- haven't echoed WhoAreYou yet; a retry will arrive once we have
+        self._sm.ack_received()
 
     def on_what_are_your_capabilities(self, hostname: str, obj: RobotCapabilities):
         log.info("Received what are your capabilities")
-        current = self._sm.current_state_value
-
-        if self._sm.greeting_acknowledged.is_active:
-            self._sm.what_are_your_capabilities_received()
-            obj = self.root.hardware.build_capabilities()
-            obj.hostname = HOSTNAME
-            obj.endpoint_type = self.endpoint_type
-            self.burst(obj)
-        elif self._sm.explaining.is_active:
-            obj = self.root.hardware.build_capabilities()
-            obj.hostname = HOSTNAME
-            obj.endpoint_type = self.endpoint_type
-            self.burst(obj)
-        else:
-            log.error(f"WhatAreYourCapabilities request received while in {current} state")
+        self._sm.what_are_your_capabilities_received()
+        response = self.root.hardware.build_capabilities()
+        response.hostname = HOSTNAME
+        response.endpoint_type = self.endpoint_type
+        self.burst(response)
 
     def on_what_are_your_capabilities_ack(self, hostname: str, obj: RobotCapabilitiesAck):
         log.info("received what are your capabilities ack")
         if not (obj.hostname == HOSTNAME and obj.endpoint_type == self.endpoint_type):
             return
-        current = self._sm.current_state_value
         log.info("ack was for us")
-        if self._sm.explaining.is_active:
-            self._sm.ack2_received()
-        else:
-            log.error(f"WhatAreYourCapabilitiesAck received while in {current} state")
+        if self._sm.listening.is_active or self._sm.greeting.is_active or self._sm.greeting_acknowledged.is_active:
+            return  # too early -- haven't sent capabilities yet; a retry will arrive once we have
+        self._sm.ack2_received()
 
     def _on_robot_start(self, hostname: str, obj: RobotStart):
         log.info("received robot start")
         if not (obj.hostname == HOSTNAME and obj.endpoint_type == self.endpoint_type):
             return
-        self._sm.chosen_received()
         log.info("robot start was for us")
-        self.root.start()
+        already_streaming = self._sm.streaming.is_active
+        self._sm.chosen_received()
+        if not already_streaming:
+            self.root.start()
 
     # ------------------------------------------------------------------
     # Watchdog  (radio concern: it knows the control timestamp)

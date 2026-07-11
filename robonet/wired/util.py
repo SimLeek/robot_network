@@ -18,8 +18,11 @@ def find_ethernet_interfaces() -> List[str]:
     """Returns a list of valid ethernet interfaces"""
 
     # Ethernet-ish interfaces: has a MAC 'address' file, is not loopback,
-    # and does not have a 'wireless' subdirectory (the standard way to tell
-    # wifi apart from ethernet without needing the `iw` tool).
+    # does not have a 'wireless' subdirectory, and is backed by real
+    # hardware (a 'device' symlink) -- this last check is what actually
+    # excludes bridges/bonds regardless of name (a name-prefix list
+    # can't cover every possible bridge name someone's picked; 'aibr0'
+    # doesn't match any of _VIRTUAL_IFACE_PREFIXES but has no 'device').
     ifaces = []
     for path in sorted(glob.glob('/sys/class/net/*')):
         name = os.path.basename(path)
@@ -30,6 +33,8 @@ def find_ethernet_interfaces() -> List[str]:
         if name.startswith(_VIRTUAL_IFACE_PREFIXES):
             continue
         if not os.path.exists(os.path.join(path, 'address')):
+            continue
+        if not os.path.exists(os.path.join(path, 'device')):
             continue
         ifaces.append(name)
     return ifaces

@@ -19,7 +19,7 @@ import shutil
 import tempfile
 import unittest
 from enum import Enum
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import numpy as np
 
@@ -230,6 +230,47 @@ class TestSelectionMenuAvSources(unittest.TestCase):
         menu._handle_main_key('enter')
 
         self.assertEqual(menu.menu_state.current_state.id, 'av_sources_menu')
+
+
+class TestSelectionMenuLocalhostGating(unittest.TestCase):
+    """Localhost shows as genuinely disabled ([--]) rather than a
+    selectable-but-silently-broken option when localhost_enabled=False."""
+
+    def _make_menu(self, localhost_enabled):
+        menu = SelectionMenu(width=320, height=240)
+        menu._settings = {'localhost_enabled': localhost_enabled}
+        menu.root = MagicMock()
+        menu.root.radio.mode = 'ADHOC'
+        menu.root.radio.NetMode = MagicMock()
+        menu.root.radio.is_scanning = False
+        menu.root.radio.switch_mode = AsyncMock()
+        return menu
+
+    def test_shows_dash_when_disabled(self):
+        menu = self._make_menu(localhost_enabled=False)
+        with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=[]):
+            items = menu._radio_items()
+        self.assertIn('[--]', items[0])
+
+    def test_shows_checkbox_when_enabled(self):
+        menu = self._make_menu(localhost_enabled=True)
+        with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=[]):
+            items = menu._radio_items()
+        self.assertNotIn('[--]', items[0])
+
+    def test_enter_on_disabled_local_does_not_call_switch_mode(self):
+        menu = self._make_menu(localhost_enabled=False)
+        with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=[]):
+            menu._cursor = 0
+            menu._handle_radio_key('enter')
+        menu.root.radio.switch_mode.assert_not_called()
+
+    def test_enter_on_enabled_local_calls_switch_mode(self):
+        menu = self._make_menu(localhost_enabled=True)
+        with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=[]):
+            menu._cursor = 0
+            menu._handle_radio_key('enter')
+        menu.root.radio.switch_mode.assert_called_once()
 
 
 class TestSelectionMenuWiredModeIndexOffsets(unittest.TestCase):

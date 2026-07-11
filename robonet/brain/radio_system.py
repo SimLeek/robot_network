@@ -78,6 +78,9 @@ class RadioSubSystem(SubSystem):
         self.our_ip = None
 
         self._auto_connect_priority = list(settings["auto_connect_priority"])
+        if not settings["localhost_enabled"] and 'localhost' in self._auto_connect_priority:
+            log.warning('[radio] localhost_enabled=false -- removing localhost from auto_connect_priority')
+            self._auto_connect_priority = [m for m in self._auto_connect_priority if m != 'localhost']
         self._auto_connect_endpoint_type = settings["auto_connect_endpoint_type"]
         self._auto_connect_attempt_timeout = settings["auto_connect_attempt_timeout"]
 
@@ -89,9 +92,6 @@ class RadioSubSystem(SubSystem):
                            f'{self._auto_connect_priority[0]!r}, ignoring auto-connect')
                 self._auto_connect_priority = []
                 self._mode = self.NetMode.ADHOC
-        elif settings["localhost_enabled"]:
-            # this means the server is in a robot body, or self modification is enabled
-            self._mode = self.NetMode.LOCALHOST
         elif check_wifi_connected():
             self._mode = self.NetMode.WIFI
         else:
@@ -231,7 +231,11 @@ class RadioSubSystem(SubSystem):
             except Exception as e:
                 print(f'[radio] adhoc teardown failed: {e}')
 
-    async def switch_mode(self, mode:NetMode):
+    async def switch_mode(self, mode: NetMode):
+        if mode == self.NetMode.LOCALHOST and not settings["localhost_enabled"]:
+            if self.root is not None:
+                self.root.menu.set_status('Localhost mode is disabled (localhost_enabled=false)')
+            return
         if self._mode != mode:
             await self.stop_scanner_task()
             self._teardown_mode(self._mode)

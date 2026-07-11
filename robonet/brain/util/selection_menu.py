@@ -273,15 +273,16 @@ class SelectionMenu:
         mode    = self.root.radio.mode
         NetMode = self.root.radio.NetMode
         chk     = lambda active: '[X]' if active else '[ ]'
+        localhost_ok = bool(self._cfg['localhost_enabled'])
         items = [
-            f'Mode: Local   {chk(mode == NetMode.LOCALHOST)}',
+            f'Mode: Local   {chk(mode == NetMode.LOCALHOST) if localhost_ok else "[--]"}',
             f'Mode: Wi-Fi   {chk(mode == NetMode.WIFI)}',
             f'Mode: Ad-Hoc  {chk(mode == NetMode.ADHOC)}',
             f'Mode: Wired   {chk(mode == NetMode.WIRED)}',
             'Stop Scanning' if self.root.radio.is_scanning else 'Start Scanning',
         ]
         for ep in self.get_unique_endpoints():
-            ready = bool(getattr(ep, 'axes', None) or getattr(ep, 'streams', None))
+            ready = bool(getattr(ep, 'capabilities_received', False))
             tag = ep.endpoint_type or 'unknown'
             label = f'{"[ready]" if ready else "[..]"} {ep.ip}  [{tag}]'
             if ep.hostname:
@@ -306,8 +307,11 @@ class SelectionMenu:
         elif key == 'enter' and items:
             ci = self._cursor
             if ci == 0:
-                asyncio.ensure_future(
-                    self.root.radio.switch_mode(self.root.radio.NetMode.LOCALHOST))
+                if bool(self._cfg['localhost_enabled']):
+                    asyncio.ensure_future(
+                        self.root.radio.switch_mode(self.root.radio.NetMode.LOCALHOST))
+                else:
+                    self.set_status('Localhost mode is disabled (localhost_enabled=false)')
             elif ci == 1:
                 asyncio.ensure_future(
                     self.root.radio.switch_mode(self.root.radio.NetMode.WIFI))

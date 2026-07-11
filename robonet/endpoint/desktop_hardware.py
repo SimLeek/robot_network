@@ -12,6 +12,7 @@ from typing import Optional
 import numpy as np
 
 from robonet.buffers.buffer_objects import KeyEvent, MouseEvent, RobotCapabilities
+from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC
 from robonet.endpoint.desktop_capture import (
     DesktopVideoFeeder, DesktopAudioFeeder,
     ensure_v4l2loopback_device, ensure_alsa_loopback,
@@ -20,8 +21,10 @@ from robonet.endpoint.desktop_capture import (
 from robonet.endpoint.hardware_system import MultiAVRobotHardware
 from robonet.endpoint.radio_system import HOSTNAME
 from robonet.gst_io.devices import find_camera_devices, get_first_speaker_device, DeviceNotFoundError
+import robonet.endpoint.settings as settings_
 
 log = logging.getLogger(__name__)
+settings = settings_.get()
 
 # pyautogui (via its mouseinfo submodule) hard-crashes on import in any
 # process without a live, connectable DISPLAY -- e.g. a systemd --user service
@@ -50,7 +53,16 @@ DESKTOP_AUDIO_IN_ID = 'desktop-audio'
 
 
 def build_desktop_capabilities() -> RobotCapabilities:
-    return RobotCapabilities.build(axes=[], streams=[], hostname=HOSTNAME, endpoint_type='desktop')
+    axes = [
+        {'name': channel, 'description': info['hz'], 'keys': [], 'neuron': i}
+        for i, (channel, info) in enumerate(DESKTOP_CONTROL_INTERFACE_SPEC.items())
+    ]
+    streams = [
+        {'name': 'screen', 'type': 'video',
+         'width': settings['cam_res'][0], 'height': settings['cam_res'][1]},
+        {'name': 'mic', 'type': 'audio', 'sample_rate': 48000, 'channels': 1},
+    ]
+    return RobotCapabilities.build(axes=axes, streams=streams, hostname=HOSTNAME, endpoint_type='desktop')
 
 
 class DesktopHw(MultiAVRobotHardware):

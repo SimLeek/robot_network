@@ -116,3 +116,23 @@ these fixes should be implemented but are either large tasks or are blocked.
   (unencrypted) radio path in `todo/plain_radio.py` may be worth
   reviving specifically for NetMode.LOCALHOST instead of staying
   archived.
+
+- **Handshake state machine rebuilt to never dead-end.** Real logs
+  showed retransmission bursts (each step arriving 2-4x) hitting
+  "received while in X state" errors and dropping the message --
+  RobotState now defines every message from every state it could
+  plausibly arrive in: self-loop (no-op) if already at/past the target,
+  forward-jump if earlier, and only WhoAreYou can move backward
+  (streaming -> greeting, a new brain session replacing a dead one).
+  Exhaustive matrix + chaos-scenario tests in
+  tests/test_endpoint_handshake.py.
+
+- **GstSender still has no video source on the brain's own outbound
+  side** (`device=None` in the logs) when the brain machine has no
+  camera configured -- currently silently skips video, sends audio from
+  'default'. Probably fine (graceful degradation) but not confirmed
+  intentional vs. an oversight.
+
+- **RobotCapabilities.axes()/.streams() for real robots** (not desktop)
+  still worth spot-checking against this same "never report an
+  inert-looking capability set" standard now that desktop's been fixed.
