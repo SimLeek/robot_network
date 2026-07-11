@@ -210,6 +210,9 @@ class MenuSubSystem(SubSystem):
                 {'axes': ep.axes, 'streams': ep.streams})
         self._menu.set_status(f'Connected to {ep.hostname or ep.ip} [{ep.endpoint_type}]')
 
+    def set_status(self, msg: str):
+        self._menu.set_status(msg)
+
     def register_thru_token_controls(self, af: ActionFactory):
         af.bind_ai_token(self.toggle, 800)
 

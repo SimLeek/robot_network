@@ -15,7 +15,7 @@ _DEFAULT_SETTINGS: dict[str, Any] = {
 _DEFAULT_ADVANCED_SETTINGS: dict[str, Any] = {
     "ai_res": [640, 480],
     "ai_fps": 30,
-    "localhost_enabled": False,
+    "localhost_enabled": True,
     "our_port": 9999,
     "their_port": 9998,
     "adhoc_our_ip": "192.168.2.1",
