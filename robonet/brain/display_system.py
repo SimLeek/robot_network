@@ -21,6 +21,15 @@ import typing
 if typing.TYPE_CHECKING:
     from robonet.brain.main_system import ServerSystem
 
+def reshape_to_square_matrix(arr):
+    n = arr.size
+    for i in range(int(np.sqrt(n)), 0, -1):
+        if n % i == 0:
+            rows = i
+            cols = n // i
+            break
+    
+    return arr.reshape(rows, cols)
 
 class DisplaySubSystem(SubSystem):
 
@@ -104,6 +113,8 @@ class DisplaySubSystem(SubSystem):
         self.displayer.update(img, 'screen')
         aud = self.in_aud
         if aud is not None:
+            if len(aud.shape)==1:
+                aud = reshape_to_square_matrix(aud)
             self.displayer.update(aud, 'audio')
         elapsed = time.time() - t1
         await asyncio.sleep(max(0.0, self.frame_time - elapsed))
