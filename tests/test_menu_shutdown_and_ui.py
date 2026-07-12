@@ -24,7 +24,6 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import numpy as np
 
 from robonet.brain.menu_system import MenuSubSystem
-from robonet.brain.desktop_system import DesktopSubSystem
 from robonet.brain.util.selection_menu import SelectionMenu, MenuVisState
 from robonet.buffers.buffer_objects import AVSourcesAnnounce, SelectAVSource
 
@@ -462,84 +461,6 @@ class TestSubSystemRegistryForConnect(unittest.TestCase):
 
         with self.assertRaises(KeyError):
             SubSystem.for_endpoint_type('unknown')
-
-
-class _FakeWKeys:
-    ACTION_PRESS = 'PRESS'
-    ACTION_RELEASE = 'RELEASE'
-    UP = 'UP'
-    DOWN = 'DOWN'
-    LEFT = 'LEFT'
-    RIGHT = 'RIGHT'
-    ENTER = 'ENTER'
-    TAB = 'TAB'
-    BACKSPACE = 'BACKSPACE'
-
-
-class TestEditModeToggle(unittest.TestCase):
-    """Ctrl+Shift+2 toggles edit mode (zoom/pan the local view) --
-    doesn't touch the remote endpoint, purely a local display concern."""
-
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix='robonet_editmode_test_')
-        self.psk_path = os.path.join(self.tmpdir, 'psk.key')
-        self.server_psk_path = os.path.join(self.tmpdir, 'server_psk.key')
-        with open(self.psk_path, 'wb') as f:
-            f.write(os.urandom(32))
-        with open(self.server_psk_path, 'wb') as f:
-            f.write(os.urandom(32))
-
-    def tearDown(self):
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-
-    def _make_menu(self, initial_input_mode=1):
-        vals = {
-            'psk_file': self.psk_path, 'server_psk_file': self.server_psk_path,
-            'ai_res': [640, 480], 'ai_fps': 30,
-            'auto_shutdown_enabled': False,
-            'auto_shutdown_no_endpoints_timeout': 30.0,
-            'auto_shutdown_idle_timeout': 600.0,
-        }
-        fake_settings = MagicMock()
-        fake_settings.__getitem__.side_effect = vals.__getitem__
-        with patch('robonet.brain.menu_system.settings', fake_settings):
-            menu = MenuSubSystem()
-        menu.root = MagicMock()
-        menu.root.displayer.displayer.displayer.config.wnd.keys = _FakeWKeys
-        menu.root.displayer.displayer.displayer.config.input_mode = initial_input_mode
-        menu.root.active_sub = MagicMock(spec=DesktopSubSystem)
-        menu.root.active_sub._edit_mouse_pos = (0.3, 0.3)
-        return menu
-
-    def _ctrl_shift_2(self, menu):
-        mods = MagicMock(ctrl=True, shift=True)
-        menu.handle_keyboard(ord('2'), _FakeWKeys.ACTION_PRESS, mods)
-
-    def test_enters_edit_mode_from_pass_through(self):
-        menu = self._make_menu(initial_input_mode=1)
-        self._ctrl_shift_2(menu)
-        self.assertEqual(menu.root.displayer.displayer.displayer.config.input_mode, 2)
-
-    def test_leaves_edit_mode_back_to_pass_through(self):
-        menu = self._make_menu(initial_input_mode=2)
-        self._ctrl_shift_2(menu)
-        self.assertEqual(menu.root.displayer.displayer.displayer.config.input_mode, 1)
-
-    def test_leaving_edit_mode_clears_edge_pan_tracking(self):
-        menu = self._make_menu(initial_input_mode=2)
-        self._ctrl_shift_2(menu)
-        self.assertIsNone(menu.root.active_sub._edit_mouse_pos)
-
-    def test_entering_edit_mode_does_not_touch_edge_pan_tracking(self):
-        menu = self._make_menu(initial_input_mode=1)
-        self._ctrl_shift_2(menu)
-        self.assertEqual(menu.root.active_sub._edit_mouse_pos, (0.3, 0.3))
-
-    def test_ctrl_without_shift_does_not_toggle(self):
-        menu = self._make_menu(initial_input_mode=1)
-        mods = MagicMock(ctrl=True, shift=False)
-        menu.handle_keyboard(ord('2'), _FakeWKeys.ACTION_PRESS, mods)
-        self.assertEqual(menu.root.displayer.displayer.displayer.config.input_mode, 1)
 
 
 if __name__ == '__main__':

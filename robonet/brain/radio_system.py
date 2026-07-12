@@ -373,26 +373,24 @@ class RadioSubSystem(SubSystem):
         def handler(hostname:str, obj: RobotCapabilities):
             # this is also fine to repeat
             log.info(f"topic:{hostname}, obj:{type(obj)}")
-            ep = self._endpoints.get(obj.hostname+':'+obj.endpoint_type)
-            if ep is not None:
-                ep.axes = obj.axes()
-                ep.streams = obj.streams()
-            else:
-                # we need that IP address
-                for v in self._scanner.by_ip.values():
-                    if v.hostname == obj.hostname and v.endpoint_type == obj.endpoint_type:
-                        ep = v
-                        break
-                if ep is None:
-                    log.error("Could not find endpoint with IP. Cannot communicate. Must discard.")
-                    return
+            key = obj.hostname + ':' + obj.endpoint_type
+            ep = self._endpoints.get(key)
+            if ep is None:
+                # First capabilities message for this endpoint: the
+                # scanner's own record still has endpoint_type='unknown'
+                # at this point (it doesn't know the real type until
+                # this very message), so it can only be found by
+                # hostname -- enrich_endpoint already does that lookup
+                # correctly and populates self._endpoints[key].
                 self.enrich_endpoint(hostname, obj.hostname, obj.endpoint_type)
-                #ep = self._endpoints.get(obj.hostname + ':' + obj.endpoint_type)
-                ep.axes = obj.axes()
-                ep.streams = obj.streams()
+                ep = self._endpoints.get(key)
+                if ep is None:
+                    return  # enrich_endpoint already logged why
+            ep.axes = obj.axes()
+            ep.streams = obj.streams()
             ep.capabilities_received = True
             log.info(f"capabilities received: {ep.axes}, {ep.streams}")
-            self._endpoints[obj.hostname+':'+obj.endpoint_type] = ep  # ensure we have the axes and streams
+            self._endpoints[key] = ep  # ensure we have the axes and streams
             all_endpoints = self._endpoints | self._scanner.by_hostname | self._scanner.by_ip
             self.root.menu.set_endpoints(all_endpoints)
             self.burst(RobotCapabilitiesAck(hostname=obj.hostname, endpoint_type=obj.endpoint_type))

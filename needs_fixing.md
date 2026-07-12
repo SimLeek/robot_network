@@ -299,3 +299,54 @@ these fixes should be implemented but are either large tasks or are blocked.
     (the counterpart to apply()) and routed _frac_to_pixel through it;
     verified as a true inverse of the forward crop/scale math in
     test_viewport.py.
+
+- **The "needs 2 brain runs to connect" bug, root cause found.**
+  _robot_capabilities_handler's inline fallback lookup (for when an
+  endpoint isn't in self._endpoints yet) required v.endpoint_type ==
+  obj.endpoint_type to find the scanner's record -- but on the very
+  first RobotCapabilities message for an endpoint, the scanner's own
+  record still has endpoint_type='unknown' (it doesn't learn the real
+  type until this very message). The match always failed on that first
+  receipt, hit the "Could not find endpoint" error-and-return path, and
+  never set capabilities_received -- no matter how many times the
+  endpoint retried (matching "asked for capabilities" repeating
+  forever). enrich_endpoint already had the correct fix (hostname-only
+  matching); the handler was just duplicating the lookup with an extra,
+  wrong condition instead of using it. No prior test coverage existed
+  for this handler at all -- added
+  tests/test_radio_capabilities_handler.py.
+
+- **The aspect-ratio/max-zoom bugs were the same root cause.** Both
+  _frac_to_pixel and _on_edit_scroll read source-frame dimensions from
+  DisplaySubSystem.in_img, which is the already-scaled, already-menu-
+  composited out_res frame -- not the true native-resolution source.
+  This made source == display exactly, which (a) collapsed the mouse's
+  inverse-mapping to a no-op identity transform (explaining "max x
+  limited by the texture's aspect ratio" -- the raw, letterbox-bounded
+  canvas fraction was being used unmodified), and (b) collapsed
+  max_zoom to precisely 1.0 (mathematically impossible to zoom past
+  baseline, explaining scroll doing nothing in edit mode). Both now use
+  MenuSubSystem.last_img, the true raw frame set directly from
+  GstReceiver's callback.
+
+- **Ctrl+Shift+2 in MenuSubSystem.handle_keyboard was dead code.**
+  displayarray's PassthruMglWindowConfig.on_key_event already
+  intercepts Ctrl+Shift+<0/1/2> itself (hardcoded keycodes 41/33/64)
+  and sets input_mode directly, returning before ever calling
+  _route('key', ...) -- so handle_keyboard's own check for this
+  combination never actually ran. Removed it; mode-switching is
+  entirely displayarray's own mechanism. send_frames_always now checks
+  cfg.input_mode == 2 directly before running edge-pan, rather than
+  relying on _edit_mouse_pos being cleared by the (dead) key handler.
+
+- **ActionFactory.unbind_all() never cleared mouse_press/release
+  handlers**, a separate, real (if currently harmless in practice)
+  gap -- _bind_input() re-binding on every connect happened to mask it
+  for that specific path. Fixed; added tests/test_action_factory.py
+  (no dedicated coverage existed for this class before).
+
+- **WiFi auto-connecting when it shouldn't** -- reported but explicitly
+  deprioritized (Simleek: "not a super important issue... later todo
+  stuff"), and not confirmed against real hardware yet (only tested
+  against the sandbox endpoint so far). Revisit once tested against an
+  actual robot on the network.

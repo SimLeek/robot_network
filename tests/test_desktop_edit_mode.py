@@ -28,6 +28,7 @@ def _make_sub(source_shape=(1080, 1920, 3), out_res=(640, 480), screen_width=192
     sub = DesktopSubSystem(endpoint=endpoint)
     sub._root = MagicMock()
     sub._root.menu.visible = False
+    sub._root.menu.last_img = np.zeros(source_shape, dtype=np.uint8)
     sub._root.displayer.in_img = np.zeros(source_shape, dtype=np.uint8)
     sub._root.displayer.out_res = out_res
     return sub
@@ -113,6 +114,23 @@ class TestEditModeScroll(unittest.TestCase):
         for _ in range(200):
             sub._on_edit_scroll(1.0)
         self.assertLessEqual(sub.viewport.zoom, max_z + 1e-9)
+
+    def test_uses_true_source_resolution_not_the_already_scaled_display_frame(self):
+        # Regression test for the actual bug: _on_edit_scroll used to
+        # read source dimensions from displayer.in_img, which is
+        # already scaled to out_res -- making source == display exactly,
+        # which collapses max_zoom to precisely 1.0 (mathematically
+        # impossible to zoom past baseline, since the valid range
+        # becomes a single point). menu.last_img is the true, native-
+        # resolution source frame and must be what's actually used.
+        sub = _make_sub(source_shape=(1080, 1920, 3), out_res=(640, 480))
+        # Sanity check the fixture itself reflects the real-world case:
+        # source and display are genuinely different resolutions.
+        self.assertNotEqual(sub._root.menu.last_img.shape[:2], sub._root.displayer.out_res[::-1])
+
+        sub._on_edit_scroll(1.0)
+
+        self.assertGreater(sub.viewport.zoom, 1.0)  # zoom actually happened
 
 
 class TestEditModeMouseMove(unittest.TestCase):

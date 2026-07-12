@@ -132,8 +132,9 @@ class DesktopSubSystem(SubSystem):
         crashes at pack time, not just looks wrong."""
         x_frac, y_frac = ty, tx
         d = self._root.displayer
-        if d is not None and getattr(d, 'in_img', None) is not None:
-            source_h, source_w = d.in_img.shape[:2]
+        m = self._root.menu
+        if d is not None and m is not None and getattr(m, 'last_img', None) is not None:
+            source_h, source_w = m.last_img.shape[:2]
             display_w, display_h = d.out_res
             x_frac, y_frac = self.viewport.inverse_map(
                 x_frac, y_frac, source_w, source_h, display_w, display_h)
@@ -175,9 +176,10 @@ class DesktopSubSystem(SubSystem):
 
     def _on_edit_scroll(self, y_offset: float):
         d = self._root.displayer
-        if d is None or getattr(d, 'in_img', None) is None:
+        m = self._root.menu
+        if d is None or m is None or getattr(m, 'last_img', None) is None:
             return
-        source_h, source_w = d.in_img.shape[:2]
+        source_h, source_w = m.last_img.shape[:2]
         factor = 1.1 if y_offset > 0 else (1 / 1.1 if y_offset < 0 else 1.0)
         if factor != 1.0:
             self.viewport.zoom_by(factor, source_w, source_h, d.out_res[0], d.out_res[1])

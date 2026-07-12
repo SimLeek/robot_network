@@ -102,6 +102,8 @@ class ActionFactory:
         self._keyboard_handler.clear()
         self._mouse_move_handler = None
         self._mouse_click_handler = None
+        self._mouse_press_handler = None
+        self._mouse_release_handler = None
         self._mouse_scroll_handler = None
         return self
 

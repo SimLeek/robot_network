@@ -140,18 +140,14 @@ class MenuSubSystem(SubSystem):
     def handle_keyboard(self, key, action, modifiers):
         # if this is ever called, then self.root.displayer is not None
         keys = self.root.displayer.displayer.displayer.config.wnd.keys
-        cfg = self.root.displayer.displayer.displayer.config
         # Ctrl+backtick: toggle menu in any mode
         if key == ord('`') and action == keys.ACTION_PRESS and modifiers.ctrl:
             self.toggle()
             return
-        # Ctrl+Shift+2: toggle edit mode (zoom/pan the local view -- does
-        # not touch the remote endpoint at all).
-        if key == ord('2') and action == keys.ACTION_PRESS and modifiers.ctrl and modifiers.shift:
-            cfg.input_mode = 1 if cfg.input_mode == 2 else 2
-            if cfg.input_mode != 2 and isinstance(self.root.active_sub, DesktopSubSystem):
-                self.root.active_sub._edit_mouse_pos = None  # stop edge-panning once we've left edit mode
-            return
+        # Note: Ctrl+Shift+0/1/2 (mode switching) is handled entirely
+        # inside displayarray's PassthruMglWindowConfig.on_key_event --
+        # it never reaches here at all, so there's nothing to do for it
+        # in this method.
         # When menu is visible, route navigation keys to it; don't forward to remote
         if self.visible and action == keys.ACTION_PRESS:
             # displayarray can have varying backends. This isolates breaking changes.
@@ -268,7 +264,10 @@ class MenuSubSystem(SubSystem):
                 display_w, display_h = self.out_res
                 active = self.root.active_sub
                 if isinstance(active, DesktopSubSystem):
-                    active.check_edge_pan(source_w, source_h, display_w, display_h, 1.0 / self.fps)
+                    if self.root.displayer is not None:
+                        cfg = self.root.displayer.displayer.displayer.config
+                        if cfg.input_mode == 2:
+                            active.check_edge_pan(source_w, source_h, display_w, display_h, 1.0 / self.fps)
                     img = active.viewport.apply(img, display_w, display_h)
                 else:
                     img = self._fallback_viewport.apply(img, display_w, display_h)

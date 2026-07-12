@@ -379,6 +379,7 @@ class _FakeWKeys:
 def _make_fake_root(with_displayer=True, menu_visible=False, source_shape=(1080, 1920, 3), out_res=(1920, 1080)):
     root = MagicMock()
     root.menu.visible = menu_visible
+    root.menu.last_img = np.zeros(source_shape, dtype=np.uint8)
     if with_displayer:
         root.displayer.displayer.displayer.config.wnd.keys = _FakeWKeys
         root.displayer.in_img = np.zeros(source_shape, dtype=np.uint8)
