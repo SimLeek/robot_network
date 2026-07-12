@@ -113,6 +113,7 @@ class DesktopVideoFeeder:
         self._appsink = None
         self._appsrc = None
         self._negotiated = False
+        self._frame_count = 0
         self._glib_loop:   Optional[GLib.MainLoop]    = None
         self._glib_thread: Optional[threading.Thread] = None
 
@@ -202,6 +203,10 @@ class DesktopVideoFeeder:
             self._negotiated = True
 
         out_buf = Gst.Buffer.new_wrapped(out_bytes)
+        frame_duration = Gst.SECOND // self._fps
+        out_buf.pts = self._frame_count * frame_duration
+        out_buf.duration = frame_duration
+        self._frame_count += 1
         self._appsrc.emit('push-buffer', out_buf)
         return Gst.FlowReturn.OK
 
@@ -239,6 +244,7 @@ class DesktopVideoFeeder:
         self._appsink = None
         self._appsrc = None
         self._negotiated = False
+        self._frame_count = 0
         if self._glib_loop and self._glib_loop.is_running():
             self._glib_loop.quit()
         self._glib_loop = None

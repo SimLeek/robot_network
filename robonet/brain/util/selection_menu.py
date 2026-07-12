@@ -522,7 +522,7 @@ class SelectionMenu:
     def _draw_centered_list(self, img, title: str, items: List[str],
                             cursor: int,
                             base_colors: Optional[List] = None,
-                            footer: str = '[Up/Dn]=nav [Esc]=back',
+                            footer: str = '[Up/Dn]=nav [Tab]=back',
                             reserve_rows: int = 2):
         """
         Draw a scrollable list keeping the cursor row at vertical centre.
@@ -593,7 +593,7 @@ class SelectionMenu:
             title='=== ROBONET ===',
             items=_MAIN_ITEMS_BASE,
             cursor=self._cursor,
-            footer='[Ent]=select  [Esc]=close',
+            footer='[Ent]=select  [Tab]=close',
         )
 
     def _draw_radio_menu(self, img):
@@ -606,7 +606,7 @@ class SelectionMenu:
             items=items,
             cursor=self._cursor,
             base_colors=colors,
-            footer='[Ent]=select  [Esc]=back',
+            footer='[Ent]=select  [Tab]=back',
         )
 
     def _draw_settings_menu(self, img):
@@ -617,9 +617,9 @@ class SelectionMenu:
 
         # When editing: reserve an extra row for the inline input box
         reserve = 3 if self._settings_edit else 2
-        hint    = ('[Ent]=confirm  [Esc]=cancel'
+        hint    = ('[Ent]=confirm  [Tab]=cancel'
                    if self._settings_edit
-                   else '[Ent]=edit/toggle  [Esc]=back')
+                   else '[Ent]=edit/toggle  [Tab]=back')
 
         self._draw_centered_list(
             img,
@@ -655,7 +655,7 @@ class SelectionMenu:
             items=items,
             cursor=self._cursor,
             base_colors=colors,
-            footer='[<-/->]=page  [Up/Dn]=scroll  [Esc]=back',
+            footer='[<-/->]=page  [Up/Dn]=scroll  [Tab]=back',
         )
 
     def _draw_av_sources_menu(self, img):
@@ -672,7 +672,7 @@ class SelectionMenu:
             title=f'=== AV SOURCES: {tab_line} ===',
             items=items,
             cursor=self._cursor,
-            footer='[<-/->]=kind  [Up/Dn]=scroll  [Ent]=select  [Esc]=back',
+            footer='[<-/->]=kind  [Up/Dn]=scroll  [Ent]=select  [Tab]=back',
         )
 
     def _draw_sudo(self, img):
@@ -683,4 +683,4 @@ class SelectionMenu:
         y  = self._blit_line(img, y, 'Password:', _FG)
         y  = self._blit_line(img, y, '*' * len(self._password) or '_', _TITLE)
         y += self._ch
-        self._blit_line(img, y, '[Ent]=ok  [Esc]=cancel', _DIM)
+        self._blit_line(img, y, '[Ent]=ok  [Tab]=cancel', _DIM)
