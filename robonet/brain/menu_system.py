@@ -133,9 +133,17 @@ class MenuSubSystem(SubSystem):
     def handle_keyboard(self, key, action, modifiers):
         # if this is ever called, then self.root.displayer is not None
         keys = self.root.displayer.displayer.displayer.config.wnd.keys
+        cfg = self.root.displayer.displayer.displayer.config
         # Ctrl+backtick: toggle menu in any mode
         if key == ord('`') and action == keys.ACTION_PRESS and modifiers.ctrl:
             self.toggle()
+            return
+        # Ctrl+Shift+2: toggle edit mode (zoom/pan the local view -- does
+        # not touch the remote endpoint at all).
+        if key == ord('2') and action == keys.ACTION_PRESS and modifiers.ctrl and modifiers.shift:
+            cfg.input_mode = 1 if cfg.input_mode == 2 else 2
+            if cfg.input_mode != 2:
+                self.root.displayer._edit_mouse_pos = None  # stop edge-panning once we've left edit mode
             return
         # When menu is visible, route navigation keys to it; don't forward to remote
         if self.visible and action == keys.ACTION_PRESS:

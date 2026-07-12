@@ -102,11 +102,15 @@ class TestRunOnceAppliesNormalization(unittest.TestCase):
     to the displayer, not just that the arithmetic itself is correct."""
 
     def _make_sub(self, in_aud):
+        from robonet.brain.util.viewport import Viewport
         sub = DisplaySubSystem.__new__(DisplaySubSystem)
         sub.in_img = np.zeros((4, 4, 3), dtype=np.uint8)
         sub.in_aud = in_aud
         sub.displayer = MagicMock()
         sub.frame_time = 0.0
+        sub.out_res = (4, 4)
+        sub.viewport = Viewport()
+        sub._edit_mouse_pos = None
         sub._audio_stream = None
         return sub
 

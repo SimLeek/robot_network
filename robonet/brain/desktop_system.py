@@ -108,10 +108,15 @@ class DesktopSubSystem(SubSystem):
         """Raw normalized fractions -> real screen pixel coordinates.
         displayarray's tx/ty are swapped relative to true horizontal/
         vertical -- swapped here, at the very last step, right before
-        applying width/height, rather than earlier."""
+        applying width/height, rather than earlier. Clamped to the
+        screen: MouseEvent.x/y pack as uint32, so an out-of-range
+        (e.g. negative, from the mouse being outside the captured
+        texture) value crashes at pack time, not just looks wrong."""
         x_frac, y_frac = ty, tx
         x = int(x_frac * self._screen_width)
         y = int(y_frac * self._screen_height)
+        x = max(0, min(self._screen_width - 1, x))
+        y = max(0, min(self._screen_height - 1, y))
         return x, y
 
     def _on_mouse_move(self, tx: float, ty: float):

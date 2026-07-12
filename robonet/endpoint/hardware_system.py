@@ -165,7 +165,10 @@ class MultiAVRobotHardware(RobotHardware, ABC):
                 active_video: Optional[str] = None,
                 active_audio_in: Optional[str] = None,
                 active_audio_out: Optional[str] = None,
-                sample_rate: int = 48000):
+                sample_rate: int = 48000,
+                width: Optional[int] = None,
+                height: Optional[int] = None,
+                fps: Optional[int] = None):
         super().__init__()
 
         self._video_sources  = dict(video_sources or {})
@@ -183,9 +186,9 @@ class MultiAVRobotHardware(RobotHardware, ABC):
         self._gst_sender = GstSender(src_device=video_device,
                                      mic_device=mic_device,
                                      sample_rate=sample_rate,
-                                     width=settings['cam_res'][0],
-                                     height=settings['cam_res'][1],
-                                     fps=settings['cam_fps'])
+                                     width=width if width is not None else settings['cam_res'][0],
+                                     height=height if height is not None else settings['cam_res'][1],
+                                     fps=fps if fps is not None else settings['cam_fps'])
         self._gst_receiver = GstReceiver(recv_img_callback=None,
                                          direct_audio=True,
                                          audio_output_device=speaker_device)

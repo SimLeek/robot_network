@@ -12,6 +12,7 @@ from displayarray import display
 from robonet.brain.util.action_factory import ActionFactory
 from robonet.brain.util.desktop_window_config import make_window_config_for_server
 from robonet.brain.util.system_base import SubSystem
+from robonet.brain.util.viewport import Viewport
 import robonet.brain.settings as settings_
 settings = settings_.get()
 from robonet.logging_setup import setup_logging
@@ -52,6 +53,12 @@ class DisplaySubSystem(SubSystem):
         self.win_cfg = None
         self.af_thru = None
         self.af_edit = None
+        self.viewport = Viewport()
+        # Edit-mode edge-pan: last known mouse position while in edit
+        # mode, checked every frame in run_once (not just on mouse-move
+        # events) so panning continues smoothly while the mouse just
+        # sits near an edge without needing to keep moving.
+        self._edit_mouse_pos: Optional[Tuple[float, float]] = None
 
     def start(self):
         self._start_audio(self._audio_sample_rate)
@@ -101,15 +108,34 @@ class DisplaySubSystem(SubSystem):
     def setup(self, sm):
         self.af_thru = ActionFactory()
         self.af_edit = ActionFactory()
+        self.af_edit.bind_mouse_move(self._on_edit_mouse_move)
+        self.af_edit.bind_mouse_scroll(self._on_edit_scroll)
         self.win_cfg = make_window_config_for_server(sm, self.af_thru, self.af_edit)
         self.displayer = display(
             self.in_img, window_names=['screen'],
             mgl_config=self.win_cfg,
         )
 
+    def _on_edit_mouse_move(self, tx: float, ty: float):
+        # Same swap as pass-through mode's mouse handling -- displayarray's
+        # tx/ty are swapped relative to true horizontal/vertical.
+        self._edit_mouse_pos = (ty, tx)
+
+    def _on_edit_scroll(self, y_offset: float):
+        if self.in_img is None:
+            return
+        source_h, source_w = self.in_img.shape[:2]
+        factor = 1.1 if y_offset > 0 else (1 / 1.1 if y_offset < 0 else 1.0)
+        if factor != 1.0:
+            self.viewport.zoom_by(factor, source_w, source_h, self.out_res[0], self.out_res[1])
+
     async def run_once(self, sm: 'ServerSystem'):
         t1 = time.time()
         img = self.in_img
+        if img is not None:
+            source_h, source_w = img.shape[:2]
+            self._check_edge_pan(source_w, source_h)
+            img = self.viewport.apply(img, self.out_res[0], self.out_res[1])
         self.displayer.update(img, 'screen')
         aud = self.in_aud
         if aud is not None:
@@ -123,6 +149,28 @@ class DisplaySubSystem(SubSystem):
             self.displayer.update(aud, 'audio')
         elapsed = time.time() - t1
         await asyncio.sleep(max(0.0, self.frame_time - elapsed))
+
+    def _check_edge_pan(self, source_w: int, source_h: int):
+        """While in edit mode, panning when the mouse sits within 10%
+        of an edge of the display window. Runs every frame (not just
+        on mouse-move) so it keeps panning while the mouse holds still
+        near an edge, matching how edge-scroll works in most editors."""
+        if self._edit_mouse_pos is None:
+            return
+        tx, ty = self._edit_mouse_pos
+        edge = 0.10
+        pan_speed = 0.5 * self.frame_time  # fraction of the source frame per second
+        dx = dy = 0.0
+        if tx < edge:
+            dx = -pan_speed * (edge - tx) / edge
+        elif tx > 1.0 - edge:
+            dx = pan_speed * (tx - (1.0 - edge)) / edge
+        if ty < edge:
+            dy = -pan_speed * (edge - ty) / edge
+        elif ty > 1.0 - edge:
+            dy = pan_speed * (ty - (1.0 - edge)) / edge
+        if dx or dy:
+            self.viewport.pan_by(dx, dy, source_w, source_h, self.out_res[0], self.out_res[1])
 
     async def run(self, sm: 'ServerSystem'):
         while not self.displayer.exited():

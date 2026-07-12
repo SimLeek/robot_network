@@ -59,6 +59,20 @@ class TestDesktopHwConstruction(unittest.TestCase):
         self.assertEqual(hw._video_sources['desktop'], VIDEO_SOURCE_XIMAGESRC)
         self.assertEqual(hw._active_video, 'desktop')
 
+    def test_transmits_at_native_screen_resolution_not_cam_res(self):
+        # Desktop content is mostly static and compresses well at full
+        # res; local zoom/pan needs the actual detail. settings['cam_res']
+        # is a small default meant for AI-facing camera feeds and
+        # shouldn't apply here.
+        hw = self._construct()
+        with patch('robonet.endpoint.desktop_hardware.pyautogui', self._mock_pyautogui(2560, 1440)):
+            from robonet.endpoint.desktop_hardware import DesktopHw
+            with patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=[]), \
+                 patch('robonet.endpoint.desktop_hardware.get_first_speaker_device', return_value='hw:0,0'):
+                hw2 = DesktopHw()
+        self.assertEqual(hw2._gst_sender._width, 2560)
+        self.assertEqual(hw2._gst_sender._height, 1440)
+
     def test_construction_uses_desktop_audio_mix_directly(self):
         from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_DESKTOP_MIX
         hw = self._construct()

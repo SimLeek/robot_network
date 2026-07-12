@@ -226,3 +226,39 @@ these fixes should be implemented but are either large tasks or are blocked.
   (pass_through_cb now passes raw tx/ty straight through everywhere,
   with the single swap point living in one place,
   DesktopSubSystem._frac_to_pixel).
+
+- **Clamping came back, but at the pixel level, not the fraction
+  level.** Removing it outright crashed: MouseEvent.x/y pack as uint32,
+  and an out-of-range fraction (mouse over letterboxing) produces a
+  negative or over-range pixel value that fails _pack_uint32's
+  assertion. _frac_to_pixel now clamps the final x/y to
+  [0, screen_dimension-1] after scaling, not tx/ty themselves.
+
+- **Desktop now transmits at native screen resolution, not
+  settings['cam_res'].** Corrected an architectural mistake: scaling,
+  cropping, zooming, and aspect-ratio handling all now happen entirely
+  display-side (robonet/brain/util/viewport.py), operating on the
+  already-received full-resolution numpy frame. None of it touches
+  GStreamer or the network -- panning/zooming at the source would
+  defeat temporal compression on mostly-static desktop content and
+  massively increase bitrate for no benefit, since native-resolution
+  desktop content already compresses very well as-is.
+  MultiAVRobotHardware.__init__ gained optional width/height/fps
+  overrides so DesktopHw can pass pyautogui.size() instead of the
+  generic cam_res meant for small AI-facing camera feeds.
+
+- **Zoom/pan implemented, human-facing controls only so far.**
+  Ctrl+Shift+2 toggles edit mode; scroll zooms (1.0 = whole frame
+  visible, letterboxed to preserve aspect ratio; max = 1 source pixel
+  per display pixel, computed from actual source/display resolution,
+  not hardcoded); hovering within 10% of an edge in edit mode pans,
+  checked every frame so it keeps panning while the mouse just sits
+  near the edge. robonet/brain/util/viewport.py + tests/test_viewport.py
+  has the crop/scale/pad math (handles the letterboxing case correctly
+  -- the ideal crop region can genuinely exceed the source frame in one
+  dimension when source/display aspect ratios differ, which needed
+  care to get right). NOT yet done: AI neuron/token controls for
+  zoom/pan/reset, mentioned as wanted but out of scope for this round
+  given how much else changed -- same af.bind_ai_neuron/bind_ai_token
+  pattern used elsewhere in this codebase should apply directly once
+  it's time to wire it up.

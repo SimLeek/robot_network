@@ -107,8 +107,17 @@ class DesktopHw(MultiAVRobotHardware):
         except DeviceNotFoundError:
             log.error("Could not find a speaker device. Will be starting without one.")
 
+        # Native screen resolution, not settings['cam_res'] -- desktop
+        # content is mostly static and compresses well at full res, and
+        # local (display-side) zoom/pan needs the actual detail to be
+        # useful. cam_fps still applies; screen capture doesn't
+        # meaningfully benefit from a resolution knob the way framerate
+        # does for bandwidth.
+        screen = pyautogui.size()
+
         super().__init__(video_sources=video_sources, audio_inputs=audio_inputs,
-                         audio_outputs=audio_outputs, sample_rate=48000)
+                         audio_outputs=audio_outputs, sample_rate=48000,
+                         width=screen.width, height=screen.height)
 
         self._held_keys: set = set()
         self._held_buttons: set = set()
