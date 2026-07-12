@@ -36,6 +36,21 @@ class DesktopSubSystem(SubSystem):
         self._tasks = []
         self.handlers = {}
 
+        # Mouse positions arrive as normalized 0-1 texel coordinates
+        # (fraction across the captured frame) -- scaling them by the
+        # endpoint's actual screen resolution (reported in its
+        # capabilities, not the possibly-downscaled transmitted size)
+        # is what turns them into real pixel coordinates on that
+        # machine. Defaults to 1920x1080 if the endpoint didn't report
+        # a 'screen' stream for some reason, rather than dividing by
+        # zero or refusing to move the mouse at all.
+        self._screen_width, self._screen_height = 1920, 1080
+        for s in getattr(endpoint, 'streams', None) or []:
+            if s.get('name') == 'screen' and s.get('type') == 'video':
+                self._screen_width = s.get('width', self._screen_width)
+                self._screen_height = s.get('height', self._screen_height)
+                break
+
     def setup(self, root: 'ServerSystem'):
         self._root = root
 
@@ -89,10 +104,12 @@ class DesktopSubSystem(SubSystem):
         self._root.radio.burst(KeyEvent(
             key=name, pressed=(action == wkeys.ACTION_PRESS), modifiers=','.join(mods)))
 
-    def _on_mouse_move(self, x: float, y: float):
+    def _on_mouse_move(self, tx: float, ty: float):
         if self._root.displayer is None or self._root.menu.visible:
             return
-        self._root.radio.burst(MouseEvent(event_type=0, x=int(x), y=int(y), button=0, delta=0))
+        x = int(tx * self._screen_width)
+        y = int(ty * self._screen_height)
+        self._root.radio.burst(MouseEvent(event_type=0, x=x, y=y, button=0, delta=0))
 
     def _on_mouse_press(self, x: float, y: float, button: int):
         if self._root.displayer is None or self._root.menu.visible:

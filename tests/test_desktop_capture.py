@@ -16,6 +16,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from collections import namedtuple
 from unittest.mock import patch, mock_open, MagicMock
 
 import numpy as np
@@ -525,9 +526,16 @@ class TestDesktopHwConstruction(unittest.TestCase):
             hw = DesktopHw()  # must not raise
         self.assertEqual(hw._audio_outputs, {})
 
+    def _patched_pyautogui_size(self, width=1920, height=1080):
+        mock_pag = MagicMock()
+        Size = namedtuple('Size', 'width height')
+        mock_pag.size.return_value = Size(width, height)
+        return patch('robonet.endpoint.desktop_hardware.pyautogui', mock_pag)
+
     def test_build_capabilities_matches_module_function(self):
         hw = self._construct()
-        caps = hw.build_capabilities()
+        with self._patched_pyautogui_size():
+            caps = hw.build_capabilities()
         self.assertEqual(caps.endpoint_type, 'desktop')
         self.assertGreater(len(caps.axes()), 0)  # keys/mouse are real axes, not a statue
         self.assertGreater(len(caps.streams()), 0)  # video/audio are real streams
@@ -535,15 +543,19 @@ class TestDesktopHwConstruction(unittest.TestCase):
     def test_capabilities_axes_match_control_interface_spec(self):
         from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC
         hw = self._construct()
-        axes = hw.build_capabilities().axes()
+        with self._patched_pyautogui_size():
+            axes = hw.build_capabilities().axes()
         self.assertEqual(len(axes), len(DESKTOP_CONTROL_INTERFACE_SPEC))
         self.assertEqual({a['name'] for a in axes}, set(DESKTOP_CONTROL_INTERFACE_SPEC))
 
     def test_capabilities_streams_include_video_and_audio(self):
         hw = self._construct()
-        streams = hw.build_capabilities().streams()
+        with self._patched_pyautogui_size(width=2560, height=1440):
+            streams = hw.build_capabilities().streams()
         types = {s['type'] for s in streams}
         self.assertEqual(types, {'video', 'audio'})
+        screen = next(s for s in streams if s['name'] == 'screen')
+        self.assertEqual((screen['width'], screen['height']), (2560, 1440))
 
     def test_handlers_include_desktop_specific_and_inherited(self):
         hw = self._construct()

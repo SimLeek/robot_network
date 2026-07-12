@@ -57,9 +57,12 @@ def build_desktop_capabilities() -> RobotCapabilities:
         {'name': channel, 'description': info['hz'], 'keys': [], 'neuron': i}
         for i, (channel, info) in enumerate(DESKTOP_CONTROL_INTERFACE_SPEC.items())
     ]
+    screen = pyautogui.size()  # actual screen resolution -- NOT settings['cam_res'],
+                              # which is the transmitted/downscaled size and a
+                              # genuinely different number the brain needs to keep
+                              # separate for mouse-position scaling to land correctly.
     streams = [
-        {'name': 'screen', 'type': 'video',
-         'width': settings['cam_res'][0], 'height': settings['cam_res'][1]},
+        {'name': 'screen', 'type': 'video', 'width': screen.width, 'height': screen.height},
         {'name': 'mic', 'type': 'audio', 'sample_rate': 48000, 'channels': 1},
     ]
     return RobotCapabilities.build(axes=axes, streams=streams, hostname=HOSTNAME, endpoint_type='desktop')

@@ -495,24 +495,39 @@ class TestDesktopSubSystemKeyboardForwarding(unittest.TestCase):
 
 class TestDesktopSubSystemMouseForwarding(unittest.TestCase):
 
-    def _make_sub(self, **root_kwargs):
+    def _make_sub(self, screen_width=1920, screen_height=1080, **root_kwargs):
         from robonet.brain.desktop_system import DesktopSubSystem
-        sub = DesktopSubSystem(endpoint=MagicMock())
+        endpoint = MagicMock()
+        endpoint.streams = [{'name': 'screen', 'type': 'video',
+                             'width': screen_width, 'height': screen_height}]
+        sub = DesktopSubSystem(endpoint=endpoint)
         sub._root = _make_fake_root(**root_kwargs)
         return sub
 
-    def test_move_sends_single_event_type_0(self):
-        sub = self._make_sub()
+    def test_move_scales_normalized_position_by_screen_resolution(self):
+        sub = self._make_sub(screen_width=1920, screen_height=1080)
 
-        sub._on_mouse_move(12.7, 34.2)
+        sub._on_mouse_move(0.5, 0.25)  # normalized texel coords, not pixels
 
         sub._root.radio.burst.assert_called_once()
         sent = sub._root.radio.burst.call_args[0][0]
-        self.assertEqual((sent.event_type, sent.x, sent.y), (0, 12, 34))
+        self.assertEqual((sent.event_type, sent.x, sent.y), (0, 960, 270))
+
+    def test_move_uses_default_resolution_when_endpoint_reports_no_screen_stream(self):
+        from robonet.brain.desktop_system import DesktopSubSystem
+        endpoint = MagicMock()
+        endpoint.streams = [{'name': 'mic', 'type': 'audio'}]  # no 'screen' entry
+        sub = DesktopSubSystem(endpoint=endpoint)
+        sub._root = _make_fake_root()
+
+        sub._on_mouse_move(1.0, 1.0)  # far corner
+
+        sent = sub._root.radio.burst.call_args[0][0]
+        self.assertEqual((sent.x, sent.y), (1920, 1080))  # falls back to the 1920x1080 default
 
     def test_move_suppressed_while_menu_open(self):
         sub = self._make_sub(menu_visible=True)
-        sub._on_mouse_move(1, 2)
+        sub._on_mouse_move(0.1, 0.2)
         sub._root.radio.burst.assert_not_called()
 
     def test_press_sends_event_type_1(self):

@@ -51,7 +51,7 @@ def make_window_config_for_server(sm, af_thru: ActionFactory = None, af_edit: Ac
     def pass_through_cb(event_type, frame, name, *args):
         if event_type == 'mouse_pos':
             px, py, tx, ty, sx, sy = args
-            af_thru.on_mouse_move(px, py)
+            af_thru.on_mouse_move(tx, ty)
         elif event_type == 'mouse_press':
             px, py, button = args
             af_thru.on_mouse_press(px, py, button)
