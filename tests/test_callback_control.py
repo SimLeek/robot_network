@@ -229,21 +229,39 @@ class TestDesktopControlPath(unittest.TestCase):
 
 class TestKeycodeMapping(unittest.TestCase):
     """The brain-side half of desktop control: raw window-backend keycodes
-    -> pyautogui-compatible key names, before a KeyEvent is even sent."""
+    -> pyautogui-compatible key names, before a KeyEvent is even sent.
+    Built dynamically from whatever the actual backend's keys object
+    reports -- these differ enormously between backends (pyglet's F4 is
+    0xffc1, GLFW's is 293), so _FakeWKeys uses pyglet-like values here
+    specifically to prove that, not GLFW ones."""
 
-    def test_printable_ascii_passthrough(self):
+    def test_printable_ascii_passthrough_needs_no_keys_object(self):
         from robonet.brain.desktop_system import keycode_to_pyautogui
         self.assertEqual(keycode_to_pyautogui(ord('5')), '5')
-        self.assertEqual(keycode_to_pyautogui(ord('A')), 'a')  # GLFW reports letters uppercase
+        self.assertEqual(keycode_to_pyautogui(ord('A')), 'a')  # GLFW/pyglet both report letters uppercase
 
-    def test_named_keys(self):
+    def test_named_keys_resolve_via_the_actual_backends_values(self):
         from robonet.brain.desktop_system import keycode_to_pyautogui
-        self.assertEqual(keycode_to_pyautogui(257), 'enter')
-        self.assertEqual(keycode_to_pyautogui(340), 'shiftleft')
+        self.assertEqual(keycode_to_pyautogui(0xff0d, _FakeWKeys), 'enter')
+        self.assertEqual(keycode_to_pyautogui(0xffc1, _FakeWKeys), 'f4')
+        self.assertEqual(keycode_to_pyautogui(0xffe1, _FakeWKeys), 'shiftleft')
+
+    def test_glfw_style_number_does_not_falsely_match_a_pyglet_backend(self):
+        # Regression check for the actual bug: 293 is GLFW's F4, but
+        # under a pyglet-style keys object (_FakeWKeys) it must NOT
+        # resolve to 'f4' just because it happens to be a hardcoded
+        # value from a different backend's convention.
+        from robonet.brain.desktop_system import keycode_to_pyautogui
+        self.assertIsNone(keycode_to_pyautogui(293, _FakeWKeys))
 
     def test_unmapped_key_returns_none(self):
         from robonet.brain.desktop_system import keycode_to_pyautogui
-        self.assertIsNone(keycode_to_pyautogui(999999))
+        self.assertIsNone(keycode_to_pyautogui(999999, _FakeWKeys))
+
+    def test_no_keys_object_still_resolves_ascii_but_not_specials(self):
+        from robonet.brain.desktop_system import keycode_to_pyautogui
+        self.assertEqual(keycode_to_pyautogui(ord('q')), 'q')
+        self.assertIsNone(keycode_to_pyautogui(0xffc1))  # F4, unresolvable without a keys object
 
 
 def _stub_out_missing_displayarray_font_submodule():
@@ -332,6 +350,12 @@ class _FakeWKeys:
     ACTION_PRESS = 'PRESS'
     ACTION_RELEASE = 'RELEASE'
     ACTION_REPEAT = 'REPEAT'
+    # Deliberately pyglet-like (0xff-prefixed) rather than GLFW-style
+    # small integers, to prove the mapping is actually backend-agnostic
+    # rather than secretly assuming GLFW numbering.
+    ENTER = 0xff0d
+    F4 = 0xffc1
+    LEFT_SHIFT = 0xffe1
 
 
 def _make_fake_root(with_displayer=True, menu_visible=False):
@@ -531,31 +555,31 @@ class TestDesktopSubSystemMouseForwarding(unittest.TestCase):
         sub._root.radio.burst.assert_not_called()
 
     def test_press_sends_event_type_1(self):
-        sub = self._make_sub()
+        sub = self._make_sub(screen_width=1920, screen_height=1080)
 
-        sub._on_mouse_press(5, 6, 0)
+        sub._on_mouse_press(0.5, 0.25, 0)
 
         sub._root.radio.burst.assert_called_once()
         sent = sub._root.radio.burst.call_args[0][0]
-        self.assertEqual((sent.event_type, sent.x, sent.y), (1, 5, 6))
+        self.assertEqual((sent.event_type, sent.x, sent.y), (1, 960, 270))
 
     def test_release_sends_event_type_2(self):
-        sub = self._make_sub()
+        sub = self._make_sub(screen_width=1920, screen_height=1080)
 
-        sub._on_mouse_release(5, 6, 0)
+        sub._on_mouse_release(0.5, 0.25, 0)
 
         sub._root.radio.burst.assert_called_once()
         sent = sub._root.radio.burst.call_args[0][0]
-        self.assertEqual((sent.event_type, sent.x, sent.y), (2, 5, 6))
+        self.assertEqual((sent.event_type, sent.x, sent.y), (2, 960, 270))
 
     def test_press_suppressed_while_menu_open(self):
         sub = self._make_sub(menu_visible=True)
-        sub._on_mouse_press(5, 6, 0)
+        sub._on_mouse_press(0.1, 0.2, 0)
         sub._root.radio.burst.assert_not_called()
 
     def test_release_suppressed_while_menu_open(self):
         sub = self._make_sub(menu_visible=True)
-        sub._on_mouse_release(5, 6, 0)
+        sub._on_mouse_release(0.1, 0.2, 0)
         sub._root.radio.burst.assert_not_called()
 
     def test_scroll_sends_event_type_3_with_delta(self):

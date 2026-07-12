@@ -149,3 +149,28 @@ these fixes should be implemented but are either large tasks or are blocked.
   controlled the same way as any camera, via cam_res/cam_fps.
   `examples/teardown_desktop_capture.sh` removes the now-unused kernel
   modules from a machine that ran the old setup script.
+
+- **Desktop key mapping was hardcoded to GLFW's keycode numbers, but
+  the actual runtime backend is pyglet** (confirmed by reading
+  moderngl_window/pyglet source directly -- pyglet's F4 is 0xffc1,
+  GLFW's is 293). This meant every special key except plain ASCII
+  silently failed to forward at all. `keycode_to_pyautogui` now builds
+  its mapping dynamically from the actual runtime `keys` object instead
+  of a hardcoded table, matching the pattern `handle_keyboard`'s own
+  nav_map already used. Not fully closed: `LEFT_ALT`/`RIGHT_ALT` aren't
+  exposed by moderngl_window's Keys wrapper at all (only
+  LEFT_SHIFT/RIGHT_SHIFT/LEFT_CTRL are), so Alt as a *key itself* can't
+  be named this way -- but `KeyModifiers.alt` is a separately-populated
+  field (confirmed in moderngl_window's source) that should already
+  carry Alt's held/not-held state independent of this, so Alt+F4 should
+  work now that F4 itself resolves correctly. Worth confirming on real
+  hardware.
+
+- **Audio format mismatch, found via Simleek's own NaN/garbage-value
+  debugging.** The receive pipeline's caps filter didn't specify
+  format=, so audioconvert could negotiate anything (apparently S16LE
+  in practice) while `_pull_chunk` hardcoded `np.float32` reading the
+  raw bytes back -- 16-bit PCM samples reinterpreted as 32-bit floats,
+  which is exactly the "mostly zero, occasional NaN, values like
+  9e-41" pattern that produces garbage. Fixed by explicitly requesting
+  format=F32LE in the caps filter.

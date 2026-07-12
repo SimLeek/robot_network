@@ -4,53 +4,78 @@ robonet/desktop_control_spec.py
 Shared between robonet/brain/desktop_system.py (sends key/mouse events)
 and robonet/endpoint/desktop_hardware.py (declares them as capabilities
 axes) so both sides agree on the same channel counts.
+
+Special-key mapping is built dynamically from the actual runtime
+backend's key constants (moderngl_window's Keys object), not hardcoded
+numbers -- those differ enormously between backends (pyglet's F4 is
+0xffc1, GLFW's is 293), so a table hardcoded for one backend silently
+fails to recognize special keys under a different one.
 """
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
-# Best-effort GLFW keycode -> pyautogui key name mapping.
-# Printable ASCII keys (32-126) map directly via chr() already.
-_NAMED_KEY_MAP: Dict[int, str] = {
-    256: 'esc', 257: 'enter', 258: 'tab', 259: 'backspace',
-    260: 'insert', 261: 'delete',
-    262: 'right', 263: 'left', 264: 'down', 265: 'up',
-    266: 'pageup', 267: 'pagedown', 268: 'home', 269: 'end',
-    280: 'capslock', 281: 'scrolllock', 282: 'numlock',
-    283: 'printscreen', 284: 'pause',
-    290: 'f1', 291: 'f2', 292: 'f3', 293: 'f4', 294: 'f5', 295: 'f6',
-    296: 'f7', 297: 'f8', 298: 'f9', 299: 'f10', 300: 'f11', 301: 'f12',
-    302: 'f13', 303: 'f14', 304: 'f15', 305: 'f16', 306: 'f17',
-    307: 'f18', 308: 'f19',
-    320: 'num0', 321: 'num1', 322: 'num2', 323: 'num3', 324: 'num4',
-    325: 'num5', 326: 'num6', 327: 'num7', 328: 'num8', 329: 'num9',
-    330: 'decimal', 331: 'divide', 332: 'multiply', 333: 'subtract',
-    334: 'add', 335: 'enter',
-    340: 'shiftleft', 341: 'ctrlleft', 342: 'altleft', 343: 'winleft',
-    344: 'shiftright', 345: 'ctrlright', 346: 'altright', 347: 'winright',
+# moderngl_window.context.base.keys.BaseKeys attribute name -> pyautogui
+# key name. Covers every named key BaseKeys defines except plain
+# letters/digits, which map to their ASCII value consistently across
+# backends already (see keycode_to_pyautogui's fallback branch).
+_SPECIAL_KEY_TO_PYAUTOGUI = {
+    'ESCAPE': 'esc', 'SPACE': 'space', 'ENTER': 'enter',
+    'PAGE_UP': 'pageup', 'PAGE_DOWN': 'pagedown',
+    'LEFT': 'left', 'RIGHT': 'right', 'UP': 'up', 'DOWN': 'down',
+    'LEFT_SHIFT': 'shiftleft', 'RIGHT_SHIFT': 'shiftright', 'LEFT_CTRL': 'ctrlleft',
+    'TAB': 'tab', 'COMMA': ',', 'MINUS': '-', 'PERIOD': '.', 'SLASH': '/',
+    'SEMICOLON': ';', 'EQUAL': '=', 'LEFT_BRACKET': '[', 'RIGHT_BRACKET': ']',
+    'BACKSLASH': '\\', 'BACKSPACE': 'backspace', 'INSERT': 'insert', 'DELETE': 'delete',
+    'HOME': 'home', 'END': 'end', 'CAPS_LOCK': 'capslock',
+    'F1': 'f1', 'F2': 'f2', 'F3': 'f3', 'F4': 'f4', 'F5': 'f5', 'F6': 'f6',
+    'F7': 'f7', 'F8': 'f8', 'F9': 'f9', 'F10': 'f10', 'F11': 'f11', 'F12': 'f12',
 }
 
+_dynamic_map_cache: Dict[int, Dict[Any, str]] = {}
 
-def keycode_to_pyautogui(key: int) -> Optional[str]:
-    """Translate a raw window-backend keycode into a pyautogui key name."""
-    if key in _NAMED_KEY_MAP:
-        return _NAMED_KEY_MAP[key]
+
+def _build_dynamic_key_map(keys) -> Dict[Any, str]:
+    """keys -> {raw_value: pyautogui_name}, cached per keys object (its
+    constant values don't change during a session)."""
+    cache_key = id(keys)
+    if cache_key in _dynamic_map_cache:
+        return _dynamic_map_cache[cache_key]
+    mapping = {}
+    for attr_name, pyautogui_name in _SPECIAL_KEY_TO_PYAUTOGUI.items():
+        value = getattr(keys, attr_name, None)
+        if value is not None and value != 'undefined':
+            mapping[value] = pyautogui_name
+    _dynamic_map_cache[cache_key] = mapping
+    return mapping
+
+
+def keycode_to_pyautogui(key: int, keys=None) -> Optional[str]:
+    """Translate a raw window-backend keycode into a pyautogui key name.
+
+    keys: the backend's moderngl_window Keys object (e.g.
+    displayer.displayer.displayer.config.wnd.keys). Without it, only
+    plain ASCII letters/digits/punctuation (32-126) resolve -- special
+    keys (F-keys, arrows, etc.) can't be identified at all since their
+    raw values are backend-specific.
+    """
+    if keys is not None:
+        dynamic_map = _build_dynamic_key_map(keys)
+        if key in dynamic_map:
+            return dynamic_map[key]
     if 32 <= key <= 126:
         ch = chr(key)
         return ch.lower() if ch.isalpha() else ch
     return None
 
 
-# Printable ASCII key range, matching keycode_to_pyautogui's fallback branch.
-_PRINTABLE_ASCII_COUNT = 126 - 32 + 1  # 95
-
 DESKTOP_CONTROL_INTERFACE_SPEC = {
     'keys_press': {
-        'count': len(_NAMED_KEY_MAP) + _PRINTABLE_ASCII_COUNT,
+        'count': len(_SPECIAL_KEY_TO_PYAUTOGUI) + 95,  # + printable ASCII (32-126)
         'hz': 'event-driven, not polled -- one token per key-down. '
              'Human typing rarely exceeds ~10/s.',
     },
     'keys_release': {
-        'count': len(_NAMED_KEY_MAP) + _PRINTABLE_ASCII_COUNT,
+        'count': len(_SPECIAL_KEY_TO_PYAUTOGUI) + 95,
         'hz': 'event-driven -- one token per key-up, roughly mirrors keys_press.',
     },
     'mouse_move_x': {

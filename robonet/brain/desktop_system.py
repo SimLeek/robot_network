@@ -94,7 +94,7 @@ class DesktopSubSystem(SubSystem):
         wkeys = d.displayer.displayer.config.wnd.keys
         if action not in (wkeys.ACTION_PRESS, wkeys.ACTION_RELEASE):
             return  # ignore repeats -- the endpoint's keyDown already covers "held"
-        name = keycode_to_pyautogui(key)
+        name = keycode_to_pyautogui(key, wkeys)
         if name is None:
             return
         mods = []
@@ -111,15 +111,19 @@ class DesktopSubSystem(SubSystem):
         y = int(ty * self._screen_height)
         self._root.radio.burst(MouseEvent(event_type=0, x=x, y=y, button=0, delta=0))
 
-    def _on_mouse_press(self, x: float, y: float, button: int):
+    def _on_mouse_press(self, tx: float, ty: float, button: int):
         if self._root.displayer is None or self._root.menu.visible:
             return
-        self._root.radio.burst(MouseEvent(event_type=1, x=int(x), y=int(y), button=int(button), delta=0))
+        x = int(tx * self._screen_width)
+        y = int(ty * self._screen_height)
+        self._root.radio.burst(MouseEvent(event_type=1, x=x, y=y, button=int(button), delta=0))
 
-    def _on_mouse_release(self, x: float, y: float, button: int):
+    def _on_mouse_release(self, tx: float, ty: float, button: int):
         if self._root.displayer is None or self._root.menu.visible:
             return
-        self._root.radio.burst(MouseEvent(event_type=2, x=int(x), y=int(y), button=int(button), delta=0))
+        x = int(tx * self._screen_width)
+        y = int(ty * self._screen_height)
+        self._root.radio.burst(MouseEvent(event_type=2, x=x, y=y, button=int(button), delta=0))
 
     def _on_mouse_scroll(self, y_offset: int):
         if self._root.displayer is None or self._root.menu.visible:

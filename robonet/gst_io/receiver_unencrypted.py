@@ -293,7 +293,7 @@ class _AudioRecvPipeline:
             f'encoding-name={codec.upper()},payload=97'))
 
         outcaps.set_property('caps', Gst.Caps.from_string(
-            f'audio/x-raw,rate={self._info.sample_rate},channels=1'))
+            f'audio/x-raw,format=F32LE,rate={self._info.sample_rate},channels=1'))
 
         for el in (src, depay, dec, conv, outcaps, sink):
             p.add(el)

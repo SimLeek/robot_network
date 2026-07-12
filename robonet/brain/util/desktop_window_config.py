@@ -48,16 +48,24 @@ def make_window_config_for_server(sm, af_thru: ActionFactory = None, af_edit: Ac
 
     register_desktop_actions(af_thru, af_edit, sm)
 
+    # mouse_press/release don't carry texel coordinates themselves (only
+    # px, py, button) -- track the most recent mouse_pos's tx, ty so a
+    # press/release can use the same normalized-coordinate approach as
+    # move, rather than the wrong, unscaled px,py.
+    _last_texel = {'tx': 0.5, 'ty': 0.5}
+
     def pass_through_cb(event_type, frame, name, *args):
         if event_type == 'mouse_pos':
             px, py, tx, ty, sx, sy = args
-            af_thru.on_mouse_move(tx, ty)
+            _last_texel['tx'] = tx
+            _last_texel['ty'] = ty
+            af_thru.on_mouse_move(ty, tx)  # swapped -- confirmed x/y were backwards
         elif event_type == 'mouse_press':
             px, py, button = args
-            af_thru.on_mouse_press(px, py, button)
+            af_thru.on_mouse_press(_last_texel['ty'], _last_texel['tx'], button)
         elif event_type == 'mouse_release':
             px, py, button = args
-            af_thru.on_mouse_release(px, py, button)
+            af_thru.on_mouse_release(_last_texel['ty'], _last_texel['tx'], button)
         elif event_type == 'mouse_scroll':
             x_offset, y_offset = args
             af_thru.on_mouse_scroll(int(y_offset))

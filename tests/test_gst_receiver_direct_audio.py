@@ -161,5 +161,38 @@ class TestSetDirectAudio(unittest.TestCase):
         self.assertTrue(fake._direct_audio)
 
 
+class TestAudioRecvPipelineFormat(unittest.TestCase):
+    """Regression test for a real bug: the caps filter used to omit
+    format=, so audioconvert could (and did in practice) negotiate a
+    different default like S16LE while _pull_chunk hardcoded np.float32
+    when reading the raw bytes back -- 16-bit PCM reinterpreted as
+    32-bit floats, producing garbage/NaN values."""
+
+    @patch('robonet.gst_io.receiver_unencrypted.Gst.Pipeline.new', return_value=MagicMock())
+    @patch('robonet.gst_io.receiver_unencrypted.Gst.ElementFactory.make')
+    def test_caps_explicitly_request_f32le(self, mock_make, _pipeline_new):
+        created = {}
+
+        def make(factory_name, elem_name):
+            mock = MagicMock()
+            created[factory_name] = mock
+            return mock
+
+        mock_make.side_effect = make
+
+        info = MagicMock(audio_codec='opus', audio_port=5601, sample_rate=48000)
+        from robonet.gst_io.receiver_unencrypted import _AudioRecvPipeline
+        pipe = _AudioRecvPipeline(info, 'opusdec', direct_audio=False,
+                                  audio_device='default', on_audio=MagicMock())
+
+        pipe.build()
+
+        caps_calls = [c for c in created['capsfilter'].set_property.call_args_list
+                     if c.args[0] == 'caps']
+        self.assertEqual(len(caps_calls), 1)
+        caps_str = caps_calls[0].args[1].to_string()
+        self.assertIn('F32LE', caps_str)
+
+
 if __name__ == '__main__':
     unittest.main()
