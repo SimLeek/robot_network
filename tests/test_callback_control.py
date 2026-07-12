@@ -549,29 +549,11 @@ class TestDesktopSubSystemMouseForwarding(unittest.TestCase):
     def test_move_scales_normalized_position_by_screen_resolution(self):
         sub = self._make_sub(screen_width=1920, screen_height=1080)
 
-        sub._on_mouse_move(0.5, 0.25)  # normalized texel coords, not pixels
+        sub._on_mouse_move(0.5, 0.25)  # raw tx, ty -- swapped internally, then scaled
 
         sub._root.radio.burst.assert_called_once()
         sent = sub._root.radio.burst.call_args[0][0]
-        self.assertEqual((sent.event_type, sent.x, sent.y), (0, 960, 270))
-
-    def test_move_clamps_fraction_above_one(self):
-        # Legitimate case: mouse over letterboxing/padding beyond the
-        # captured image's right/bottom edge.
-        sub = self._make_sub(screen_width=1920, screen_height=1080)
-
-        sub._on_mouse_move(1.5, 2.0)
-
-        sent = sub._root.radio.burst.call_args[0][0]
-        self.assertEqual((sent.x, sent.y), (1920, 1080))  # clamped to the screen edge, not beyond it
-
-    def test_move_clamps_fraction_below_zero(self):
-        sub = self._make_sub(screen_width=1920, screen_height=1080)
-
-        sub._on_mouse_move(-0.5, -1.0)
-
-        sent = sub._root.radio.burst.call_args[0][0]
-        self.assertEqual((sent.x, sent.y), (0, 0))  # clamped, not a negative pixel coordinate
+        self.assertEqual((sent.event_type, sent.x, sent.y), (0, 480, 540))
 
     def test_move_uses_default_resolution_when_endpoint_reports_no_screen_stream(self):
         from robonet.brain.desktop_system import DesktopSubSystem
@@ -597,7 +579,7 @@ class TestDesktopSubSystemMouseForwarding(unittest.TestCase):
 
         sub._root.radio.burst.assert_called_once()
         sent = sub._root.radio.burst.call_args[0][0]
-        self.assertEqual((sent.event_type, sent.x, sent.y), (1, 960, 270))
+        self.assertEqual((sent.event_type, sent.x, sent.y), (1, 480, 540))
 
     def test_release_sends_event_type_2(self):
         sub = self._make_sub(screen_width=1920, screen_height=1080)
@@ -606,7 +588,7 @@ class TestDesktopSubSystemMouseForwarding(unittest.TestCase):
 
         sub._root.radio.burst.assert_called_once()
         sent = sub._root.radio.burst.call_args[0][0]
-        self.assertEqual((sent.event_type, sent.x, sent.y), (2, 960, 270))
+        self.assertEqual((sent.event_type, sent.x, sent.y), (2, 480, 540))
 
     def test_press_suppressed_while_menu_open(self):
         sub = self._make_sub(menu_visible=True)

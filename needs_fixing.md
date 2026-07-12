@@ -206,3 +206,23 @@ these fixes should be implemented but are either large tasks or are blocked.
     likely a pyautogui/X11 quirk than something robonet is doing --
     but not confirmed either way. Worth knowing whether the offset is a
     fixed amount or scales with position if this comes up again.
+
+- **Mouse release/drag were a real gap in displayarray itself, not
+  robonet.** `PassthruMglWindowConfig` (displayarray/input_mgl.py)
+  overrides on_mouse_press_event to route through _route('mouse_press',
+  ...), but never overrode on_mouse_release_event at all -- confirmed
+  by reading moderngl_window's base window class, which does support
+  it as a real, documented hook. No release event ever reached
+  robonet's code, so the remote mouse button just stayed down forever
+  after any click. Simleek fixed this directly in displayarray (adding
+  the override, plus the same fix for on_mouse_drag_event, which had
+  the same gap for position updates during a drag).
+
+- **Mouse x/y swap, redone again.** Removed clamping entirely (was
+  explicitly asked not to add it) and moved the swap to the very last
+  step -- right before width/height scaling -- instead of swapping the
+  call-site arguments earlier. Mathematically these should be
+  equivalent, but the restructured version is simpler to reason about
+  (pass_through_cb now passes raw tx/ty straight through everywhere,
+  with the single swap point living in one place,
+  DesktopSubSystem._frac_to_pixel).
