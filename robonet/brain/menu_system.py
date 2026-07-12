@@ -13,6 +13,7 @@ from robonet.brain.desktop_system import DesktopSubSystem
 from robonet.brain.util.action_factory import ActionFactory
 from robonet.brain.util.selection_menu import SelectionMenu, MenuVisState
 from robonet.brain.util.system_base import SubSystem
+from robonet.brain.util.viewport import Viewport
 from robonet.buffers.buffer_objects import MJpegCamFrame, RobotStart
 import robonet.brain.settings as settings_
 from robonet.gst_io.devices import get_first_mic_device, DeviceNotFoundError
@@ -65,6 +66,12 @@ class MenuSubSystem(SubSystem):
         self.last_audio = None
         self._logged_first_img = False
         self._logged_first_audio = False
+        # Aspect-preserving scale for non-desktop endpoints (e.g. a
+        # robot) -- always baseline zoom, no interactive zoom/pan.
+        # Desktop endpoints use DesktopSubSystem's own viewport instead,
+        # since zoom/pan is desktop-specific (large/multiple monitors);
+        # robots have a movable camera rather than a fixed viewport.
+        self._fallback_viewport = Viewport()
         self.handlers = None
 
         # todo: move this all somewhere other than menu
@@ -142,8 +149,8 @@ class MenuSubSystem(SubSystem):
         # not touch the remote endpoint at all).
         if key == ord('2') and action == keys.ACTION_PRESS and modifiers.ctrl and modifiers.shift:
             cfg.input_mode = 1 if cfg.input_mode == 2 else 2
-            if cfg.input_mode != 2:
-                self.root.displayer._edit_mouse_pos = None  # stop edge-panning once we've left edit mode
+            if cfg.input_mode != 2 and isinstance(self.root.active_sub, DesktopSubSystem):
+                self.root.active_sub._edit_mouse_pos = None  # stop edge-panning once we've left edit mode
             return
         # When menu is visible, route navigation keys to it; don't forward to remote
         if self.visible and action == keys.ACTION_PRESS:
@@ -255,8 +262,17 @@ class MenuSubSystem(SubSystem):
     async def send_frames_always(self):
         while self.is_running:
             t0 = time.time()
-            #with self.screen_lock:
-            img = self._menu.composite(self.last_img)
+            img = self.last_img
+            if img is not None:
+                source_h, source_w = img.shape[:2]
+                display_w, display_h = self.out_res
+                active = self.root.active_sub
+                if isinstance(active, DesktopSubSystem):
+                    active.check_edge_pan(source_w, source_h, display_w, display_h, 1.0 / self.fps)
+                    img = active.viewport.apply(img, display_w, display_h)
+                else:
+                    img = self._fallback_viewport.apply(img, display_w, display_h)
+            img = self._menu.composite(img)
             if self.root.displayer is not None:
                 self.root.displayer.update_frame(img)
                 if self.last_audio is not None:

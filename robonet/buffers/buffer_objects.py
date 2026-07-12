@@ -41,6 +41,13 @@ def _pack_uint32(v):
 def _unpack_uint32(d, o):
     return struct.unpack_from('!I', d, o)[0], o + 4
 
+def _pack_int32(v):
+    assert isinstance(v, (int, np.integer)) and -0x80000000 <= v <= 0x7FFFFFFF
+    return struct.pack('!i', v)
+
+def _unpack_int32(d, o):
+    return struct.unpack_from('!i', d, o)[0], o + 4
+
 def _pack_float32(v):
     assert isinstance(v, (int, float, np.floating))
     return struct.pack('!f', v)
@@ -186,6 +193,7 @@ def ndarray_list_codec(dtype):
 
 # Shared codec instances (reused across classes)
 _uint32        = (_pack_uint32,      _unpack_uint32)
+_int32         = (_pack_int32,       _unpack_int32)
 _float32       = (_pack_float32,     _unpack_float32)
 _bool_         = (_pack_bool,        _unpack_bool)
 _str_          = (_pack_str,         _unpack_str)
@@ -499,6 +507,18 @@ class KeyEvent(BufferBase):
         self.modifiers = modifiers
 
 
+class SInt32(int):
+    """Marker type, not a distinct runtime type -- purely so pack_obj's
+    type_list.index(annotation) lookup can tell a signed-int field
+    apart from plain uint32 int fields in the same class. The dispatch
+    is by annotation identity, not field position, so two fields both
+    annotated plain `int` always collapse to the same codec
+    (field_codecs[0]) regardless of what's in later slots -- this let
+    MouseEvent's original all-_uint32 codecs go unnoticed until delta
+    (which can be negative, e.g. scrolling down) needed to differ."""
+    pass
+
+
 class MouseEvent(BufferBase):
     """Server -> desktop client: one mouse event to replay via pyautogui.
 
@@ -507,10 +527,10 @@ class MouseEvent(BufferBase):
     button: 0=left 1=right 2=middle (ignored for move/scroll).
     delta: scroll amount for scroll events (ignored otherwise).
     """
-    type_list    = [int, int, int, int, int]
-    field_codecs = [_uint32] * 5
+    type_list    = [int, int, int, int, SInt32]
+    field_codecs = [_uint32, _uint32, _uint32, _uint32, _int32]
 
-    def __init__(self, event_type: int, x: int, y: int, button: int, delta: int):
+    def __init__(self, event_type: int, x: int, y: int, button: int, delta: SInt32):
         self.event_type = event_type
         self.x = x; self.y = y
         self.button = button; self.delta = delta

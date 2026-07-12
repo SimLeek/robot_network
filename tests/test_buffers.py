@@ -2,7 +2,7 @@ import unittest
 import numpy as np
 from robonet.buffers.buffer_handling import pack_obj, unpack_obj
 from robonet.buffers.buffer_objects import WifiSetupInfo, CVCamFrame, AudioBuffer, HumidityWaterBuffer, \
-    TemperatureMonitorBuffer, IMUBuffer, TensorBuffer
+    TemperatureMonitorBuffer, IMUBuffer, TensorBuffer, MouseEvent
 
 
 class TestBufferObjects(unittest.TestCase):
@@ -84,6 +84,42 @@ class TestBufferObjects(unittest.TestCase):
         np.testing.assert_almost_equal(original.accel_data, unpacked.accel_data, 5)
         self.assertIsNone(unpacked.gyro_data)
         np.testing.assert_almost_equal(original.mag_data, unpacked.mag_data, 5)
+
+
+class TestMouseEventDelta(unittest.TestCase):
+    """Regression tests: delta can legitimately be negative (scrolling
+    down), but MouseEvent originally used _uint32 for every field
+    since all five are annotated plain `int` -- pack_obj's dispatch is
+    by annotation identity (type_list.index(annotation)), not field
+    position, so distinguishing delta needed a distinct marker type
+    (SInt32), not just changing field_codecs[4]."""
+
+    def test_negative_delta_round_trips(self):
+        original = MouseEvent(event_type=3, x=0, y=0, button=0, delta=-5)
+        packed = pack_obj(original)
+        unpacked = unpack_obj(packed)
+        self.assertEqual(unpacked.delta, -5)
+
+    def test_positive_delta_round_trips(self):
+        original = MouseEvent(event_type=3, x=0, y=0, button=0, delta=5)
+        packed = pack_obj(original)
+        unpacked = unpack_obj(packed)
+        self.assertEqual(unpacked.delta, 5)
+
+    def test_zero_delta_round_trips(self):
+        original = MouseEvent(event_type=3, x=0, y=0, button=0, delta=0)
+        packed = pack_obj(original)
+        unpacked = unpack_obj(packed)
+        self.assertEqual(unpacked.delta, 0)
+
+    def test_x_y_button_event_type_still_use_unsigned(self):
+        # The other four fields are legitimately non-negative (screen
+        # coordinates, enum-like values) -- confirm the marker-type fix
+        # for delta didn't accidentally change these too.
+        original = MouseEvent(event_type=1, x=1920, y=1080, button=2, delta=0)
+        packed = pack_obj(original)
+        unpacked = unpack_obj(packed)
+        self.assertEqual((unpacked.event_type, unpacked.x, unpacked.y, unpacked.button), (1, 1920, 1080, 2))
 
 
 if __name__ == '__main__':

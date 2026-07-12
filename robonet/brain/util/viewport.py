@@ -128,3 +128,34 @@ class Viewport:
         canvas = np.zeros(canvas_shape, dtype=frame.dtype)
         canvas[pad_top:pad_top + out_h, pad_left:pad_left + out_w] = scaled
         return canvas
+
+    def inverse_map(self, tx_canvas: float, ty_canvas: float, source_w: int, source_h: int,
+                   display_w: int, display_h: int) -> tuple:
+        """Given a fractional position (tx_canvas, ty_canvas) within the
+        full displayed canvas (0-1, including any letterbox padding),
+        returns the corresponding (x_frac, y_frac) position on the
+        source frame (0-1). A canvas position landing on letterbox
+        padding (no source content there) clamps to the nearest edge
+        of the actual image content rather than extrapolating past it.
+        This is the counterpart to apply() -- needed because the
+        source position under the mouse is only the same as the
+        canvas position at baseline zoom with matching aspect ratios
+        and no pan; any zoom, pan, or letterboxing makes them differ.
+        """
+        x0, y0, crop_w, crop_h, out_w, out_h, pad_left, pad_top = compute_crop_and_scale(
+            source_w, source_h, display_w, display_h, self.zoom, self.pan_x, self.pan_y)
+
+        canvas_x = tx_canvas * display_w
+        canvas_y = ty_canvas * display_h
+
+        rel_x = max(0.0, min(float(out_w), canvas_x - pad_left))
+        rel_y = max(0.0, min(float(out_h), canvas_y - pad_top))
+
+        fit_scale = min(display_w / source_w, display_h / source_h)
+        actual_scale = fit_scale * self.zoom
+
+        source_x = x0 + rel_x / actual_scale
+        source_y = y0 + rel_y / actual_scale
+
+        return (max(0.0, min(1.0, source_x / source_w)),
+               max(0.0, min(1.0, source_y / source_h)))

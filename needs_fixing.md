@@ -262,3 +262,40 @@ these fixes should be implemented but are either large tasks or are blocked.
   given how much else changed -- same af.bind_ai_neuron/bind_ai_token
   pattern used elsewhere in this codebase should apply directly once
   it's time to wire it up.
+
+- **Several real bugs found in the zoom/pan feature on first real use:**
+  - MouseEvent.delta can be negative (scrolling down) but every field
+    used _uint32 -- crashed. The real cause wasn't a simple field_codecs
+    typo: pack_obj dispatches by *type identity*
+    (type_list.index(annotation)), not field position, so two fields
+    both annotated plain `int` always collapse to the same codec
+    regardless of what's in later field_codecs slots. Needed a distinct
+    marker type (SInt32) for delta to be reachable at all. Audited every
+    other class in buffer_objects.py for the same pattern -- none found.
+  - Zoom/pan silently stopped working after the first connection:
+    af_edit's handlers were only ever bound once, in
+    DisplaySubSystem.setup() -- swap_subsystem's unbind_all() +
+    re-register cycle (which runs on every connect) wiped them out with
+    nothing re-establishing them. Fixed by moving the binding into
+    DesktopSubSystem._bind_input(), which correctly runs on every
+    connect already (matching af_thru's existing lifecycle).
+  - Architecture correction: Viewport/zoom/pan moved off
+    DisplaySubSystem onto DesktopSubSystem entirely. Zoom/pan is
+    desktop-specific (large/multiple monitors) -- robots have a movable
+    camera instead of a fixed viewport to pan around, and
+    DisplaySubSystem is generic across endpoint types (also optional --
+    everything needs to work without it, e.g. AI-direct sessions).
+  - The menu was tiny because it was composited onto the source frame
+    *before* scaling, not after. The actual compositing pipeline is
+    MenuSubSystem.send_frames_always (self._menu.composite(self.last_img)),
+    not DisplaySubSystem.run_once as originally assumed -- scaling now
+    happens in send_frames_always, right before composite(), using the
+    active DesktopSubSystem's viewport when connected to a desktop or a
+    fixed-baseline-zoom fallback otherwise.
+  - Mouse position didn't account for zoom/pan or even baseline-zoom
+    letterboxing -- was treating the displayed canvas position as if it
+    mapped directly to the source frame, which is only true with no pan,
+    zoom=1.0, and matching aspect ratios. Added Viewport.inverse_map
+    (the counterpart to apply()) and routed _frac_to_pixel through it;
+    verified as a true inverse of the forward crop/scale math in
+    test_viewport.py.

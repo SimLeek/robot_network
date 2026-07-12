@@ -11,6 +11,7 @@ import typing
 from typing import Dict, Optional
 
 from robonet.brain.util.system_base import SubSystem
+from robonet.brain.util.viewport import Viewport
 from robonet.buffers.buffer_objects import KeyEvent, MouseEvent
 from robonet.logging_setup import setup_logging
 
@@ -51,6 +52,13 @@ class DesktopSubSystem(SubSystem):
                 self._screen_height = s.get('height', self._screen_height)
                 break
 
+        # Zoom/pan: desktop-specific (large or multiple monitors) --
+        # doesn't belong on DisplaySubSystem, which is generic across
+        # endpoint types. Robots have a movable camera instead of a
+        # fixed viewport to zoom/pan around.
+        self.viewport = Viewport()
+        self._edit_mouse_pos: Optional[tuple] = None
+
     def setup(self, root: 'ServerSystem'):
         self._root = root
 
@@ -74,6 +82,9 @@ class DesktopSubSystem(SubSystem):
         af.bind_mouse_press(self._on_mouse_press)
         af.bind_mouse_release(self._on_mouse_release)
         af.bind_mouse_scroll(self._on_mouse_scroll)
+        af_edit = self._root.displayer.af_edit
+        af_edit.bind_mouse_move(self._on_edit_mouse_move)
+        af_edit.bind_mouse_scroll(self._on_edit_scroll)
         self._bound = True
 
     def _unbind_input(self):
@@ -85,6 +96,9 @@ class DesktopSubSystem(SubSystem):
         af.unbind_mouse_press()
         af.unbind_mouse_release()
         af.unbind_mouse_scroll()
+        af_edit = self._root.displayer.af_edit
+        af_edit.unbind_mouse_move()
+        af_edit.unbind_mouse_scroll()
         self._bound = False
 
     def _on_keyboard(self, key, action, modifiers):
@@ -105,14 +119,24 @@ class DesktopSubSystem(SubSystem):
             key=name, pressed=(action == wkeys.ACTION_PRESS), modifiers=','.join(mods)))
 
     def _frac_to_pixel(self, tx: float, ty: float) -> tuple:
-        """Raw normalized fractions -> real screen pixel coordinates.
-        displayarray's tx/ty are swapped relative to true horizontal/
-        vertical -- swapped here, at the very last step, right before
-        applying width/height, rather than earlier. Clamped to the
-        screen: MouseEvent.x/y pack as uint32, so an out-of-range
-        (e.g. negative, from the mouse being outside the captured
-        texture) value crashes at pack time, not just looks wrong."""
+        """Raw normalized fractions (within the full displayed canvas,
+        including any letterbox padding) -> real screen pixel
+        coordinates. displayarray's tx/ty are swapped relative to true
+        horizontal/vertical -- swapped here, at the very last step.
+        Routes through the viewport's inverse mapping first: the
+        canvas position only equals the source-frame position at
+        baseline zoom with matching aspect ratios and no pan, which
+        isn't the normal case now that aspect ratio is preserved via
+        letterboxing and zoom/pan exist. Clamped to the screen:
+        MouseEvent.x/y pack as uint32, so an out-of-range value
+        crashes at pack time, not just looks wrong."""
         x_frac, y_frac = ty, tx
+        d = self._root.displayer
+        if d is not None and getattr(d, 'in_img', None) is not None:
+            source_h, source_w = d.in_img.shape[:2]
+            display_w, display_h = d.out_res
+            x_frac, y_frac = self.viewport.inverse_map(
+                x_frac, y_frac, source_w, source_h, display_w, display_h)
         x = int(x_frac * self._screen_width)
         y = int(y_frac * self._screen_height)
         x = max(0, min(self._screen_width - 1, x))
@@ -141,6 +165,46 @@ class DesktopSubSystem(SubSystem):
         if self._root.displayer is None or self._root.menu.visible:
             return
         self._root.radio.burst(MouseEvent(event_type=3, x=0, y=0, button=0, delta=int(y_offset)))
+
+    # -- edit mode: zoom/pan the local view, doesn't touch the endpoint --
+
+    def _on_edit_mouse_move(self, tx: float, ty: float):
+        # Same swap as pass-through mode's mouse handling -- displayarray's
+        # tx/ty are swapped relative to true horizontal/vertical.
+        self._edit_mouse_pos = (ty, tx)
+
+    def _on_edit_scroll(self, y_offset: float):
+        d = self._root.displayer
+        if d is None or getattr(d, 'in_img', None) is None:
+            return
+        source_h, source_w = d.in_img.shape[:2]
+        factor = 1.1 if y_offset > 0 else (1 / 1.1 if y_offset < 0 else 1.0)
+        if factor != 1.0:
+            self.viewport.zoom_by(factor, source_w, source_h, d.out_res[0], d.out_res[1])
+
+    def check_edge_pan(self, source_w: int, source_h: int, display_w: int, display_h: int,
+                      frame_time: float):
+        """While in edit mode, pans when the mouse sits within 10% of
+        an edge of the display window. Called every frame (not just on
+        mouse-move) by DisplaySubSystem's render loop, so it keeps
+        panning while the mouse holds still near an edge, matching how
+        edge-scroll works in most editors."""
+        if self._edit_mouse_pos is None:
+            return
+        tx, ty = self._edit_mouse_pos
+        edge = 0.10
+        pan_speed = 0.5 * frame_time  # fraction of the source frame per second
+        dx = dy = 0.0
+        if tx < edge:
+            dx = -pan_speed * (edge - tx) / edge
+        elif tx > 1.0 - edge:
+            dx = pan_speed * (tx - (1.0 - edge)) / edge
+        if ty < edge:
+            dy = -pan_speed * (edge - ty) / edge
+        elif ty > 1.0 - edge:
+            dy = pan_speed * (ty - (1.0 - edge)) / edge
+        if dx or dy:
+            self.viewport.pan_by(dx, dy, source_w, source_h, display_w, display_h)
 
     def async_loops(self, sm: 'ServerSystem'):
         return []  # purely event-driven -- no polling loop needed

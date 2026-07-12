@@ -24,6 +24,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import numpy as np
 
 from robonet.brain.menu_system import MenuSubSystem
+from robonet.brain.desktop_system import DesktopSubSystem
 from robonet.brain.util.selection_menu import SelectionMenu, MenuVisState
 from robonet.buffers.buffer_objects import AVSourcesAnnounce, SelectAVSource
 
@@ -506,7 +507,8 @@ class TestEditModeToggle(unittest.TestCase):
         menu.root = MagicMock()
         menu.root.displayer.displayer.displayer.config.wnd.keys = _FakeWKeys
         menu.root.displayer.displayer.displayer.config.input_mode = initial_input_mode
-        menu.root.displayer._edit_mouse_pos = (0.3, 0.3)
+        menu.root.active_sub = MagicMock(spec=DesktopSubSystem)
+        menu.root.active_sub._edit_mouse_pos = (0.3, 0.3)
         return menu
 
     def _ctrl_shift_2(self, menu):
@@ -526,12 +528,12 @@ class TestEditModeToggle(unittest.TestCase):
     def test_leaving_edit_mode_clears_edge_pan_tracking(self):
         menu = self._make_menu(initial_input_mode=2)
         self._ctrl_shift_2(menu)
-        self.assertIsNone(menu.root.displayer._edit_mouse_pos)
+        self.assertIsNone(menu.root.active_sub._edit_mouse_pos)
 
     def test_entering_edit_mode_does_not_touch_edge_pan_tracking(self):
         menu = self._make_menu(initial_input_mode=1)
         self._ctrl_shift_2(menu)
-        self.assertEqual(menu.root.displayer._edit_mouse_pos, (0.3, 0.3))
+        self.assertEqual(menu.root.active_sub._edit_mouse_pos, (0.3, 0.3))
 
     def test_ctrl_without_shift_does_not_toggle(self):
         menu = self._make_menu(initial_input_mode=1)

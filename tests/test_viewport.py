@@ -186,6 +186,66 @@ class TestViewport(unittest.TestCase):
 
         self.assertEqual(result.shape, (480, 640))
 
+    def test_inverse_map_at_baseline_zoom_center_is_source_center(self):
+        vp = Viewport()
+        x_frac, y_frac = vp.inverse_map(0.5, 0.5, 1920, 1080, 640, 480)
+        self.assertAlmostEqual(x_frac, 0.5, places=3)
+        self.assertAlmostEqual(y_frac, 0.5, places=3)
+
+    def test_inverse_map_on_letterbox_padding_clamps_to_edge(self):
+        # At baseline zoom, height is letterboxed (source is 16:9,
+        # display is 4:3) -- the very top of the canvas is padding, not
+        # actual image content, and should clamp to the source's top
+        # edge rather than extrapolating to something nonsensical.
+        vp = Viewport()
+        x_frac, y_frac = vp.inverse_map(0.5, 0.0, 1920, 1080, 640, 480)
+        self.assertAlmostEqual(y_frac, 0.0, places=3)
+
+    def test_inverse_map_is_true_inverse_of_forward_math_at_baseline(self):
+        # Pick a source pixel, run it through compute_crop_and_scale's
+        # forward direction conceptually (via apply's same math), then
+        # confirm inverse_map recovers a canvas position that maps back
+        # to (approximately) the same source fraction.
+        vp = Viewport()
+        source_w, source_h, display_w, display_h = 1920, 1080, 640, 480
+        for x_frac_in, y_frac_in in [(0.25, 0.5), (0.75, 0.5), (0.5, 0.5)]:
+            x0, y0, crop_w, crop_h, out_w, out_h, pad_left, pad_top = compute_crop_and_scale(
+                source_w, source_h, display_w, display_h, vp.zoom, vp.pan_x, vp.pan_y)
+            source_px_x = x_frac_in * source_w
+            source_px_y = y_frac_in * source_h
+            fit_scale = min(display_w / source_w, display_h / source_h)
+            canvas_x = pad_left + (source_px_x - x0) * fit_scale
+            canvas_y = pad_top + (source_px_y - y0) * fit_scale
+            tx_canvas, ty_canvas = canvas_x / display_w, canvas_y / display_h
+
+            x_frac_out, y_frac_out = vp.inverse_map(tx_canvas, ty_canvas, source_w, source_h, display_w, display_h)
+
+            self.assertAlmostEqual(x_frac_out, x_frac_in, places=2)
+            self.assertAlmostEqual(y_frac_out, y_frac_in, places=2)
+
+    def test_inverse_map_after_zoom_and_pan_reflects_the_new_view(self):
+        vp = Viewport()
+        vp.zoom_by(vp.max_zoom(1920, 1080, 640, 480), 1920, 1080, 640, 480)
+        vp.pan_by(0.3, 0.0, 1920, 1080, 640, 480)  # panned toward the right
+
+        center_x_frac, _ = vp.inverse_map(0.5, 0.5, 1920, 1080, 640, 480)
+
+        # Canvas center should now correspond to a source position well
+        # to the right of the untouched source center (0.5), since
+        # we've panned and zoomed into that region.
+        self.assertGreater(center_x_frac, 0.6)
+
+    def test_inverse_map_output_always_within_0_and_1(self):
+        vp = Viewport()
+        vp.zoom_by(2.0, 1920, 1080, 640, 480)
+        for tx, ty in [(0.0, 0.0), (1.0, 1.0), (0.5, 0.0), (0.0, 0.5)]:
+            with self.subTest(tx=tx, ty=ty):
+                x_frac, y_frac = vp.inverse_map(tx, ty, 1920, 1080, 640, 480)
+                self.assertGreaterEqual(x_frac, 0.0)
+                self.assertLessEqual(x_frac, 1.0)
+                self.assertGreaterEqual(y_frac, 0.0)
+                self.assertLessEqual(y_frac, 1.0)
+
 
 if __name__ == '__main__':
     unittest.main()

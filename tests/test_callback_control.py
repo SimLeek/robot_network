@@ -376,11 +376,13 @@ class _FakeWKeys:
     LEFT_SHIFT = 0xffe1
 
 
-def _make_fake_root(with_displayer=True, menu_visible=False):
+def _make_fake_root(with_displayer=True, menu_visible=False, source_shape=(1080, 1920, 3), out_res=(1920, 1080)):
     root = MagicMock()
     root.menu.visible = menu_visible
     if with_displayer:
         root.displayer.displayer.displayer.config.wnd.keys = _FakeWKeys
+        root.displayer.in_img = np.zeros(source_shape, dtype=np.uint8)
+        root.displayer.out_res = out_res
     else:
         root.displayer = None
     return root
