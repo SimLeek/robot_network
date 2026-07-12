@@ -4,8 +4,9 @@ examples/desktop/desktop_endpoint.py -- A remote desktop endpoint
 Start once and leave running in the background
 (e.g. as a systemd --user service);
 
-One-time setup before first use (loads v4l2loopback and snd-aloop):
-    sudo ./examples/setup_desktop_capture.sh
+Captures directly via ximagesrc/pulsesrc -- no separate setup script or
+kernel modules needed. Resolution/fps are controlled the same way as
+for any camera, via cam_res/cam_fps in ~/.robotar/settings.json.
 
 If connecting over a direct wired (ethernet) link,
 also run this once on the endpoint side to get a static IP:
@@ -28,16 +29,11 @@ from robonet.endpoint.radio_system import RobotRadio
 
 log = logging.getLogger(__name__)
 
-CAPTURE_WIDTH  = -1
-CAPTURE_HEIGHT = -1
-CAPTURE_FPS    = 15
-
 
 if __name__ == '__main__':
     radio = RobotRadio(endpoint_type='desktop')
     try:
-        hw = DesktopHw(capture_width=CAPTURE_WIDTH, capture_height=CAPTURE_HEIGHT,
-                      capture_fps=CAPTURE_FPS)
+        hw = DesktopHw()
     except DesktopCaptureError as e:
         print(f'\n[desktop_endpoint] {e}\n', file=sys.stderr)
         sys.exit(1)

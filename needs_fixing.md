@@ -136,3 +136,16 @@ these fixes should be implemented but are either large tasks or are blocked.
 - **RobotCapabilities.axes()/.streams() for real robots** (not desktop)
   still worth spot-checking against this same "never report an
   inert-looking capability set" standard now that desktop's been fixed.
+
+- **Desktop capture dropped the v4l2loopback/ALSA-loopback approach
+  entirely.** Confirmed via diagnose_desktop_capture.py: raw ximagesrc
+  produced a real screenshot, both loopback devices came back blank --
+  the custom appsink/appsrc bridge had a real bug somewhere (never
+  isolated exactly where), and the loopback round-trip added a kernel
+  module dependency for no benefit anyway. GstSender's video/audio
+  pipelines now support VIDEO_SOURCE_XIMAGESRC/AUDIO_SOURCE_DESKTOP_MIX
+  sentinels, capturing directly. `DesktopHw` no longer takes
+  capture_width/height/fps -- desktop video resolution/fps are now
+  controlled the same way as any camera, via cam_res/cam_fps.
+  `examples/teardown_desktop_capture.sh` removes the now-unused kernel
+  modules from a machine that ran the old setup script.

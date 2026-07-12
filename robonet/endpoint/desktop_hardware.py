@@ -7,24 +7,18 @@ Handles typical desktop hardware such as screens, mics, speakers, keyboards, and
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import numpy as np
 
 from robonet.buffers.buffer_objects import KeyEvent, MouseEvent, RobotCapabilities
 from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC
-from robonet.endpoint.desktop_capture import (
-    DesktopVideoFeeder, DesktopAudioFeeder,
-    ensure_v4l2loopback_device, ensure_alsa_loopback,
-    DesktopCaptureError,
-)
+from robonet.endpoint.desktop_capture import DesktopCaptureError
 from robonet.endpoint.hardware_system import MultiAVRobotHardware
 from robonet.endpoint.radio_system import HOSTNAME
 from robonet.gst_io.devices import find_camera_devices, get_first_speaker_device, DeviceNotFoundError
-import robonet.endpoint.settings as settings_
+from robonet.gst_io.streamer_unencrypted import VIDEO_SOURCE_XIMAGESRC, AUDIO_SOURCE_DESKTOP_MIX
 
 log = logging.getLogger(__name__)
-settings = settings_.get()
 
 # pyautogui (via its mouseinfo submodule) hard-crashes on import in any
 # process without a live, connectable DISPLAY -- e.g. a systemd --user service
@@ -69,11 +63,19 @@ def build_desktop_capabilities() -> RobotCapabilities:
 
 
 class DesktopHw(MultiAVRobotHardware):
-    """Streams the screen and audio out, and replays received keyboard/mouse events via pyautogui."""
+    """Streams the screen and audio out, and replays received keyboard/mouse events via pyautogui.
 
-    def __init__(self,
-                capture_width: int = -1, capture_height: int = -1,
-                capture_fps: int = 15, include_mic: bool = True):
+    Captures directly (ximagesrc for video, pulsesrc for audio) rather
+    than through a v4l2loopback/ALSA-loopback intermediary -- that
+    round trip turned out to just produce blank output, and a direct
+    capture is simpler and doesn't need any kernel modules loaded at
+    all. Resolution/fps for the desktop video source are controlled the
+    same way as for any other camera, via settings['cam_res']/['cam_fps']
+    (GstSender's existing videoscale/capsfilter chain), not a separate
+    capture-side setting.
+    """
+
+    def __init__(self):
         if pyautogui is None:
             raise DesktopCaptureError(
                 "pyautogui could not be imported (it needs a live, connectable "
@@ -82,18 +84,16 @@ class DesktopHw(MultiAVRobotHardware):
                 "environment variable set, e.g. Environment=DISPLAY=:0 in the "
                 "service's [Service] section."
             )
-        loopback_video = ensure_v4l2loopback_device()
-        loopback_audio_playback, loopback_audio_capture = ensure_alsa_loopback()
         try:
-            webcam_device = find_camera_devices(exclude_devices=[loopback_video])[0] # todo: allow switching to any camera
+            webcam_device = find_camera_devices()[0]
         except IndexError:
             log.error("Could not find a webcam device. Will be starting without one.")
             webcam_device = None
-        video_sources = {DESKTOP_VIDEO_ID: loopback_video}
+        video_sources = {DESKTOP_VIDEO_ID: VIDEO_SOURCE_XIMAGESRC}
         if webcam_device:
             video_sources[f'webcam:{webcam_device}'] = webcam_device
 
-        audio_inputs = {DESKTOP_AUDIO_IN_ID: loopback_audio_capture}
+        audio_inputs = {DESKTOP_AUDIO_IN_ID: AUDIO_SOURCE_DESKTOP_MIX}
 
         audio_outputs = {}
         try:
@@ -105,19 +105,11 @@ class DesktopHw(MultiAVRobotHardware):
         super().__init__(video_sources=video_sources, audio_inputs=audio_inputs,
                          audio_outputs=audio_outputs, sample_rate=48000)
 
-        self._video_feeder = DesktopVideoFeeder(
-            loopback_video, capture_width, capture_height, capture_fps)
-        self._audio_feeder = DesktopAudioFeeder(
-            loopback_audio_playback, sample_rate=48000, include_mic=include_mic)
-
         self._held_keys: set = set()
         self._held_buttons: set = set()
 
     def setup(self, parent):
         super().setup(parent)
-        # Hardware always needs to be running, independent of whether a server ever connects
-        self._video_feeder.start()
-        self._audio_feeder.start()
         log.info(f'Desktop hardware started (video source: {self._active_video})')
 
     def build_capabilities(self) -> RobotCapabilities:
@@ -186,8 +178,6 @@ class DesktopHw(MultiAVRobotHardware):
 
     def stop(self):
         self._release_all_held()
-        self._video_feeder.stop()
-        self._audio_feeder.stop()
         super().stop()
 
     def apply_tensor(self, idx_vec: np.ndarray, val_vec: np.ndarray):

@@ -74,15 +74,16 @@ Endpoint settings live at `~/.robotar/settings.json` (see
 
 These usually only need to be run once per machine:
 
-- **Desktop-mode capture**
-  ```
-  ./examples/setup_desktop_capture.sh
-  ```
-
 - **Wired (direct ethernet cable) connections**
   ```
   python -m examples.setup_eth_client
   ```
+
+Desktop-mode capture needs no setup -- it captures directly via
+ximagesrc/pulsesrc. If you're upgrading from an older checkout that ran
+`setup_desktop_capture.sh` (v4l2loopback/snd-aloop), run
+`./examples/teardown_desktop_capture.sh` to remove those kernel modules;
+they're not used anymore.
 
 ## Shared secret (PSK) setup
 

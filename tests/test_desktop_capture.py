@@ -1,15 +1,11 @@
 """
 tests/test_desktop_capture.py
 
-Tests robonet/endpoint/desktop_capture.py:
-  - Device discovery (find_v4l2loopback_device, find_alsa_loopback_card_index,
-    ensure_*) against a mocked filesystem -- no real
-    v4l2loopback/snd-aloop devices needed.
-  - DesktopVideoFeeder/DesktopAudioFeeder pipeline construction against a
-    mocked Gst.parse_launch, asserting on the actual pipeline description
-    string built rather than on whether specific GStreamer plugins happen
-    to be installed on whatever machine runs the tests (a portability/
-    environment concern, not a logic concern).
+Tests DesktopHw construction/capabilities (direct ximagesrc/pulsesrc
+capture, no v4l2loopback/ALSA-loopback -- see
+tests/test_streamer_desktop_sources.py for the GstSender pipeline side
+of that), GstSender.set_source_device/set_mic_device (device
+switching), and DesktopHw's generic AV-source selection wiring.
 """
 
 import os
@@ -21,269 +17,170 @@ from unittest.mock import patch, mock_open, MagicMock
 
 import numpy as np
 
-from robonet.endpoint import desktop_capture as dc
 
+class TestDesktopHwConstruction(unittest.TestCase):
+    """DesktopHw's __init__ calls into MultiAVRobotHardware.__init__,
+    which needs a real psk key file to exist (endpoint/settings.py has
+    no advanced-settings restriction, unlike the brain side, so we can
+    just point it at a temp one directly and restore it after)."""
 
-class TestFindV4l2loopbackDevice(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix='robonet_desktop_hw_test_')
+        self.psk_path = os.path.join(self.tmpdir, 'psk.key')
+        with open(self.psk_path, 'wb') as f:
+            f.write(os.urandom(32))
+        import robonet.endpoint.settings as settings_
+        self._settings = settings_.get()
+        self._orig_psk = self._settings['psk_file']
+        self._settings['psk_file'] = self.psk_path
 
-    @patch('robonet.endpoint.desktop_capture.glob.glob')
-    def test_finds_matching_label(self, mock_glob):
-        mock_glob.return_value = [
-            '/sys/class/video4linux/video0/name',
-            '/sys/class/video4linux/video42/name',
-        ]
-        contents = {
-            '/sys/class/video4linux/video0/name': 'Integrated Webcam\n',
-            '/sys/class/video4linux/video42/name': 'RobonetDesktopCam\n',
-        }
-        with patch('builtins.open', side_effect=lambda p, *a, **kw: mock_open(read_data=contents[p]).return_value):
-            result = dc.find_v4l2loopback_device()
-        self.assertEqual(result, '/dev/video42')
+    def tearDown(self):
+        self._settings['psk_file'] = self._orig_psk
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    @patch('robonet.endpoint.desktop_capture.glob.glob')
-    def test_returns_none_when_not_found(self, mock_glob):
-        mock_glob.return_value = ['/sys/class/video4linux/video0/name']
-        with patch('builtins.open', mock_open(read_data='Integrated Webcam\n')):
-            result = dc.find_v4l2loopback_device()
-        self.assertIsNone(result)
+    def _mock_pyautogui(self, screen_width=1920, screen_height=1080):
+        mock_pag = MagicMock()
+        Size = namedtuple('Size', 'width height')
+        mock_pag.size.return_value = Size(screen_width, screen_height)
+        return mock_pag
 
-    @patch('robonet.endpoint.desktop_capture.glob.glob')
-    def test_unreadable_entry_is_skipped_not_fatal(self, mock_glob):
-        mock_glob.return_value = [
-            '/sys/class/video4linux/video0/name',
-            '/sys/class/video4linux/video42/name',
-        ]
-        def fake_open(path, *a, **kw):
-            if path.endswith('video0/name'):
-                raise OSError('permission denied')
-            return mock_open(read_data='RobonetDesktopCam\n').return_value
-        with patch('builtins.open', side_effect=fake_open):
-            result = dc.find_v4l2loopback_device()
-        self.assertEqual(result, '/dev/video42')
+    def _construct(self, webcam=None, speaker='hw:0,0', **kwargs):
+        with patch('robonet.endpoint.desktop_hardware.pyautogui', self._mock_pyautogui()), \
+             patch('robonet.endpoint.desktop_hardware.find_camera_devices',
+                  return_value=[webcam] if webcam else []), \
+             patch('robonet.endpoint.desktop_hardware.get_first_speaker_device',
+                  return_value=speaker):
+            from robonet.endpoint.desktop_hardware import DesktopHw
+            return DesktopHw(**kwargs)
 
-    def test_custom_label_respected(self):
-        with patch('robonet.endpoint.desktop_capture.glob.glob',
-                  return_value=['/sys/class/video4linux/video7/name']), \
-             patch('builtins.open', mock_open(read_data='SomeOtherCam\n')):
-            self.assertEqual(dc.find_v4l2loopback_device(label='SomeOtherCam'), '/dev/video7')
+    def test_construction_uses_ximagesrc_directly(self):
+        from robonet.gst_io.streamer_unencrypted import VIDEO_SOURCE_XIMAGESRC
+        hw = self._construct()
+        self.assertEqual(hw._video_sources['desktop'], VIDEO_SOURCE_XIMAGESRC)
+        self.assertEqual(hw._active_video, 'desktop')
 
+    def test_construction_uses_desktop_audio_mix_directly(self):
+        from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_DESKTOP_MIX
+        hw = self._construct()
+        self.assertEqual(hw._audio_inputs['desktop-audio'], AUDIO_SOURCE_DESKTOP_MIX)
 
-class TestEnsureV4l2loopbackDevice(unittest.TestCase):
+    def test_construction_raises_clear_error_when_pyautogui_unavailable(self):
+        with patch('robonet.endpoint.desktop_hardware.pyautogui', None), \
+             patch('robonet.endpoint.desktop_hardware._PYAUTOGUI_IMPORT_ERROR', KeyError('DISPLAY')):
+            from robonet.endpoint.desktop_hardware import DesktopHw, DesktopCaptureError
+            with self.assertRaises(DesktopCaptureError) as ctx:
+                DesktopHw()
+            self.assertIn('DISPLAY', str(ctx.exception))
 
-    @patch('robonet.endpoint.desktop_capture.find_v4l2loopback_device')
-    def test_returns_device_when_found(self, mock_find):
-        mock_find.return_value = '/dev/video42'
-        self.assertEqual(dc.ensure_v4l2loopback_device(), '/dev/video42')
+    def test_pyautogui_unavailable_error_path_does_not_itself_crash(self):
+        """Regression test: _PYAUTOGUI_IMPORT_ERROR previously had no
+        default value, so if pyautogui was None for any reason other
+        than the module's own except block having just run, building
+        the error message raised NameError instead of the intended
+        DesktopCaptureError. Only patches pyautogui itself, not the
+        error variable, to catch that gap if it comes back."""
+        with patch('robonet.endpoint.desktop_hardware.pyautogui', None):
+            from robonet.endpoint.desktop_hardware import DesktopHw, DesktopCaptureError
+            try:
+                DesktopHw()
+                self.fail('expected DesktopCaptureError')
+            except DesktopCaptureError:
+                pass
+            except NameError as e:
+                self.fail(f'_PYAUTOGUI_IMPORT_ERROR regression: {e}')
 
-    @patch('robonet.endpoint.desktop_capture.find_v4l2loopback_device')
-    def test_raises_actionable_error_when_missing(self, mock_find):
-        mock_find.return_value = None
-        with self.assertRaises(dc.DesktopCaptureError) as ctx:
-            dc.ensure_v4l2loopback_device()
-        self.assertIn('setup_desktop_capture.sh', str(ctx.exception))
+    def test_real_webcam_detected_when_present(self):
+        hw = self._construct(webcam='/dev/video0')
+        self.assertIn('webcam:/dev/video0', hw._video_sources)
+        self.assertEqual(hw._video_sources['webcam:/dev/video0'], '/dev/video0')
 
+    def test_no_webcam_found_degrades_gracefully(self):
+        hw = self._construct(webcam=None)
+        self.assertEqual(list(hw._video_sources), ['desktop'])
 
-class TestFindAlsaLoopbackCardIndex(unittest.TestCase):
+    def test_no_speaker_found_degrades_gracefully(self):
+        from robonet.gst_io.devices import DeviceNotFoundError
+        with patch('robonet.endpoint.desktop_hardware.pyautogui', self._mock_pyautogui()), \
+             patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=[]), \
+             patch('robonet.endpoint.desktop_hardware.get_first_speaker_device',
+                  side_effect=DeviceNotFoundError('no speaker')):
+            from robonet.endpoint.desktop_hardware import DesktopHw
+            hw = DesktopHw()  # must not raise
+        self.assertEqual(hw._audio_outputs, {})
 
-    @patch('robonet.endpoint.desktop_capture.os.path.exists', return_value=True)
-    def test_finds_loopback_card(self, _exists):
-        cards = ' 0 [PCH            ]: HDA-Intel - HDA Intel PCH\n' \
-               ' 1 [Loopback       ]: Loopback - Loopback\n'
-        with patch('builtins.open', mock_open(read_data=cards)):
-            self.assertEqual(dc.find_alsa_loopback_card_index(), 1)
+    def test_build_capabilities_matches_module_function(self):
+        hw = self._construct()
+        with patch('robonet.endpoint.desktop_hardware.pyautogui', self._mock_pyautogui()):
+            caps = hw.build_capabilities()
+        self.assertEqual(caps.endpoint_type, 'desktop')
+        self.assertGreater(len(caps.axes()), 0)  # keys/mouse are real axes, not a statue
+        self.assertGreater(len(caps.streams()), 0)  # video/audio are real streams
 
-    @patch('robonet.endpoint.desktop_capture.os.path.exists', return_value=True)
-    def test_returns_none_when_no_loopback_card(self, _exists):
-        cards = ' 0 [PCH            ]: HDA-Intel - HDA Intel PCH\n'
-        with patch('builtins.open', mock_open(read_data=cards)):
-            self.assertIsNone(dc.find_alsa_loopback_card_index())
+    def test_capabilities_axes_match_control_interface_spec(self):
+        from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC
+        hw = self._construct()
+        with patch('robonet.endpoint.desktop_hardware.pyautogui', self._mock_pyautogui()):
+            axes = hw.build_capabilities().axes()
+        self.assertEqual(len(axes), len(DESKTOP_CONTROL_INTERFACE_SPEC))
+        self.assertEqual({a['name'] for a in axes}, set(DESKTOP_CONTROL_INTERFACE_SPEC))
 
-    @patch('robonet.endpoint.desktop_capture.os.path.exists', return_value=False)
-    def test_returns_none_when_proc_asound_missing(self, _exists):
-        self.assertIsNone(dc.find_alsa_loopback_card_index())
+    def test_capabilities_streams_report_actual_screen_resolution(self):
+        hw = self._construct()
+        with patch('robonet.endpoint.desktop_hardware.pyautogui',
+                  self._mock_pyautogui(screen_width=2560, screen_height=1440)):
+            streams = hw.build_capabilities().streams()
+        types = {s['type'] for s in streams}
+        self.assertEqual(types, {'video', 'audio'})
+        screen = next(s for s in streams if s['name'] == 'screen')
+        self.assertEqual((screen['width'], screen['height']), (2560, 1440))
 
+    def test_handlers_include_desktop_specific_and_inherited(self):
+        hw = self._construct()
+        handlers = hw.handlers
+        self.assertIn('KeyEvent', handlers)
+        self.assertIn('MouseEvent', handlers)
+        self.assertIn('SelectAVSource', handlers)
+        self.assertIn('SparseVectorBuffer', handlers)  # inherited from RobotHardware
 
-class TestEnsureAlsaLoopback(unittest.TestCase):
+    def test_apply_tensor_with_entries_does_not_raise(self):
+        hw = self._construct()
+        hw.apply_tensor(np.array([1, 2]), np.array([0.5, 0.5]))  # should just log, not crash
 
-    @patch('robonet.endpoint.desktop_capture.find_alsa_loopback_card_index', return_value=1)
-    def test_returns_correct_playback_and_capture_pair(self, _idx):
-        playback, capture = dc.ensure_alsa_loopback()
-        self.assertEqual(playback, 'hw:1,0,0')
-        self.assertEqual(capture, 'hw:1,1,0')
+    def test_apply_tensor_empty_does_not_raise(self):
+        hw = self._construct()
+        hw.apply_tensor(np.array([]), np.array([]))
 
-    @patch('robonet.endpoint.desktop_capture.find_alsa_loopback_card_index', return_value=None)
-    def test_raises_actionable_error_when_missing(self, _idx):
-        with self.assertRaises(dc.DesktopCaptureError) as ctx:
-            dc.ensure_alsa_loopback()
-        self.assertIn('setup_desktop_capture.sh', str(ctx.exception))
+    def test_setup_logs_active_video_source(self):
+        hw = self._construct()
+        with self.assertLogs('robonet.endpoint.desktop_hardware', level='INFO') as cm:
+            hw.setup(MagicMock())
+        self.assertTrue(any('desktop' in line for line in cm.output))
 
+    def test_stop_releases_held_input(self):
+        hw = self._construct()
+        hw._held_keys = {'a'}
+        hw._held_buttons = {'left'}
+        with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pag:
+            hw.stop()
+            mock_pag.keyUp.assert_called_once_with('a')
+            mock_pag.mouseUp.assert_called_once_with(button='left')
+        self.assertEqual(hw._held_keys, set())
+        self.assertEqual(hw._held_buttons, set())
 
-class TestDesktopVideoFeederBuild(unittest.TestCase):
+    def test_halt_releases_held_input(self):
+        hw = self._construct()
+        hw._held_keys = {'shift'}
+        with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pag:
+            hw.halt()
+            mock_pag.keyUp.assert_called_once_with('shift')
 
-    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
-    def test_pipeline_string_uses_configured_device_and_resolution(self, mock_parse):
-        mock_parse.return_value = MagicMock()
-        feeder = dc.DesktopVideoFeeder('/dev/video42', width=1280, height=720, fps=15)
-
-        ok = feeder.build()
-
-        self.assertTrue(ok)
-        desc = mock_parse.call_args[0][0]
-        self.assertIn('device=/dev/video42', desc)
-        self.assertIn('width=1280', desc)
-        self.assertIn('height=720', desc)
-        self.assertIn('framerate=15/1', desc)
-        self.assertIn('ximagesrc', desc)
-        self.assertIn('v4l2sink', desc)
-
-    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
-    def test_build_failure_returns_false_not_raise(self, mock_parse):
-        mock_parse.side_effect = dc.GLib.Error('bad pipeline')
-        feeder = dc.DesktopVideoFeeder('/dev/video42')
-
-        self.assertFalse(feeder.build())
-
-    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
-    def test_start_builds_if_not_already_built(self, mock_parse):
-        fake_pipeline = MagicMock()
-        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.SUCCESS
-        mock_parse.return_value = fake_pipeline
-        feeder = dc.DesktopVideoFeeder('/dev/video42')
-
-        with patch('robonet.endpoint.desktop_capture.GLib.MainLoop') as mock_loop_cls, \
-             patch('robonet.endpoint.desktop_capture.threading.Thread') as mock_thread_cls:
-            mock_loop_cls.return_value = MagicMock()
-            mock_thread_cls.return_value = MagicMock()
-            ok = feeder.start()
-
-        self.assertTrue(ok)
-        mock_parse.assert_called_once()
-        fake_pipeline.set_state.assert_called_with(dc.Gst.State.PLAYING)
-
-    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
-    def test_start_returns_false_when_state_change_fails(self, mock_parse):
-        fake_pipeline = MagicMock()
-        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.FAILURE
-        mock_parse.return_value = fake_pipeline
-        feeder = dc.DesktopVideoFeeder('/dev/video42')
-
-        self.assertFalse(feeder.start())
-
-    def test_stop_before_start_does_not_raise(self):
-        feeder = dc.DesktopVideoFeeder('/dev/video42')
-        feeder.stop()  # should be a no-op, not an AttributeError
-
-
-class TestDesktopAudioFeederBuild(unittest.TestCase):
-
-    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
-    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
-    def test_mixes_monitor_and_distinct_mic(self, mock_pactl, mock_parse):
-        mock_pactl.side_effect = lambda field: 'alsa_output.pci-0000.sink' if field == 'sink' else 'alsa_input.usb-mic'
-        mock_parse.return_value = MagicMock()
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0', include_mic=True)
-
-        ok = feeder.build()
-
-        self.assertTrue(ok)
-        desc = mock_parse.call_args[0][0]
-        self.assertIn('alsa_output.pci-0000.sink.monitor', desc)
-        self.assertIn('alsa_input.usb-mic', desc)
-        self.assertIn('alsasink device=hw:1,0,0', desc)
-        # two distinct pulsesrc branches feeding the mixer
-        self.assertEqual(desc.count('pulsesrc'), 2)
-
-    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
-    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
-    def test_skips_mic_when_it_equals_monitor(self, mock_pactl, mock_parse):
-        # e.g. default source somehow resolves to the same device as the monitor
-        mock_pactl.side_effect = lambda field: 'same_device' if field == 'sink' else 'same_device.monitor'
-        mock_parse.return_value = MagicMock()
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0', include_mic=True)
-
-        feeder.build()
-
-        desc = mock_parse.call_args[0][0]
-        self.assertEqual(desc.count('pulsesrc'), 1)
-
-    @patch.object(dc.DesktopAudioFeeder, '_pactl_get', return_value=None)
-    def test_no_sink_or_source_disables_gracefully_no_raise(self, _pactl):
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
-
-        ok = feeder.build()
-
-        self.assertFalse(ok)  # degrades gracefully, does not raise
-
-    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
-    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
-    def test_include_mic_false_only_uses_monitor(self, mock_pactl, mock_parse):
-        mock_pactl.return_value = 'some_device'
-        mock_parse.return_value = MagicMock()
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0', include_mic=False)
-
-        feeder.build()
-
-        desc = mock_parse.call_args[0][0]
-        self.assertEqual(desc.count('pulsesrc'), 1)
-
-    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
-    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
-    def test_start_builds_if_not_already_built(self, mock_pactl, mock_parse):
-        mock_pactl.return_value = 'some_device'
-        fake_pipeline = MagicMock()
-        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.SUCCESS
-        mock_parse.return_value = fake_pipeline
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
-
-        with patch('robonet.endpoint.desktop_capture.GLib.MainLoop') as mock_loop_cls, \
-             patch('robonet.endpoint.desktop_capture.threading.Thread') as mock_thread_cls:
-            mock_loop_cls.return_value = MagicMock()
-            mock_thread_cls.return_value = MagicMock()
-            ok = feeder.start()
-
-        self.assertTrue(ok)
-        fake_pipeline.set_state.assert_called_with(dc.Gst.State.PLAYING)
-
-    @patch.object(dc.DesktopAudioFeeder, '_pactl_get', return_value=None)
-    def test_start_returns_false_when_build_fails(self, _pactl):
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
-        self.assertFalse(feeder.start())
-
-    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
-    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
-    def test_start_returns_false_when_state_change_fails(self, mock_pactl, mock_parse):
-        mock_pactl.return_value = 'some_device'
-        fake_pipeline = MagicMock()
-        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.FAILURE
-        mock_parse.return_value = fake_pipeline
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
-
-        self.assertFalse(feeder.start())
-
-    def test_stop_before_start_does_not_raise(self):
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
-        feeder.stop()
-
-    @patch('robonet.endpoint.desktop_capture.Gst.parse_launch')
-    @patch.object(dc.DesktopAudioFeeder, '_pactl_get')
-    def test_stop_after_start_tears_down_pipeline_and_loop(self, mock_pactl, mock_parse):
-        mock_pactl.return_value = 'some_device'
-        fake_pipeline = MagicMock()
-        fake_pipeline.set_state.return_value = dc.Gst.StateChangeReturn.SUCCESS
-        mock_parse.return_value = fake_pipeline
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
-        fake_loop = MagicMock()
-        fake_loop.is_running.return_value = True
-        with patch('robonet.endpoint.desktop_capture.GLib.MainLoop', return_value=fake_loop), \
-             patch('robonet.endpoint.desktop_capture.threading.Thread', return_value=MagicMock()):
-            feeder.start()
-
-        feeder.stop()
-
-        fake_pipeline.set_state.assert_called_with(dc.Gst.State.NULL)
-        fake_loop.quit.assert_called_once()
-        self.assertIsNone(feeder._pipeline)
-        self.assertIsNone(feeder._glib_loop)
+    def test_release_all_held_swallows_pyautogui_errors(self):
+        hw = self._construct()
+        hw._held_keys = {'a', 'b'}
+        with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pag:
+            mock_pag.keyUp.side_effect = Exception('X server gone')
+            hw._release_all_held()  # must not raise
+        self.assertEqual(hw._held_keys, set())
 
 
 class _FakeGstSenderForSourceSwitch:
@@ -415,207 +312,6 @@ class TestGstSenderSetSourceDevice(unittest.TestCase):
         self.assertEqual(fake._src_device, '/dev/video0')  # device is still updated though
 
 
-class TestDesktopHwConstruction(unittest.TestCase):
-    """DesktopHw's __init__ calls into MultiAVRobotHardware.__init__,
-    which needs a real psk key file to exist (endpoint/settings.py has
-    no advanced-settings restriction, unlike the brain side, so we can
-    just point it at a temp one directly and restore it after)."""
-
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix='robonet_desktop_hw_test_')
-        self.psk_path = os.path.join(self.tmpdir, 'psk.key')
-        with open(self.psk_path, 'wb') as f:
-            f.write(os.urandom(32))
-        import robonet.endpoint.settings as settings_
-        self._settings = settings_.get()
-        self._orig_psk = self._settings['psk_file']
-        self._settings['psk_file'] = self.psk_path
-
-    def tearDown(self):
-        self._settings['psk_file'] = self._orig_psk
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-
-    def _construct(self, **kwargs):
-        with patch('robonet.endpoint.desktop_hardware.pyautogui', MagicMock()), \
-             patch('robonet.endpoint.desktop_hardware.ensure_v4l2loopback_device',
-                  return_value='/dev/video42'), \
-             patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
-                  return_value=('hw:1,0,0', 'hw:1,1,0')), \
-             patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=[]), \
-             patch('robonet.endpoint.desktop_hardware.get_first_speaker_device',
-                  return_value='hw:0,0'):
-            from robonet.endpoint.desktop_hardware import DesktopHw
-            return DesktopHw(**kwargs)
-
-    def test_construction_succeeds_and_wires_devices(self):
-        hw = self._construct()
-        self.assertEqual(hw._video_sources['desktop'], '/dev/video42')
-        self.assertEqual(hw._active_video, 'desktop')
-        self.assertNotIn('webcam', str(list(hw._video_sources)))  # no webcam entry when none found
-
-    def test_construction_raises_clear_error_when_pyautogui_unavailable(self):
-        with patch('robonet.endpoint.desktop_hardware.pyautogui', None), \
-             patch('robonet.endpoint.desktop_hardware._PYAUTOGUI_IMPORT_ERROR', KeyError('DISPLAY')), \
-             patch('robonet.endpoint.desktop_hardware.ensure_v4l2loopback_device',
-                  return_value='/dev/video42'), \
-             patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
-                  return_value=('hw:1,0,0', 'hw:1,1,0')):
-            from robonet.endpoint.desktop_hardware import DesktopHw, DesktopCaptureError
-            with self.assertRaises(DesktopCaptureError) as ctx:
-                DesktopHw()
-            self.assertIn('DISPLAY', str(ctx.exception))
-
-    def test_pyautogui_unavailable_error_path_does_not_itself_crash(self):
-        """Regression test: _PYAUTOGUI_IMPORT_ERROR previously had no
-        default value, so if pyautogui was None for any reason other
-        than the module's own except block having just run (e.g. patched
-        to None without also patching the error variable, which is
-        exactly what happens in a real process where the import
-        succeeded and something else set it to None later), building the
-        error message raised NameError instead of the intended
-        DesktopCaptureError. Only patches pyautogui itself here, not the
-        error variable, to catch that gap if it comes back."""
-        with patch('robonet.endpoint.desktop_hardware.pyautogui', None), \
-             patch('robonet.endpoint.desktop_hardware.ensure_v4l2loopback_device',
-                  return_value='/dev/video42'), \
-             patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
-                  return_value=('hw:1,0,0', 'hw:1,1,0')):
-            from robonet.endpoint.desktop_hardware import DesktopHw, DesktopCaptureError
-            try:
-                DesktopHw()
-                self.fail('expected DesktopCaptureError')
-            except DesktopCaptureError:
-                pass  # correct
-            except NameError as e:
-                self.fail(f'_PYAUTOGUI_IMPORT_ERROR regression: {e}')
-
-    def test_construction_propagates_missing_v4l2loopback(self):
-        from robonet.endpoint.desktop_capture import DesktopCaptureError as CaptureErr
-        with patch('robonet.endpoint.desktop_hardware.pyautogui', MagicMock()), \
-             patch('robonet.endpoint.desktop_hardware.ensure_v4l2loopback_device',
-                  side_effect=CaptureErr('no loopback device')):
-            from robonet.endpoint.desktop_hardware import DesktopHw
-            with self.assertRaises(CaptureErr):
-                DesktopHw()
-
-    def test_real_webcam_detected_when_present(self):
-        with patch('robonet.endpoint.desktop_hardware.pyautogui', MagicMock()), \
-             patch('robonet.endpoint.desktop_hardware.ensure_v4l2loopback_device',
-                  return_value='/dev/video42'), \
-             patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
-                  return_value=('hw:1,0,0', 'hw:1,1,0')), \
-             patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=['/dev/video0']), \
-             patch('robonet.endpoint.desktop_hardware.get_first_speaker_device',
-                  return_value='hw:0,0'):
-            from robonet.endpoint.desktop_hardware import DesktopHw
-            hw = DesktopHw()
-        self.assertIn('webcam:/dev/video0', hw._video_sources)
-        self.assertEqual(hw._video_sources['webcam:/dev/video0'], '/dev/video0')
-
-    def test_no_speaker_found_degrades_gracefully(self):
-        from robonet.gst_io.devices import DeviceNotFoundError
-        with patch('robonet.endpoint.desktop_hardware.pyautogui', MagicMock()), \
-             patch('robonet.endpoint.desktop_hardware.ensure_v4l2loopback_device',
-                  return_value='/dev/video42'), \
-             patch('robonet.endpoint.desktop_hardware.ensure_alsa_loopback',
-                  return_value=('hw:1,0,0', 'hw:1,1,0')), \
-             patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=[]), \
-             patch('robonet.endpoint.desktop_hardware.get_first_speaker_device',
-                  side_effect=DeviceNotFoundError('no speaker')):
-            from robonet.endpoint.desktop_hardware import DesktopHw
-            hw = DesktopHw()  # must not raise
-        self.assertEqual(hw._audio_outputs, {})
-
-    def _patched_pyautogui_size(self, width=1920, height=1080):
-        mock_pag = MagicMock()
-        Size = namedtuple('Size', 'width height')
-        mock_pag.size.return_value = Size(width, height)
-        return patch('robonet.endpoint.desktop_hardware.pyautogui', mock_pag)
-
-    def test_build_capabilities_matches_module_function(self):
-        hw = self._construct()
-        with self._patched_pyautogui_size():
-            caps = hw.build_capabilities()
-        self.assertEqual(caps.endpoint_type, 'desktop')
-        self.assertGreater(len(caps.axes()), 0)  # keys/mouse are real axes, not a statue
-        self.assertGreater(len(caps.streams()), 0)  # video/audio are real streams
-
-    def test_capabilities_axes_match_control_interface_spec(self):
-        from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC
-        hw = self._construct()
-        with self._patched_pyautogui_size():
-            axes = hw.build_capabilities().axes()
-        self.assertEqual(len(axes), len(DESKTOP_CONTROL_INTERFACE_SPEC))
-        self.assertEqual({a['name'] for a in axes}, set(DESKTOP_CONTROL_INTERFACE_SPEC))
-
-    def test_capabilities_streams_include_video_and_audio(self):
-        hw = self._construct()
-        with self._patched_pyautogui_size(width=2560, height=1440):
-            streams = hw.build_capabilities().streams()
-        types = {s['type'] for s in streams}
-        self.assertEqual(types, {'video', 'audio'})
-        screen = next(s for s in streams if s['name'] == 'screen')
-        self.assertEqual((screen['width'], screen['height']), (2560, 1440))
-
-    def test_handlers_include_desktop_specific_and_inherited(self):
-        hw = self._construct()
-        handlers = hw.handlers
-        self.assertIn('KeyEvent', handlers)
-        self.assertIn('MouseEvent', handlers)
-        self.assertIn('SelectAVSource', handlers)
-        self.assertIn('SparseVectorBuffer', handlers)  # inherited from RobotHardware
-
-    def test_apply_tensor_with_entries_does_not_raise(self):
-        hw = self._construct()
-        hw.apply_tensor(np.array([1, 2]), np.array([0.5, 0.5]))  # should just log, not crash
-
-    def test_apply_tensor_empty_does_not_raise(self):
-        hw = self._construct()
-        hw.apply_tensor(np.array([]), np.array([]))
-
-    def test_setup_starts_feeders(self):
-        hw = self._construct()
-        hw._video_feeder = MagicMock()
-        hw._audio_feeder = MagicMock()
-
-        hw.setup(MagicMock())
-
-        hw._video_feeder.start.assert_called_once()
-        hw._audio_feeder.start.assert_called_once()
-
-    def test_stop_releases_held_input_and_stops_feeders(self):
-        hw = self._construct()
-        hw._video_feeder = MagicMock()
-        hw._audio_feeder = MagicMock()
-        hw._held_keys = {'a'}
-        hw._held_buttons = {'left'}
-        with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pag:
-            hw.stop()
-            mock_pag.keyUp.assert_called_once_with('a')
-            mock_pag.mouseUp.assert_called_once_with(button='left')
-        hw._video_feeder.stop.assert_called_once()
-        hw._audio_feeder.stop.assert_called_once()
-        self.assertEqual(hw._held_keys, set())
-        self.assertEqual(hw._held_buttons, set())
-
-    def test_halt_releases_held_input_without_stopping_feeders(self):
-        hw = self._construct()
-        hw._video_feeder = MagicMock()
-        hw._held_keys = {'shift'}
-        with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pag:
-            hw.halt()
-            mock_pag.keyUp.assert_called_once_with('shift')
-        hw._video_feeder.stop.assert_not_called()  # halt is not a full stop
-
-    def test_release_all_held_swallows_pyautogui_errors(self):
-        hw = self._construct()
-        hw._held_keys = {'a', 'b'}
-        with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pag:
-            mock_pag.keyUp.side_effect = Exception('X server gone')
-            hw._release_all_held()  # must not raise
-        self.assertEqual(hw._held_keys, set())
-
-
 class TestDesktopHwSourceSelection(unittest.TestCase):
     """DesktopHw's video/audio source selection now goes through the
     generic MultiAVRobotHardware.select_video_source/select_audio_input/
@@ -672,52 +368,6 @@ class TestDesktopHwSourceSelection(unittest.TestCase):
 
 
 
-class TestFeederBusMessageHandling(unittest.TestCase):
-    """_on_bus_message for both feeders -- logs errors/warnings, ignores
-    everything else, never raises regardless of message type."""
-
-    def _make_message(self, msg_type, parsed=('boom', 'debug info')):
-        msg = MagicMock()
-        msg.type = msg_type
-        msg.parse_error.return_value = parsed
-        msg.parse_warning.return_value = parsed
-        return msg
-
-    def test_video_feeder_logs_error_message(self):
-        feeder = dc.DesktopVideoFeeder('/dev/video42')
-        msg = self._make_message(dc.Gst.MessageType.ERROR)
-        with patch('robonet.endpoint.desktop_capture.log') as mock_log:
-            feeder._on_bus_message(MagicMock(), msg)
-        mock_log.error.assert_called_once()
-
-    def test_video_feeder_logs_warning_message(self):
-        feeder = dc.DesktopVideoFeeder('/dev/video42')
-        msg = self._make_message(dc.Gst.MessageType.WARNING)
-        with patch('robonet.endpoint.desktop_capture.log') as mock_log:
-            feeder._on_bus_message(MagicMock(), msg)
-        mock_log.warning.assert_called_once()
-
-    def test_video_feeder_ignores_other_message_types(self):
-        feeder = dc.DesktopVideoFeeder('/dev/video42')
-        msg = self._make_message(dc.Gst.MessageType.EOS)
-        with patch('robonet.endpoint.desktop_capture.log') as mock_log:
-            feeder._on_bus_message(MagicMock(), msg)
-        mock_log.error.assert_not_called()
-        mock_log.warning.assert_not_called()
-
-    def test_audio_feeder_logs_error_message(self):
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
-        msg = self._make_message(dc.Gst.MessageType.ERROR)
-        with patch('robonet.endpoint.desktop_capture.log') as mock_log:
-            feeder._on_bus_message(MagicMock(), msg)
-        mock_log.error.assert_called_once()
-
-    def test_audio_feeder_logs_warning_message(self):
-        feeder = dc.DesktopAudioFeeder('hw:1,0,0')
-        msg = self._make_message(dc.Gst.MessageType.WARNING)
-        with patch('robonet.endpoint.desktop_capture.log') as mock_log:
-            feeder._on_bus_message(MagicMock(), msg)
-        mock_log.warning.assert_called_once()
 
 
 if __name__ == '__main__':
