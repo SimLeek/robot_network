@@ -113,6 +113,11 @@ class DisplaySubSystem(SubSystem):
         self.displayer.update(img, 'screen')
         aud = self.in_aud
         if aud is not None:
+            # displayarray multiplies float input by 255 assuming it's
+            # already 0..1 -- raw PCM samples are roughly -1..1, so the
+            # negative half of every waveform was wrapping around via
+            # uint8 underflow instead of displaying. Remap -1..1 -> 0..1.
+            aud = (aud / 2.0) + 0.5
             if len(aud.shape)==1:
                 aud = reshape_to_square_matrix(aud)
             self.displayer.update(aud, 'audio')

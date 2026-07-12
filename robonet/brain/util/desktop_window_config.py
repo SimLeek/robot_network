@@ -49,23 +49,30 @@ def make_window_config_for_server(sm, af_thru: ActionFactory = None, af_edit: Ac
     register_desktop_actions(af_thru, af_edit, sm)
 
     # mouse_press/release don't carry texel coordinates themselves (only
-    # px, py, button) -- track the most recent mouse_pos's tx, ty so a
-    # press/release can use the same normalized-coordinate approach as
-    # move, rather than the wrong, unscaled px,py.
-    _last_texel = {'tx': 0.5, 'ty': 0.5}
+    # px, py, button) -- track the most recent mouse_pos's fractional
+    # position so a press/release can use the same normalized-coordinate
+    # approach as move, rather than the wrong, unscaled px,py.
+    #
+    # displayarray's tx/ty are apparently swapped relative to true
+    # horizontal/vertical (confirmed by testing) -- swapped here, once,
+    # at the source, into clearly-named x_frac/y_frac so every
+    # downstream consumer can just treat them as "horizontal fraction,
+    # vertical fraction" with no further swapping anywhere.
+    _last_frac = {'x': 0.5, 'y': 0.5}
 
     def pass_through_cb(event_type, frame, name, *args):
         if event_type == 'mouse_pos':
             px, py, tx, ty, sx, sy = args
-            _last_texel['tx'] = tx
-            _last_texel['ty'] = ty
-            af_thru.on_mouse_move(ty, tx)  # swapped -- confirmed x/y were backwards
+            x_frac, y_frac = ty, tx
+            _last_frac['x'] = x_frac
+            _last_frac['y'] = y_frac
+            af_thru.on_mouse_move(x_frac, y_frac)
         elif event_type == 'mouse_press':
             px, py, button = args
-            af_thru.on_mouse_press(_last_texel['ty'], _last_texel['tx'], button)
+            af_thru.on_mouse_press(_last_frac['x'], _last_frac['y'], button)
         elif event_type == 'mouse_release':
             px, py, button = args
-            af_thru.on_mouse_release(_last_texel['ty'], _last_texel['tx'], button)
+            af_thru.on_mouse_release(_last_frac['x'], _last_frac['y'], button)
         elif event_type == 'mouse_scroll':
             x_offset, y_offset = args
             af_thru.on_mouse_scroll(int(y_offset))

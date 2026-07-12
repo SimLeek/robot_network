@@ -174,3 +174,35 @@ these fixes should be implemented but are either large tasks or are blocked.
   which is exactly the "mostly zero, occasional NaN, values like
   9e-41" pattern that produces garbage. Fixed by explicitly requesting
   format=F32LE in the caps filter.
+
+- **Mouse buttons had the same GLFW-vs-pyglet mismatch as keys.**
+  `_MOUSE_BUTTON_NAMES` was `{0: left, 1: right, 2: middle}` (GLFW's
+  sequential indices), but pyglet's mouse buttons are bitmask values
+  (confirmed via pyglet.window.mouse source: LEFT=1, MIDDLE=2, RIGHT=4)
+  -- every left click was flipped to a right click. Fixed to
+  `{1: left, 4: right, 2: middle}`. Unlike keys, moderngl_window doesn't
+  expose a normalized mouse-button abstraction, so this stays
+  pyglet-specific; a different backend would need revisiting.
+
+- **Mouse position swap was applied in the wrong place last round.**
+  Swapping the call-site arguments to on_mouse_move fixed positional
+  correctness but broke which scaling factor (screen width vs height)
+  applied to which axis, since the scaling code still assumed the
+  original argument order. Redone cleanly: the swap now happens once,
+  at the source, into clearly-named x_frac/y_frac, with no further
+  swapping downstream. Also added clamping to 0..1 before scaling (the
+  mouse can legitimately report fractions outside that range when it's
+  over letterboxing/padding around the captured image).
+
+- **Two open items, lower confidence:**
+  - Alt+F4 giving "error, terminal emulator not set" on LXDE sounds
+    like an LXDE keybinding/config issue (LXDE intercepting Alt+F4 for
+    something other than "close window", missing its configured
+    terminal), not a robonet bug -- the key itself likely reached the
+    endpoint fine now that the keycode mapping is fixed.
+  - Real mouse/keyboard (not through robonet) reportedly landing wrong
+    after a remote-control session. Nothing in this code alters
+    system-level cursor/display settings, so if it's real it's more
+    likely a pyautogui/X11 quirk than something robonet is doing --
+    but not confirmed either way. Worth knowing whether the offset is a
+    fixed amount or scales with position if this comes up again.

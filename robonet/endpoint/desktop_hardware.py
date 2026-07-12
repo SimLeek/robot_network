@@ -40,7 +40,12 @@ except Exception as _e:
     pyautogui = None
     _PYAUTOGUI_IMPORT_ERROR = _e
 
-_MOUSE_BUTTON_NAMES = {0: 'left', 1: 'right', 2: 'middle'}
+# pyglet mouse button bitmask values (confirmed via pyglet.window.mouse
+# source: LEFT=1<<0, MIDDLE=1<<1, RIGHT=1<<2) -- NOT GLFW's sequential
+# 0/1/2 indices. moderngl_window doesn't expose a normalized mouse-button
+# abstraction the way it does for Keys, so this is pyglet-specific; a
+# different backend would need revisiting, same as the keycode mapping.
+_MOUSE_BUTTON_NAMES = {1: 'left', 4: 'right', 2: 'middle'}
 
 DESKTOP_VIDEO_ID = 'desktop'
 DESKTOP_AUDIO_IN_ID = 'desktop-audio'

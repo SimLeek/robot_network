@@ -182,16 +182,34 @@ class TestDesktopControlPath(unittest.TestCase):
         DesktopHw._on_mouse_event(hw, 'brain-host', MouseEvent(event_type=0, x=10, y=20, button=0, delta=0))
         mock_pag.moveTo.assert_called_once_with(10, 20)
 
-        DesktopHw._on_mouse_event(hw, 'brain-host', MouseEvent(event_type=1, x=10, y=20, button=0, delta=0))
+        DesktopHw._on_mouse_event(hw, 'brain-host', MouseEvent(event_type=1, x=10, y=20, button=1, delta=0))
         self.assertIn('left', hw._held_buttons)
         mock_pag.mouseDown.assert_called_once_with(x=10, y=20, button='left')
 
-        DesktopHw._on_mouse_event(hw, 'brain-host', MouseEvent(event_type=2, x=10, y=20, button=0, delta=0))
+        DesktopHw._on_mouse_event(hw, 'brain-host', MouseEvent(event_type=2, x=10, y=20, button=1, delta=0))
         self.assertNotIn('left', hw._held_buttons)
         mock_pag.mouseUp.assert_called_once_with(x=10, y=20, button='left')
 
         DesktopHw._on_mouse_event(hw, 'brain-host', MouseEvent(event_type=3, x=0, y=0, button=0, delta=-5))
         mock_pag.scroll.assert_called_once_with(-5)
+
+    @patch('robonet.endpoint.desktop_hardware.pyautogui')
+    def test_mouse_button_mapping_matches_pyglet_bitmask_values(self, mock_pag):
+        # Regression test for the actual bug: pyglet's mouse buttons are
+        # bitmask values (LEFT=1, MIDDLE=2, RIGHT=4), not GLFW's
+        # sequential 0/1/2 -- confirmed via pyglet source. The old table
+        # flipped left and right entirely.
+        from robonet.endpoint.desktop_hardware import DesktopHw
+        hw = _FakeDesktopHw()
+
+        DesktopHw._on_mouse_event(hw, 'brain-host', MouseEvent(event_type=1, x=0, y=0, button=1, delta=0))
+        mock_pag.mouseDown.assert_called_with(x=0, y=0, button='left')
+
+        DesktopHw._on_mouse_event(hw, 'brain-host', MouseEvent(event_type=1, x=0, y=0, button=4, delta=0))
+        mock_pag.mouseDown.assert_called_with(x=0, y=0, button='right')
+
+        DesktopHw._on_mouse_event(hw, 'brain-host', MouseEvent(event_type=1, x=0, y=0, button=2, delta=0))
+        mock_pag.mouseDown.assert_called_with(x=0, y=0, button='middle')
 
     @patch('robonet.endpoint.desktop_hardware.pyautogui')
     def test_failsafe_exception_is_caught_not_raised(self, mock_pag):
@@ -536,6 +554,24 @@ class TestDesktopSubSystemMouseForwarding(unittest.TestCase):
         sub._root.radio.burst.assert_called_once()
         sent = sub._root.radio.burst.call_args[0][0]
         self.assertEqual((sent.event_type, sent.x, sent.y), (0, 960, 270))
+
+    def test_move_clamps_fraction_above_one(self):
+        # Legitimate case: mouse over letterboxing/padding beyond the
+        # captured image's right/bottom edge.
+        sub = self._make_sub(screen_width=1920, screen_height=1080)
+
+        sub._on_mouse_move(1.5, 2.0)
+
+        sent = sub._root.radio.burst.call_args[0][0]
+        self.assertEqual((sent.x, sent.y), (1920, 1080))  # clamped to the screen edge, not beyond it
+
+    def test_move_clamps_fraction_below_zero(self):
+        sub = self._make_sub(screen_width=1920, screen_height=1080)
+
+        sub._on_mouse_move(-0.5, -1.0)
+
+        sent = sub._root.radio.burst.call_args[0][0]
+        self.assertEqual((sent.x, sent.y), (0, 0))  # clamped, not a negative pixel coordinate
 
     def test_move_uses_default_resolution_when_endpoint_reports_no_screen_stream(self):
         from robonet.brain.desktop_system import DesktopSubSystem

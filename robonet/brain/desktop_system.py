@@ -104,25 +104,33 @@ class DesktopSubSystem(SubSystem):
         self._root.radio.burst(KeyEvent(
             key=name, pressed=(action == wkeys.ACTION_PRESS), modifiers=','.join(mods)))
 
-    def _on_mouse_move(self, tx: float, ty: float):
+    def _frac_to_pixel(self, x_frac: float, y_frac: float) -> tuple:
+        """Normalized fraction -> real screen pixel coordinates, clamped
+        to the screen -- x_frac/y_frac can legitimately be outside 0-1
+        when the mouse is over letterboxing/padding around the captured
+        image rather than the image itself."""
+        x_frac = max(0.0, min(1.0, x_frac))
+        y_frac = max(0.0, min(1.0, y_frac))
+        x = int(x_frac * self._screen_width)
+        y = int(y_frac * self._screen_height)
+        return x, y
+
+    def _on_mouse_move(self, x_frac: float, y_frac: float):
         if self._root.displayer is None or self._root.menu.visible:
             return
-        x = int(tx * self._screen_width)
-        y = int(ty * self._screen_height)
+        x, y = self._frac_to_pixel(x_frac, y_frac)
         self._root.radio.burst(MouseEvent(event_type=0, x=x, y=y, button=0, delta=0))
 
-    def _on_mouse_press(self, tx: float, ty: float, button: int):
+    def _on_mouse_press(self, x_frac: float, y_frac: float, button: int):
         if self._root.displayer is None or self._root.menu.visible:
             return
-        x = int(tx * self._screen_width)
-        y = int(ty * self._screen_height)
+        x, y = self._frac_to_pixel(x_frac, y_frac)
         self._root.radio.burst(MouseEvent(event_type=1, x=x, y=y, button=int(button), delta=0))
 
-    def _on_mouse_release(self, tx: float, ty: float, button: int):
+    def _on_mouse_release(self, x_frac: float, y_frac: float, button: int):
         if self._root.displayer is None or self._root.menu.visible:
             return
-        x = int(tx * self._screen_width)
-        y = int(ty * self._screen_height)
+        x, y = self._frac_to_pixel(x_frac, y_frac)
         self._root.radio.burst(MouseEvent(event_type=2, x=x, y=y, button=int(button), delta=0))
 
     def _on_mouse_scroll(self, y_offset: int):
