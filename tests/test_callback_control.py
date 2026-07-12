@@ -561,18 +561,31 @@ class TestDesktopSubSystemMouseForwarding(unittest.TestCase):
     def test_move_clamps_out_of_range_fraction_so_pack_does_not_crash(self):
         # Regression test for the actual bug: without clamping, a
         # fraction outside 0-1 (mouse over letterboxing outside the
-        # captured texture) produces a negative or out-of-screen pixel
-        # value, and MouseEvent.x/y pack as uint32 -- pack_obj crashes
-        # on a negative value, not just looks wrong.
+        # captured texture) produces a negative pixel value, and
+        # MouseEvent.x/y pack as uint32 -- pack_obj crashes on a
+        # negative value, not just looks wrong.
         from robonet.buffers.buffer_handling import pack_obj
         sub = self._make_sub(screen_width=1920, screen_height=1080)
 
-        sub._on_mouse_move(-0.5, 2.0)  # would be negative x, over-range y unclamped
+        sub._on_mouse_move(-0.5, 2.0)  # would be negative x unclamped
 
         sent = sub._root.radio.burst.call_args[0][0]
         self.assertGreaterEqual(sent.x, 0)
-        self.assertLess(sent.y, 1080)
+        self.assertGreaterEqual(sent.y, 0)
         pack_obj(sent)  # must not raise
+
+    def test_move_does_not_clamp_the_upper_bound(self):
+        # Per explicit request: only the lower bound (0) needs
+        # enforcing here: pyautogui/the OS already clamps movement at
+        # the real screen edge on its own. Calls _frac_to_pixel
+        # directly with no displayer/menu set up (nothing else would
+        # clamp an out-of-range fraction in that case either), to
+        # isolate exactly what this method itself does.
+        sub = self._make_sub(screen_width=1920, screen_height=1080, with_displayer=False)
+
+        x, y = sub._frac_to_pixel(2.0, 0.5)  # tx=2.0 -- well beyond the screen after the swap
+
+        self.assertGreater(y, 1080)  # not clamped to the old width-1/height-1 bound
 
     def test_move_uses_default_resolution_when_endpoint_reports_no_screen_stream(self):
         from robonet.brain.desktop_system import DesktopSubSystem
@@ -584,7 +597,7 @@ class TestDesktopSubSystemMouseForwarding(unittest.TestCase):
         sub._on_mouse_move(1.0, 1.0)  # far corner
 
         sent = sub._root.radio.burst.call_args[0][0]
-        self.assertEqual((sent.x, sent.y), (1919, 1079))  # falls back to the 1920x1080 default, clamped to the last valid pixel
+        self.assertEqual((sent.x, sent.y), (1920, 1080))  # falls back to the 1920x1080 default; upper bound isn't clamped here
 
     def test_move_suppressed_while_menu_open(self):
         sub = self._make_sub(menu_visible=True)

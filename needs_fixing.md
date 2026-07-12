@@ -350,3 +350,18 @@ these fixes should be implemented but are either large tasks or are blocked.
   stuff"), and not confirmed against real hardware yet (only tested
   against the sandbox endpoint so far). Revisit once tested against an
   actual robot on the network.
+
+- **Mouse upper-bound clamping removed from _frac_to_pixel, per
+  explicit request.** The reported "invisible wall" when zoomed in
+  (looked square) wasn't tracked down to a definitive root cause in the
+  viewport math itself (compute_crop_and_scale/inverse_map's forward
+  math is verified as a true round-trip in test_viewport.py, and no
+  swap bug was found there on inspection) -- rather than keep
+  chasing it, simplified per Simleek's own suggestion: only the lower
+  bound (0) is enforced now, since that's what actually prevents the
+  uint32 pack crash on a negative value. The upper bound relies on
+  pyautogui/the OS clamping movement at the real screen edge on their
+  own, rather than needing a second, brain-side copy of that same
+  limit to stay perfectly in sync. Worth re-confirming there's no
+  remaining swap bug once this can actually be tested again now that
+  the artificial ceiling is gone.

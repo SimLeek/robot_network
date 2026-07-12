@@ -127,9 +127,13 @@ class DesktopSubSystem(SubSystem):
         canvas position only equals the source-frame position at
         baseline zoom with matching aspect ratios and no pan, which
         isn't the normal case now that aspect ratio is preserved via
-        letterboxing and zoom/pan exist. Clamped to the screen:
-        MouseEvent.x/y pack as uint32, so an out-of-range value
-        crashes at pack time, not just looks wrong."""
+        letterboxing and zoom/pan exist. Only the lower bound (0) gets
+        clamped here -- MouseEvent.x/y pack as uint32, so a negative
+        value crashes at pack time. The upper bound isn't enforced
+        here: pyautogui/the OS already clamps movement at the real
+        screen edge on its own, using its own live screen size, rather
+        than needing a second, brain-side copy of that same limit to
+        stay perfectly in sync."""
         x_frac, y_frac = ty, tx
         d = self._root.displayer
         m = self._root.menu
@@ -138,10 +142,8 @@ class DesktopSubSystem(SubSystem):
             display_w, display_h = d.out_res
             x_frac, y_frac = self.viewport.inverse_map(
                 x_frac, y_frac, source_w, source_h, display_w, display_h)
-        x = int(x_frac * self._screen_width)
-        y = int(y_frac * self._screen_height)
-        x = max(0, min(self._screen_width - 1, x))
-        y = max(0, min(self._screen_height - 1, y))
+        x = max(0, int(x_frac * self._screen_width))
+        y = max(0, int(y_frac * self._screen_height))
         return x, y
 
     def _on_mouse_move(self, tx: float, ty: float):
