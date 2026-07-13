@@ -225,3 +225,34 @@ these fixes should be implemented but are either large tasks or are blocked.
   actual robot on the network.
   Simleek: This was maybe_auto_connect being too permissive. I fixed it by 
   adding checks. I expected it to connect on localhost or wired, not wifi.
+  Updated 3 tests in test_radio_autoconnect.py that predated this fix and
+  didn't set start_mode to match their priority list -- the new check
+  correctly requires the current mode to actually be in that list.
+
+- **AI passthrough implemented on a new branch (ai_passthrough, off
+  main).** DesktopSubSystem gets a dedicated ActionFactory (af_ai),
+  independent of DisplaySubSystem's af_thru/af_edit (those only exist
+  with a display window; af_ai works headless). Mouse position drives
+  through 2 neurons (AI_NEURON_MOUSE_X/Y, threshold=0), buttons through
+  6 tokens (press/release x left/right/middle); keyboard is direct
+  methods (ai_key_press/release) since there are too many possible keys
+  for a fixed token enum. input_source ('human'/'ai') gates both paths
+  symmetrically -- whichever is active gets sent, the other silently
+  dropped, since both driving the same remote cursor at once would just
+  fight each other. AI mouse coordinates are direct screen fractions
+  (_ai_frac_to_pixel), deliberately not routed through the human path's
+  zoom/pan-aware inverse_map -- an AI isn't looking through a human's
+  local viewport, so it shouldn't be affected by whatever that's zoomed/
+  panned to. examples/ai_passthrough_demo.py demonstrates it: circular
+  mouse motion, one right-click, one F11 tap, and a sine-wave test tone
+  (new AUDIO_SOURCE_SINE_TEST sentinel in streamer_unencrypted.py,
+  audiotestsrc-based, no real mic needed) sent as the brain's own
+  outbound audio via MenuSubSystem's already-public gst_sender. Found
+  and fixed two real, blocking bugs in ServerSystem along the way:
+  async_loops() called self.displayer.run(self) unconditionally, which
+  crashed any headless session immediately despite the constructor's own
+  `assert displayer or ai` explicitly allowing displayer=None; and
+  self.ai's start/stop/async_loops were never called anywhere at all, so
+  an AI subsystem's coroutines would never actually get scheduled. No
+  prior test coverage existed for ServerSystem -- added
+  tests/test_server_system.py.

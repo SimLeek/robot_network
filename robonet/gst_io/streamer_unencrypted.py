@@ -288,6 +288,7 @@ class _VideoPipeline:
 
 
 AUDIO_SOURCE_DESKTOP_MIX = 'desktop-audio-mix'
+AUDIO_SOURCE_SINE_TEST = 'sine-test-tone'
 
 
 def _pactl_get_default(field: str) -> Optional[str]:
@@ -365,6 +366,7 @@ class _AudioPipeline:
     def build(self) -> bool:
         p = Gst.Pipeline.new('audio-send')
         is_desktop_mix = (self._mic_device == AUDIO_SOURCE_DESKTOP_MIX)
+        is_sine_test = (self._mic_device == AUDIO_SOURCE_SINE_TEST)
 
         capsflt= Gst.ElementFactory.make('capsfilter',   'acaps')
         enc    = Gst.ElementFactory.make(self._enc_name, 'aenc')
@@ -392,6 +394,16 @@ class _AudioPipeline:
             src_out = self._build_desktop_mix_source(p)
             if src_out is None:
                 return False
+        elif is_sine_test:
+            src = Gst.ElementFactory.make('audiotestsrc', 'asrc')
+            if src is None:
+                log.error('[gst] could not instantiate audiotestsrc')
+                return False
+            src.set_property('wave', 'sine')
+            src.set_property('freq', 440.0)
+            src.set_property('is-live', True)
+            p.add(src)
+            src_out = src
         else:
             src = Gst.ElementFactory.make('alsasrc', 'asrc')
             if src is None:

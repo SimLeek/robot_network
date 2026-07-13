@@ -427,14 +427,15 @@ class TestDesktopSubSystemLifecycle(unittest.TestCase):
         sub._root.displayer.af_thru.bind_mouse_release.assert_called_once_with(sub._on_mouse_release)
         sub._root.displayer.af_thru.bind_mouse_scroll.assert_called_once_with(sub._on_mouse_scroll)
 
-    def test_bind_input_noop_for_ai_driven_session(self):
-        from robonet.brain.desktop_system import DesktopSubSystem
+    def test_bind_input_binds_ai_passthrough_even_without_a_display(self):
+        from robonet.brain.desktop_system import DesktopSubSystem, AI_NEURON_MOUSE_X
         sub = DesktopSubSystem(endpoint=MagicMock())
         sub._root = _make_fake_root(with_displayer=False)
 
         sub.start()
 
-        self.assertFalse(sub._bound)  # nothing to bind to yet
+        self.assertTrue(sub._bound)  # AI passthrough doesn't need a display to bind to
+        self.assertIn(AI_NEURON_MOUSE_X, sub.af_ai._neuron_to_handler_thresholds)
 
     def test_stop_unbinds_and_clears_running(self):
         from robonet.brain.desktop_system import DesktopSubSystem
