@@ -49,6 +49,7 @@ class RadioSubSystem(SubSystem):
         LOCALHOST = 1
         WIFI = 2
         ADHOC = 3
+        WIRED = 4
 
     def __init__(self):
         self.ctx        = zmq.asyncio.Context.instance()
@@ -76,20 +77,36 @@ class RadioSubSystem(SubSystem):
         self._endpoints: Dict[str, Endpoint] = {}
         self.our_ip = None
 
-        if settings["localhost_enabled"]:
-            # this means the server is in a robot body, or self modification is enabled
-            self._mode = self.NetMode.LOCALHOST
+        self._auto_connect_priority = list(settings["auto_connect_priority"])
+        if not settings["localhost_enabled"] and 'localhost' in self._auto_connect_priority:
+            log.warning('[radio] localhost_enabled=false -- removing localhost from auto_connect_priority')
+            self._auto_connect_priority = [m for m in self._auto_connect_priority if m != 'localhost']
+        self._auto_connect_endpoint_type = settings["auto_connect_endpoint_type"]
+        self._auto_connect_attempt_timeout = settings["auto_connect_attempt_timeout"]
+
+        if self._auto_connect_priority:
+            try:
+                self._mode = self.NetMode[self._auto_connect_priority[0].upper()]
+            except KeyError:
+                log.warning(f'[radio] unknown mode in auto_connect_priority: '
+                           f'{self._auto_connect_priority[0]!r}, ignoring auto-connect')
+                self._auto_connect_priority = []
+                self._mode = self.NetMode.ADHOC
         elif check_wifi_connected():
             self._mode = self.NetMode.WIFI
         else:
             self._mode = self.NetMode.ADHOC
+
+        self._wired_our_ip = settings["wired_our_ip"]
+        self._wired_subnet = settings["wired_subnet"]
+        self._wired_iface: Optional[str] = None  # set once we've configured one, for teardown
 
         self._adhoc_our_ip    = settings["adhoc_our_ip"]
         self._adhoc_ssid      = settings["adhoc_ssid"]
         self._adhoc_prev_conn = None  # internal for switching back to wifi
         self._wifi_prev_conn = settings["wifi_prev_connection"]
 
-        # Public discovery callbacks — MenuSubSystem subscribes to these
+        # Public discovery callbacks -- MenuSubSystem subscribes to these
         #self.on_endpoint_found = lambda ep: None
         #self.on_endpoint_lost  = lambda ep: None
 
@@ -102,7 +119,7 @@ class RadioSubSystem(SubSystem):
             probe_port=self._their_port,
         )
 
-        # Bind to all interfaces — works across modes without rebind
+        # Bind to all interfaces -- works across modes without rebind
         self.dish  = self.ctx.socket(zmq.DISH)
         self.radio = self.ctx.socket(zmq.RADIO)
         for sock in (self.dish, self.radio):
@@ -153,11 +170,32 @@ class RadioSubSystem(SubSystem):
             self.connect_additional('127.0.0.1')
         elif mode == self.NetMode.WIFI:
             pass   # scanner handles wifi discovery
+        elif mode == self.NetMode.WIRED:
+            self._scanner.set_subnet(self._wired_subnet) # needed so we don't scan the wifi too
+            try:
+                from robonet.wired.util import (
+                    find_connected_ethernet_interface, set_wired_static)
+                iface = find_connected_ethernet_interface()
+                if iface is None:
+                    print('[radio] wired mode: no ethernet interface with a cable plugged in '
+                         'yet -- still restricting scanning to the wired subnet')
+                else:
+                    ip = self._wired_our_ip
+                    prefix = int(self._wired_subnet.split('/')[1])
+                    set_wired_static(iface, ip, prefix)
+                    self._wired_iface = iface
+                    self._scanner.set_subnet(self._wired_subnet, iface=iface)
+                    print(f'[radio] wired up on {iface} ({ip}), probing...')
+            except Exception as e:
+                print(f'[radio] wired setup failed: {e}')
+                if self.root is not None:
+                    self.root.menu.set_status(
+                        'Wired setup failed -- try examples/setup_eth_server.py')
         elif mode == self.NetMode.ADHOC:
             try:
                 from robonet.buffers.buffer_objects import WifiSetupInfo
                 from robonet.util import get_local_ip, get_connection_info
-                from robonet.adhoc_pair.server import lazy_pirate_send_con_info, set_hotspot
+                from robonet.adhoc.util import lazy_pirate_send_con_info, set_hotspot
                 wifi = WifiSetupInfo(
                     ssid=self._adhoc_ssid,
                     server_ip=self._adhoc_our_ip,
@@ -173,7 +211,15 @@ class RadioSubSystem(SubSystem):
 
     def _teardown_mode(self, mode: NetMode):
         """Synchronous teardown for the given mode."""
-        if mode == self.NetMode.ADHOC and self._adhoc_prev_conn is not None:
+        if mode == self.NetMode.WIRED and self._wired_iface is not None:
+            try:
+                from robonet.wired.util import teardown_wired_static
+                teardown_wired_static()
+                self._wired_iface = None
+                print('[radio] wired torn down')
+            except Exception as e:
+                print(f'[radio] wired teardown failed: {e}')
+        elif mode == self.NetMode.ADHOC and self._adhoc_prev_conn is not None:
             try:
                 from robonet.util import switch_connections
                 from robonet.buffers.buffer_objects import WifiSetupInfo
@@ -185,7 +231,11 @@ class RadioSubSystem(SubSystem):
             except Exception as e:
                 print(f'[radio] adhoc teardown failed: {e}')
 
-    async def switch_mode(self, mode:NetMode):
+    async def switch_mode(self, mode: NetMode):
+        if mode == self.NetMode.LOCALHOST and not settings["localhost_enabled"]:
+            if self.root is not None:
+                self.root.menu.set_status('Localhost mode is disabled (localhost_enabled=false)')
+            return
         if self._mode != mode:
             await self.stop_scanner_task()
             self._teardown_mode(self._mode)
@@ -323,29 +373,43 @@ class RadioSubSystem(SubSystem):
         def handler(hostname:str, obj: RobotCapabilities):
             # this is also fine to repeat
             log.info(f"topic:{hostname}, obj:{type(obj)}")
-            ep = self._endpoints.get(obj.hostname+':'+obj.endpoint_type)
-            if ep is not None:
-                ep.axes = obj.axes()
-                ep.streams = obj.streams()
-            else:
-                # we need that IP address
-                for v in self._scanner.by_ip.values():
-                    if v.hostname == obj.hostname and v.endpoint_type == obj.endpoint_type:
-                        ep = v
-                        break
-                if ep is None:
-                    log.error("Could not find endpoint with IP. Cannot communicate. Must discard.")
-                    return
+            key = obj.hostname + ':' + obj.endpoint_type
+            ep = self._endpoints.get(key)
+            if ep is None:
+                # First capabilities message for this endpoint: the
+                # scanner's own record still has endpoint_type='unknown'
+                # at this point (it doesn't know the real type until
+                # this very message), so it can only be found by
+                # hostname -- enrich_endpoint already does that lookup
+                # correctly and populates self._endpoints[key].
                 self.enrich_endpoint(hostname, obj.hostname, obj.endpoint_type)
-                #ep = self._endpoints.get(obj.hostname + ':' + obj.endpoint_type)
-                ep.axes = obj.axes()
-                ep.streams = obj.streams()
+                ep = self._endpoints.get(key)
+                if ep is None:
+                    return  # enrich_endpoint already logged why
+            ep.axes = obj.axes()
+            ep.streams = obj.streams()
+            ep.capabilities_received = True
             log.info(f"capabilities received: {ep.axes}, {ep.streams}")
-            self._endpoints[obj.hostname+':'+obj.endpoint_type] = ep  # ensure we have the axes and streams
+            self._endpoints[key] = ep  # ensure we have the axes and streams
             all_endpoints = self._endpoints | self._scanner.by_hostname | self._scanner.by_ip
             self.root.menu.set_endpoints(all_endpoints)
             self.burst(RobotCapabilitiesAck(hostname=obj.hostname, endpoint_type=obj.endpoint_type))
+            self._maybe_auto_connect(ep)
         return handler
+
+    def _maybe_auto_connect(self, ep: Endpoint):
+        """Connect to the first matching, ready endpoint automatically"""
+        if not self._auto_connect_priority or self._mode is None or self._mode.name.lower() not in self._auto_connect_priority:
+            return
+        if self.root is None or self.root.active_sub is not None:
+            return  # already connected to something
+        if not ep.capabilities_received:
+            return
+        wanted = self._auto_connect_endpoint_type
+        if wanted != 'any' and ep.endpoint_type != wanted:
+            return
+        print(f'[radio] auto-connecting to {ep.hostname or ep.ip} [{ep.endpoint_type}]')
+        self.root.menu._connect(ep)
 
     async def transmit_who_are_you(self):
         """Probe a specific endpoint that we want to connect to."""
@@ -408,9 +472,40 @@ class RadioSubSystem(SubSystem):
         if sm.active_sub:
             self._live_handlers.update(sm.active_sub.handlers)
 
+    async def _ensure_mode_active(self, mode: NetMode):
+        """Make sure we're actually in `mode`."""
+        if self._mode != mode:
+            await self.switch_mode(mode)
+        if mode != self.NetMode.LOCALHOST and not self.is_scanning:
+            await self.start_scanner_task()
+
+    async def auto_connect_sequence_loop(self):
+        """Try each mode in auto_connect_priority in turn."""
+        if not self._auto_connect_priority:
+            return
+        for mode_name in self._auto_connect_priority:
+            if self.root.active_sub is not None:
+                return
+            try:
+                mode = self.NetMode[mode_name.upper()]
+            except KeyError:
+                log.warning(f'[radio] auto_connect_priority: unknown mode {mode_name!r}, skipping')
+                continue
+            await self._ensure_mode_active(mode)
+            log.info(f'[radio] auto-connect: trying {mode_name} for up to '
+                     f'{self._auto_connect_attempt_timeout:.0f}s')
+            waited = 0.0
+            while waited < self._auto_connect_attempt_timeout:
+                if self.root.active_sub is not None:
+                    return
+                await asyncio.sleep(1.0)
+                waited += 1.0
+        log.info('[radio] auto-connect: priority list exhausted, staying in last mode')
+
     def async_loops(self, sm: 'ServerSystem'):
         self.rebuild_handlers(sm)
         return [ self.probe_loop(),
+            self.auto_connect_sequence_loop(),
             receive_objs_encrypted(
                 psk=self.psk,
                 obj_handlers=self._live_handlers,

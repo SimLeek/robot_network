@@ -1,25 +1,25 @@
 """
-robot.py — Unified interface for the MasterPi telepresence robot.
+robot.py -- Unified interface for the MasterPi telepresence robot.
 
 Single entry point for all robot I/O:
 
-  Outputs (you → robot):
-    robot.drive(MoveCommand)          — wheels
-    robot.arm_set_velocity(ArmVelocity) — arm joints (60 Hz velocity control)
-    robot.arm_set_pose(ArmPose)       — arm joints (absolute, with duration)
-    robot.arm_stop() / arm_release()  — halt / de-energize arm
-    robot.buzzer(freq, on, off, reps) — buzzer
-    robot.speak(chunk: np.ndarray)    — push float32 audio to speaker
+  Outputs (you -> robot):
+    robot.drive(MoveCommand)          -- wheels
+    robot.arm_set_velocity(ArmVelocity) -- arm joints (60 Hz velocity control)
+    robot.arm_set_pose(ArmPose)       -- arm joints (absolute, with duration)
+    robot.arm_stop() / arm_release()  -- halt / de-energize arm
+    robot.buzzer(freq, on, off, reps) -- buzzer
+    robot.speak(chunk: np.ndarray)    -- push float32 audio to speaker
 
-  Inputs (robot → you, via callbacks set before calling start()):
-    robot.on_frame    = fn(np.ndarray)  — camera RGB24 frames (H, W, 3) uint8
-    robot.on_audio    = fn(np.ndarray)  — mic chunks, float32 [-1, 1]
+  Inputs (robot -> you, via callbacks set before calling start()):
+    robot.on_frame    = fn(np.ndarray)  -- camera RGB24 frames (H, W, 3) uint8
+    robot.on_audio    = fn(np.ndarray)  -- mic chunks, float32 [-1, 1]
 
   Polled state (always up to date):
-    robot.arm_get_pose() → ArmPose
-    robot.arm_get_hw_staleness() → Dict[int, float]
-    robot.battery_v  → float | None
-    robot.battery_mv → int | None
+    robot.arm_get_pose() -> ArmPose
+    robot.arm_get_hw_staleness() -> Dict[int, float]
+    robot.battery_v  -> float | None
+    robot.battery_mv -> int | None
 
 Usage:
     robot = Robot()
@@ -189,9 +189,9 @@ class Robot:
     on_frame: Optional[Callable[[np.ndarray, int, int, str], None]] = None  # (H,W,3) uint8 RGB
     on_audio: Optional[Callable[[np.ndarray], None]] = None  # float32 [-1,1] chunk
 
-    _MIN_MOVE_DURATION = 0.04  # seconds — below this the hw interpolator misbehaves
+    _MIN_MOVE_DURATION = 0.04  # seconds -- below this the hw interpolator misbehaves
     _STOP_DURATION = 0.0  # 0 ms = "hold here immediately"
-    _DEAD_BAND = 0.002  # normalized — don't re-issue if velocity barely changed
+    _DEAD_BAND = 0.002  # normalized -- don't re-issue if velocity barely changed
 
     FRAME_TYPE = "raw"  # raw or array
 
@@ -307,7 +307,7 @@ class Robot:
             time.sleep(1.0 / (TICK_RATE * len(sids)))
 
     # -----------------------------------------------------------------------
-    # Public API — outputs
+    # Public API -- outputs
     # -----------------------------------------------------------------------
 
     def drive(self, cmd: MoveCommand):
@@ -428,7 +428,7 @@ class Robot:
         self._board.pwm_servo_set_position(0.0, [[sid, 0] for sid in ARM_SERVO_IDS])
 
     # -----------------------------------------------------------------------
-    # Public API — inputs / state
+    # Public API -- inputs / state
     # -----------------------------------------------------------------------
 
     def arm_get_pose(self) -> ArmPose:

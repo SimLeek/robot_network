@@ -31,7 +31,7 @@ class ActionInfo:
 
 class ActionFactory:
     """
-    Maps ActionBinding → callable and dispatches from multiple input
+    Maps ActionBinding -> callable and dispatches from multiple input
     modalities (keyboard, AI tokens, AI neurons).
     """
 
@@ -39,6 +39,8 @@ class ActionFactory:
         self._key_to_handlers: Dict[int, Set[Callable]] = {}
         self._mouse_move_handler: Optional[Callable[[float, float], None]] = None
         self._mouse_click_handler: Optional[Callable[[float, float, int], None]] = None
+        self._mouse_press_handler: Optional[Callable[[float, float, int], None]] = None
+        self._mouse_release_handler: Optional[Callable[[float, float, int], None]] = None
         self._mouse_scroll_handler: Optional[Callable[[int], None]] = None
         self._keyboard_handler: List[Callable[[int, int, int], None]] = []
 
@@ -61,6 +63,14 @@ class ActionFactory:
 
     def bind_mouse_click(self, handler: Callable):
         self._mouse_click_handler = handler
+        return self
+
+    def bind_mouse_press(self, handler: Callable):
+        self._mouse_press_handler = handler
+        return self
+
+    def bind_mouse_release(self, handler: Callable):
+        self._mouse_release_handler = handler
         return self
 
     def bind_mouse_scroll(self, handler:Callable):
@@ -92,6 +102,8 @@ class ActionFactory:
         self._keyboard_handler.clear()
         self._mouse_move_handler = None
         self._mouse_click_handler = None
+        self._mouse_press_handler = None
+        self._mouse_release_handler = None
         self._mouse_scroll_handler = None
         return self
 
@@ -135,6 +147,14 @@ class ActionFactory:
 
     def unbind_mouse_click(self):
         self._mouse_click_handler = None
+        return self
+
+    def unbind_mouse_press(self):
+        self._mouse_press_handler = None
+        return self
+
+    def unbind_mouse_release(self):
+        self._mouse_release_handler = None
         return self
 
     def unbind_mouse_scroll(self):
@@ -192,6 +212,14 @@ class ActionFactory:
     def on_mouse_click(self, x:float, y:float, b: int):
         if self._mouse_click_handler is not None:
             self._mouse_click_handler(x,y, b)
+
+    def on_mouse_press(self, x: float, y: float, b: int):
+        if self._mouse_press_handler is not None:
+            self._mouse_press_handler(x, y, b)
+
+    def on_mouse_release(self, x: float, y: float, b: int):
+        if self._mouse_release_handler is not None:
+            self._mouse_release_handler(x, y, b)
 
     def on_mouse_scroll(self, y_offset:int):
         if self._mouse_scroll_handler is not None:

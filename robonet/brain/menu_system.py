@@ -9,9 +9,11 @@ import cv2
 import numpy as np
 
 from robonet.brain.robot_system import RobotSubSystem
+from robonet.brain.desktop_system import DesktopSubSystem
 from robonet.brain.util.action_factory import ActionFactory
 from robonet.brain.util.selection_menu import SelectionMenu, MenuVisState
 from robonet.brain.util.system_base import SubSystem
+from robonet.brain.util.viewport import Viewport
 from robonet.buffers.buffer_objects import MJpegCamFrame, RobotStart
 import robonet.brain.settings as settings_
 from robonet.gst_io.devices import get_first_mic_device, DeviceNotFoundError
@@ -21,6 +23,10 @@ from robonet.logging_setup import setup_logging
 
 log = setup_logging()
 settings = settings_.get()
+
+# 'unknown' deliberately not registered -- falls back to RobotSubSystem in _connect()
+SubSystem.register('robot', RobotSubSystem)
+SubSystem.register('desktop', DesktopSubSystem)
 
 import typing
 if typing.TYPE_CHECKING:
@@ -35,10 +41,15 @@ class MenuSubSystem(SubSystem):
 
     Toggle with Ctrl+backtick (human) or token/neuron 800/300 (AI).
     """
-    SHUTDOWN_TIMEOUT = 30.0
+    NO_ENDPOINTS_TIMEOUT = 30.0   # fallback defaults if settings is somehow unavailable
+    IDLE_TIMEOUT = 600.0
 
     def __init__(self, out_res: Tuple[int, int] = None, fps:float=None):
-        self.does_timeout = False  # set to true for AI runs
+        # settings-driven defaults; still fine to set explicitly afterwards,
+        # e.g. for AI runs, same as before.
+        self.does_timeout = settings['auto_shutdown_enabled']
+        self.no_endpoints_timeout = settings['auto_shutdown_no_endpoints_timeout'] or self.NO_ENDPOINTS_TIMEOUT
+        self.idle_timeout = settings['auto_shutdown_idle_timeout'] or self.IDLE_TIMEOUT
         if out_res is None:
             out_res = settings["ai_res"]
         if fps is None:
@@ -53,6 +64,14 @@ class MenuSubSystem(SubSystem):
         self.screen_lock = threading.Lock()
         self.last_img = np.zeros((self.out_res[1], self.out_res[0], 3), dtype=np.uint8)
         self.last_audio = None
+        self._logged_first_img = False
+        self._logged_first_audio = False
+        # Aspect-preserving scale for non-desktop endpoints (e.g. a
+        # robot) -- always baseline zoom, no interactive zoom/pan.
+        # Desktop endpoints use DesktopSubSystem's own viewport instead,
+        # since zoom/pan is desktop-specific (large/multiple monitors);
+        # robots have a movable camera rather than a fixed viewport.
+        self._fallback_viewport = Viewport()
         self.handlers = None
 
         # todo: move this all somewhere other than menu
@@ -77,12 +96,30 @@ class MenuSubSystem(SubSystem):
     def set_endpoints(self, eps):
         self._menu.set_endpoints(eps)
 
+    @property
+    def gst_sender(self):
+        """The active GstSender"""
+        return self._gst_sender
+
+    @property
+    def gst_receiver(self):
+        """The active GstReceiver"""
+        return self._gst_receiver
+
     def setup(self, root: 'ServerSystem'):
         self.root = root
         self._menu.root = root
-        #root.radio.on_endpoint_found = self._on_endpoint_found
-        #root.radio.on_endpoint_lost = self._on_endpoint_lost
-        self.handlers = self._gst_receiver.handlers | self._gst_sender.handlers
+        self.handlers = (self._gst_receiver.handlers | self._gst_sender.handlers | {
+            'AVSourcesAnnounce': self._on_av_sources,
+            'AVSourceError': self._on_av_source_error,
+        })
+
+    def _on_av_sources(self, hostname: str, obj):
+        self._menu.set_av_sources(obj)
+
+    def _on_av_source_error(self, hostname: str, obj):
+        self._menu.set_status(
+            f'{obj.kind} source error: {obj.message} (using {obj.reverted_to or "none"})')
 
     def start(self):
         self._start_time = time.time()
@@ -107,6 +144,10 @@ class MenuSubSystem(SubSystem):
         if key == ord('`') and action == keys.ACTION_PRESS and modifiers.ctrl:
             self.toggle()
             return
+        # Note: Ctrl+Shift+0/1/2 (mode switching) is handled entirely
+        # inside displayarray's PassthruMglWindowConfig.on_key_event --
+        # it never reaches here at all, so there's nothing to do for it
+        # in this method.
         # When menu is visible, route navigation keys to it; don't forward to remote
         if self.visible and action == keys.ACTION_PRESS:
             # displayarray can have varying backends. This isolates breaking changes.
@@ -149,7 +190,7 @@ class MenuSubSystem(SubSystem):
         sm.radio.connect_to(ep.ip)
 
         self._connected = True
-        self._menu.set_status(f'Connecting → {ep.hostname or ep.ip} [{ep.endpoint_type}]')
+        self._menu.set_status(f'Connecting -> {ep.hostname or ep.ip} [{ep.endpoint_type}]')
         self._menu.toggle()
 
         # Stop previous sub if any
@@ -167,13 +208,21 @@ class MenuSubSystem(SubSystem):
         self._gst_sender.start()
         self._gst_receiver.start()
 
-        new_sub = RobotSubSystem(endpoint=ep)
+        try:
+            sub_cls = SubSystem.for_endpoint_type(ep.endpoint_type)
+        except KeyError:
+            sub_cls = RobotSubSystem  # unknown endpoint_type
+        new_sub = sub_cls(endpoint=ep)
         sm.swap_subsystem(new_sub)
+        self._menu.clear_av_sources()
 
         if getattr(ep, 'axes', None) or getattr(ep, 'streams', None):
-            self._menu.set_robot_capabilities(
+            self._menu.set_endpoint_capabilities(
                 {'axes': ep.axes, 'streams': ep.streams})
         self._menu.set_status(f'Connected to {ep.hostname or ep.ip} [{ep.endpoint_type}]')
+
+    def set_status(self, msg: str):
+        self._menu.set_status(msg)
 
     def register_thru_token_controls(self, af: ActionFactory):
         af.bind_ai_token(self.toggle, 800)
@@ -182,24 +231,47 @@ class MenuSubSystem(SubSystem):
         af.bind_ai_neuron(lambda v: self.toggle(), 300, 0.5)
 
     async def timeout_loop(self):
+        """While does_timeout is on: shut down fast (no_endpoints_timeout,
+         default 30s) if no endpoint has ever been seen.
+        Once anything has been seen, switch to the much longer
+         idle_timeout (default 10min) for the rest of the run if we later
+         go idle: an AI or human could still be working through the menu."""
+        ever_seen_anything = False
+        last_active = time.time()   # 'active' = connected, or an endpoint currently visible
         while self.does_timeout:
             await asyncio.sleep(1.0)
-            if self._connected:
+            have_endpoints = bool(self._menu.get_unique_endpoints())
+            if self._connected or have_endpoints:
+                last_active = time.time()
+                ever_seen_anything = True
+                if not self._connected:
+                    self._menu.set_status('Endpoint found - press Enter to connect')
+                continue
+            idle = time.time() - last_active
+            timeout = self.idle_timeout if ever_seen_anything else self.no_endpoints_timeout
+            remaining = int(timeout - idle)
+            if remaining <= 0:
+                self.root.shutdown(reason=f'no endpoints available for {timeout:.0f}s')
                 return
-            elapsed   = time.time() - self._start_time
-            remaining = int(self.SHUTDOWN_TIMEOUT - elapsed)
-            if not self._endpoints:
-                if remaining <= 0:
-                    raise RuntimeError('no endpoints found within timeout')
-                self._menu.set_status(f'Scanning… shutdown in {remaining}s')
-            else:
-                self._menu.set_status('Endpoint found — press Enter to connect')
+            self._menu.set_status(f'No endpoints - shutdown in {remaining}s')
 
     async def send_frames_always(self):
         while self.is_running:
             t0 = time.time()
-            #with self.screen_lock:
-            img = self._menu.composite(self.last_img)
+            img = self.last_img
+            if img is not None:
+                source_h, source_w = img.shape[:2]
+                display_w, display_h = self.out_res
+                active = self.root.active_sub
+                if isinstance(active, DesktopSubSystem):
+                    if self.root.displayer is not None:
+                        cfg = self.root.displayer.displayer.displayer.config
+                        if cfg.input_mode == 2:
+                            active.check_edge_pan(source_w, source_h, display_w, display_h, 1.0 / self.fps)
+                    img = active.viewport.apply(img, display_w, display_h)
+                else:
+                    img = self._fallback_viewport.apply(img, display_w, display_h)
+            img = self._menu.composite(img)
             if self.root.displayer is not None:
                 self.root.displayer.update_frame(img)
                 if self.last_audio is not None:
@@ -215,20 +287,22 @@ class MenuSubSystem(SubSystem):
 
     def on_img(self, img:np.ndarray):
         #This is put in the menu since neither AI nor humans should be menu-less
-        log.info(f"gst img received")
+        if not self._logged_first_img:
+            log.info("gst img received (first frame -- further frames logged at DEBUG only)")
+            self._logged_first_img = True
+        else:
+            log.debug("gst img received")
         with self.screen_lock:
-            #if obj.format == 'MJPG':
-            #    img = cv2.imdecode(np.frombuffer(obj.mjpeg, np.uint8), cv2.IMREAD_COLOR)
-            #else:
-            #    img = np.frombuffer(obj.mjpeg, dtype=np.uint8).reshape((obj.h, obj.w, 3))
-            #if obj.w>settings['ai_res'][0] or obj.h>settings['ai_res'][1]:
-            #    img = cv2.resize(image, settings['ai_res'], interpolation=cv2.INTER_NEAREST)
             if img is None:
                 log.error("Received None image.")
             else:
                 self.last_img = img
 
     def on_audio(self, aud:np.ndarray):
-        log.info(f"gst aud received")
+        if not self._logged_first_audio:
+            log.info("gst audio received (first chunk -- further chunks logged at DEBUG only)")
+            self._logged_first_audio = True
+        else:
+            log.debug("gst audio received")
         self.last_audio = aud
 

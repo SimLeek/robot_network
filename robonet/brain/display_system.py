@@ -21,6 +21,15 @@ import typing
 if typing.TYPE_CHECKING:
     from robonet.brain.main_system import ServerSystem
 
+def reshape_to_square_matrix(arr):
+    n = arr.size
+    for i in range(int(np.sqrt(n)), 0, -1):
+        if n % i == 0:
+            rows = i
+            cols = n // i
+            break
+    
+    return arr.reshape(rows, cols)
 
 class DisplaySubSystem(SubSystem):
 
@@ -72,7 +81,7 @@ class DisplaySubSystem(SubSystem):
         try:
             chunk = self._audio_queue.get_nowait()
         except queue.Empty:
-            # No data ready — output silence rather than blocking the audio thread
+            # No data ready -- output silence rather than blocking the audio thread
             outdata[:] = 0
             return
         # chunk may be shorter or longer than frames; fit it safely
@@ -100,10 +109,16 @@ class DisplaySubSystem(SubSystem):
 
     async def run_once(self, sm: 'ServerSystem'):
         t1 = time.time()
-        img = self.in_img
-        self.displayer.update(img, 'screen')
+        self.displayer.update(self.in_img, 'screen')
         aud = self.in_aud
         if aud is not None:
+            # displayarray multiplies float input by 255 assuming it's
+            # already 0..1 -- raw PCM samples are roughly -1..1, so the
+            # negative half of every waveform was wrapping around via
+            # uint8 underflow instead of displaying. Remap -1..1 -> 0..1.
+            aud = (aud / 2.0) + 0.5
+            if len(aud.shape)==1:
+                aud = reshape_to_square_matrix(aud)
             self.displayer.update(aud, 'audio')
         elapsed = time.time() - t1
         await asyncio.sleep(max(0.0, self.frame_time - elapsed))
@@ -121,4 +136,4 @@ class DisplaySubSystem(SubSystem):
         try:
             self._audio_queue.put_nowait(aud)
         except queue.Full:
-            log.debug('[display] audio queue full — dropping chunk')
+            log.debug('[display] audio queue full -- dropping chunk')

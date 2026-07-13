@@ -15,7 +15,7 @@ _DEFAULT_SETTINGS: dict[str, Any] = {
 _DEFAULT_ADVANCED_SETTINGS: dict[str, Any] = {
     "ai_res": [640, 480],
     "ai_fps": 30,
-    "localhost_enabled": False,
+    "localhost_enabled": True,
     "our_port": 9999,
     "their_port": 9998,
     "adhoc_our_ip": "192.168.2.1",
@@ -24,7 +24,21 @@ _DEFAULT_ADVANCED_SETTINGS: dict[str, Any] = {
     "adhoc_ssid"  : "robot_server",
     "adhoc_subnet": "192.168.2.0/24",
     "psk_file" : Path.home() / ".robobrain" / "psk.key",
-    "server_psk_file" : Path.home() / ".robobrain" / "server_psk.key"
+    "server_psk_file" : Path.home() / ".robobrain" / "server_psk.key",
+    "wired_our_ip": "169.254.90.1",
+    "wired_subnet": "169.254.90.0/24",
+
+    # Auto-connect on start. Tries each mode in list order
+    "auto_connect_priority": ["localhost", "wired"],
+    # endpoint_type filter for the above: "any" | "robot" | "desktop".
+    "auto_connect_endpoint_type": "any",
+    "auto_connect_attempt_timeout": 20.0,
+
+    # Auto-shutdown when no endpoints are available.
+    # Off by default for interactive human use
+    "auto_shutdown_enabled": False,
+    "auto_shutdown_no_endpoints_timeout": 30.0,
+    "auto_shutdown_idle_timeout": 600.0,
 }
 
 _ALL_SETTINGS = _DEFAULT_SETTINGS | _DEFAULT_ADVANCED_SETTINGS
@@ -39,7 +53,7 @@ class Settings:
 
     def _load(self):
         if not self._path.exists():
-            log.info("Settings file not found at %s — using defaults", self._path)
+            log.info("Settings file not found at %s -- using defaults", self._path)
             return
         try:
             with open(self._path, encoding="utf-8") as fh:
@@ -47,7 +61,7 @@ class Settings:
             self._data.update(on_disk)
             log.debug("Settings loaded from %s", self._path)
         except (json.JSONDecodeError, OSError) as exc:
-            log.warning("Could not load settings (%s) — using defaults", exc)
+            log.warning("Could not load settings (%s) -- using defaults", exc)
 
     def save(self):
         """Persist current settings to disk (all keys, including file-only ones)."""

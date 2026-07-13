@@ -2,7 +2,7 @@ import os
 import glob
 import fcntl
 import struct
-from typing import List
+from typing import List, Optional
 
 
 class DeviceNotFoundError(Exception):
@@ -10,7 +10,7 @@ class DeviceNotFoundError(Exception):
     pass
 
 
-def find_camera_devices() -> List[str]:
+def find_camera_devices(exclude_devices:Optional[List[str]]=None) -> List[str]:
     """
     Finds available V4L2 video devices that actually support video capture
     and are not currently locked by another process.
@@ -23,6 +23,8 @@ def find_camera_devices() -> List[str]:
     V4L2_CAP_VIDEO_CAPTURE_MPLANE = 0x00001000
 
     for dev in sorted(glob.glob('/dev/video*'), key=lambda x: int(x.replace('/dev/video', ''))):
+        if exclude_devices is not None and dev in exclude_devices:
+            continue
         try:
             # Attempt to open non-blocking. If another app has it locked, this fails.
             fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK)

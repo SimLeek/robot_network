@@ -8,7 +8,7 @@ if 'BUILT_FROM_SH' not in os.environ or not os.environ['BUILT_FROM_SH']:
 setup(
     name='robotnet',  # Change to your project name
     version='0.1',
-    packages=find_packages(),
+    packages=find_packages(exclude=['todo', 'todo.*']),
     install_requires=[
         'numpy',
         'opencv-python',
@@ -16,7 +16,9 @@ setup(
         'PyGObject',
         "python-statemachine",
         'PyV4L2Cam @ git+https://github.com/simleek/PyV4L2Cam.git',
-        # pyzmq... but dn't install from here
+        'pyautogui',
+        'sounddevice',
+        # pyzmq... but don't install from here
     ],
     entry_points={
         'console_scripts': [

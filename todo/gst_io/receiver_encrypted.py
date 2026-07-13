@@ -1,8 +1,8 @@
 """
-robonet/gst_receiver.py — shared GStreamer receiver (server and robot).
+robonet/gst_receiver.py -- shared GStreamer receiver (server and robot).
 
-Server: decoded video frames → set_last_img callback, audio → appsink.
-Robot:  video → skipped (no screen yet), audio → alsasink (direct playback).
+Server: decoded video frames -> set_last_img callback, audio -> appsink.
+Robot:  video -> skipped (no screen yet), audio -> alsasink (direct playback).
 """
 
 from __future__ import annotations
@@ -110,12 +110,12 @@ class _VideoRecvPipeline:
 
     Pipeline graph::
 
-        udpsrc → capsfilter(srtp) → srtpdec → <rtpdepay>
-            → [h264parse/h265parse] → <decoder>
-            → videoconvert → capsfilter(BGR) → appsink
+        udpsrc -> capsfilter(srtp) -> srtpdec -> <rtpdepay>
+            -> [h264parse/h265parse] -> <decoder>
+            -> videoconvert -> capsfilter(BGR) -> appsink
 
     srtpdec requires the cipher/key caps upfront because SRTP encrypts the
-    payload — there is nothing in the packet header to indicate the algorithm.
+    payload -- there is nothing in the packet header to indicate the algorithm.
     appsink emits 'new-sample' on the GLib thread; we pull BGR frames there
     and forward them to the screen callback.
 
@@ -159,7 +159,7 @@ class _VideoRecvPipeline:
         sink    = Gst.ElementFactory.make('appsink',      'vsink')
 
         if None in (src, capsflt, srtpdec, depay, dec, conv, outcaps, sink):
-            log.error('[gst-recv] could not instantiate all video recv elements — '
+            log.error('[gst-recv] could not instantiate all video recv elements -- '
                       'check gst-plugins-bad and gst-plugin-srtp are installed')
             return False
 
@@ -177,9 +177,9 @@ class _VideoRecvPipeline:
                 return
             result = src_pad.link(sink_pad)
             if result == Gst.PadLinkReturn.OK:
-                log.info(f'[gst-recv] video srtpdec → depay linked (pad={src_pad.get_name()})')
+                log.info(f'[gst-recv] video srtpdec -> depay linked (pad={src_pad.get_name()})')
             else:
-                log.error(f'[gst-recv] video srtpdec → depay link failed: {result} (pad={src_pad.get_name()})')
+                log.error(f'[gst-recv] video srtpdec -> depay link failed: {result} (pad={src_pad.get_name()})')
 
         def _on_video_request_key(element, ssrc):
             log.info(f'[gst-recv] Supplying video SRTP key for SSRC {ssrc}')
@@ -280,7 +280,7 @@ class _VideoRecvPipeline:
         def _packet_probe(pad, info):
             if not self._received_packet:
                 self._received_packet = True
-                log.info(f'[gst-recv] FIRST SRTP packet received → data is flowing to {self._dec_name} pipeline')
+                log.info(f'[gst-recv] FIRST SRTP packet received -> data is flowing to {self._dec_name} pipeline')
             return Gst.PadProbeReturn.OK
         capsflt.get_static_pad('src').add_probe(
             Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST,
@@ -315,13 +315,13 @@ class _VideoRecvPipeline:
                                      Gst.MessageType.ERROR | Gst.MessageType.WARNING)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst-recv] {self._dec_name}: probe (PAUSED) error: {err} — {dbg}')
+            log.warning(f'[gst-recv] {self._dec_name}: probe (PAUSED) error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, dbg = msg.parse_warning()
             log.info(f'[gst-recv] {self._dec_name}: probe (PAUSED) warning (non-fatal): {warn}')
 
-        # 2. Short PLAYING test — this is what catches "Failed to process frame"
+        # 2. Short PLAYING test -- this is what catches "Failed to process frame"
         #    style errors that only happen once data actually flows.
         log.debug(f'[gst-recv] {self._dec_name}: starting 1 s PLAYING probe test')
         ret = self._pipeline.set_state(Gst.State.PLAYING)
@@ -338,7 +338,7 @@ class _VideoRecvPipeline:
 
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst-recv] {self._dec_name}: probe test (PLAYING) error: {err} — {dbg}')
+            log.warning(f'[gst-recv] {self._dec_name}: probe test (PLAYING) error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, dbg = msg.parse_warning()
@@ -404,9 +404,9 @@ class _AudioRecvPipeline:
 
     Pipeline graph::
 
-        udpsrc → capsfilter(srtp) → srtpdec → <rtpdepay> → <decoder>
-            → audioconvert → capsfilter(raw) → alsasink   (direct_audio=True)
-                                             → appsink    (direct_audio=False)
+        udpsrc -> capsfilter(srtp) -> srtpdec -> <rtpdepay> -> <decoder>
+            -> audioconvert -> capsfilter(raw) -> alsasink   (direct_audio=True)
+                                             -> appsink    (direct_audio=False)
 
     direct_audio=True routes decoded audio straight to an ALSA device for
     immediate playback (robot speaker). direct_audio=False feeds an appsink
@@ -414,7 +414,7 @@ class _AudioRecvPipeline:
 
     Example::
 
-        # Robot — play incoming audio on hardware speaker:
+        # Robot -- play incoming audio on hardware speaker:
         >>> info = GstStreamInfo(video_codec="h264", video_port=5600, width=640, height=480, hostname="hi",audio_codec="opus",audio_port=5601,fps=60,sample_rate=48000)
         >>> pipe = _AudioRecvPipeline(info, srtp_key=b"123456789012345678901234567890",
         ...                           direct_audio=True, audio_device='default')
@@ -422,7 +422,7 @@ class _AudioRecvPipeline:
         ...     pass
         ...     #pipe.play()
 
-        # Server — capture for processing:
+        # Server -- capture for processing:
         >>> pipe = _AudioRecvPipeline(info, srtp_key=b"123456789012345678901234567890",
         ...                           direct_audio=False, audio_device='default')
         >>> if pipe.build():
@@ -472,7 +472,7 @@ class _AudioRecvPipeline:
                     sink.connect('new-sample', self._pull_chunk)
 
         if None in (src, capsflt, srtpdec, depay, dec, conv, outcaps, sink):
-            log.error('[gst-recv] could not instantiate all audio recv elements — '
+            log.error('[gst-recv] could not instantiate all audio recv elements -- '
                       'check gst-plugins-bad and gst-plugin-srtp are installed')
             return False
 
@@ -489,9 +489,9 @@ class _AudioRecvPipeline:
                 return
             result = src_pad.link(sink_pad)
             if result == Gst.PadLinkReturn.OK:
-                log.info(f'[gst-recv] audio srtpdec → depay linked (pad={src_pad.get_name()})')
+                log.info(f'[gst-recv] audio srtpdec -> depay linked (pad={src_pad.get_name()})')
             else:
-                log.error(f'[gst-recv] audio srtpdec → depay link failed: {result} (pad={src_pad.get_name()})')
+                log.error(f'[gst-recv] audio srtpdec -> depay link failed: {result} (pad={src_pad.get_name()})')
 
         def _on_audio_request_key(element, ssrc):
             log.info(f'[gst-recv] Supplying audio SRTP key for SSRC {ssrc}')
@@ -569,7 +569,7 @@ class _AudioRecvPipeline:
         def _packet_probe(pad, info):
             if not self._received_packet:
                 self._received_packet = True
-                log.info(f'[gst-recv] FIRST SRTP packet received → data is flowing to {self._dec_name} pipeline (audio)')
+                log.info(f'[gst-recv] FIRST SRTP packet received -> data is flowing to {self._dec_name} pipeline (audio)')
             return Gst.PadProbeReturn.OK
         capsflt.get_static_pad('src').add_probe(
             Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST,
@@ -602,7 +602,7 @@ class _AudioRecvPipeline:
                                      Gst.MessageType.ERROR | Gst.MessageType.WARNING)
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst-recv] {self._dec_name}: audio probe (PAUSED) error: {err} — {dbg}')
+            log.warning(f'[gst-recv] {self._dec_name}: audio probe (PAUSED) error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, dbg = msg.parse_warning()
@@ -624,7 +624,7 @@ class _AudioRecvPipeline:
 
         if msg and msg.type == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            log.warning(f'[gst-recv] {self._dec_name}: audio probe test (PLAYING) error: {err} — {dbg}')
+            log.warning(f'[gst-recv] {self._dec_name}: audio probe test (PLAYING) error: {err} -- {dbg}')
             return False
         if msg and msg.type == Gst.MessageType.WARNING:
             warn, dbg = msg.parse_warning()
@@ -658,7 +658,7 @@ class _AudioRecvPipeline:
             log.warning('[gst-recv] audio buffer map failed')
             return Gst.FlowReturn.ERROR
         try:
-            # F32LE from audioconvert — one channel, sample_rate samples/sec
+            # F32LE from audioconvert -- one channel, sample_rate samples/sec
             chunk = np.frombuffer(mapinfo.data, dtype=np.float32).copy()
             self._on_audio(chunk)
         except Exception as e:
@@ -764,7 +764,7 @@ class GstReceiver:
 
         if same and (self._vpipe or self._apipe):
             log.debug(f'[gst-recv] re-announce from {obj.hostname!r}, '
-                      f'config unchanged — re-acking without restart')
+                      f'config unchanged -- re-acking without restart')
             self._ack(obj)
             return
 
@@ -792,11 +792,11 @@ class GstReceiver:
                 pipe.play()
                 break
             else:
-                log.error('[gst-recv] all video decoders failed probe — no video will be displayed')
+                log.error('[gst-recv] all video decoders failed probe -- no video will be displayed')
         elif not obj.video_codec:
-            log.info('[gst-recv] no video codec in stream info — skipping video pipeline')
+            log.info('[gst-recv] no video codec in stream info -- skipping video pipeline')
         else:
-            log.info('[gst-recv] set_last_img is None — skipping video pipeline (no screen)')
+            log.info('[gst-recv] set_last_img is None -- skipping video pipeline (no screen)')
 
         if obj.audio_codec:
             candidates = _audio_decoder_candidates(obj.audio_codec)
@@ -822,9 +822,9 @@ class GstReceiver:
                 pipe.play()
                 break
             else:
-                log.error('[gst-recv] all audio decoders failed probe — no audio will be played')
+                log.error('[gst-recv] all audio decoders failed probe -- no audio will be played')
         else:
-            log.info('[gst-recv] no audio codec in stream info — skipping audio pipeline')
+            log.info('[gst-recv] no audio codec in stream info -- skipping audio pipeline')
 
         self._ack(obj)
 

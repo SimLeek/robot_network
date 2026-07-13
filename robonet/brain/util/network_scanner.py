@@ -19,6 +19,7 @@ class Endpoint:
     reachable: bool        = False
     axes: List              = field(default_factory=list)
     streams: List           = field(default_factory=list)
+    capabilities_received: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +222,7 @@ class NetworkScanner:
             return ''
 
     async def _probe_port(self, ip: str) -> bool:
-        """TCP knock on probe_port — cheap reachability check."""
+        """TCP knock on probe_port -- cheap reachability check."""
         try:
             _, w = await asyncio.wait_for(
                 asyncio.open_connection(ip, self.probe_port), timeout=0.5)

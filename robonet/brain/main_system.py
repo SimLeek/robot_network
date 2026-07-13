@@ -34,7 +34,9 @@ class ServerSystem:
         self.displayer = displayer
         self.ai = ai
         self.active_sub = None
-        self.actions = ActionFactory()
+
+        self._shutdown_callbacks: list = []
+        self._shutting_down = False
 
         self.radio.setup(self)
         self.menu.setup(self)
@@ -43,6 +45,27 @@ class ServerSystem:
             self.displayer.setup(self)
         if ai is not None:
             self.ai.setup(self)
+
+    def register_shutdown_callback(self, cb):
+        """Register a zero-arg callable to run once upon shut down.
+         Use this to save AI weights, trigger maintenance, etc., before the process exits.
+         A failing callback is logged and does not block the rest from running."""
+        self._shutdown_callbacks.append(cb)
+
+    def shutdown(self, reason: str = ''):
+        """Run every registered shutdown callback, stop the active subsystem, and unwind the process."""
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        log.info(f"[ServerSystem] shutting down: {reason or 'no reason given'}")
+        for cb in self._shutdown_callbacks:
+            try:
+                cb()
+            except Exception:
+                log.exception('[ServerSystem] a shutdown callback failed')
+        self.stop()
+        # Hard-stop the process by unwinding main()'s asyncio.gather() since we don't have a soft exit set up yet
+        raise SystemExit(0)
 
     def start(self):
         self.loop = asyncio.get_running_loop()
@@ -76,7 +99,7 @@ class ServerSystem:
         new_sub.start()
 
         new_sub._tasks = [asyncio.ensure_future(c) for c in new_sub.async_loops(self)]
-        print(f"[ServerSystem] active SubSystem → {type(new_sub).__name__}")
+        print(f"[ServerSystem] active SubSystem -> {type(new_sub).__name__}")
 
     def register_default_human_controls(self, af: ActionFactory):
         self.menu.register_default_human_controls(af)

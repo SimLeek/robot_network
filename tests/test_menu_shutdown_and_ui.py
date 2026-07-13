@@ -1,0 +1,467 @@
+"""
+tests/test_menu_shutdown_and_ui.py
+
+Tests:
+  - MenuSubSystem.timeout_loop's two-tier shutdown logic (fast if nothing
+    was ever seen, slow grace period once something has been seen/
+    connected and then goes idle). Uses a lightweight fake carrying just
+    the attributes timeout_loop touches, since the real MenuSubSystem
+    constructor opens real psk key files and builds a real GstSender/
+    GstReceiver pair that this logic doesn't need.
+  - SelectionMenu's camera/desktop-capture switch item and the Wired mode
+    item's index-offset arithmetic, against real SelectionMenu instances
+    (that constructor is cheap -- no psk files, no network).
+"""
+
+import asyncio
+import os
+import shutil
+import tempfile
+import unittest
+from enum import Enum
+from unittest.mock import MagicMock, patch, AsyncMock
+
+import numpy as np
+
+from robonet.brain.menu_system import MenuSubSystem
+from robonet.brain.util.selection_menu import SelectionMenu, MenuVisState
+from robonet.buffers.buffer_objects import AVSourcesAnnounce, SelectAVSource
+
+
+class _FakeMenuUI:
+    """Stands in for SelectionMenu, just the bits timeout_loop touches."""
+    def __init__(self, endpoints=None):
+        self._endpoints = endpoints or []
+        self.status_history = []
+
+    def get_unique_endpoints(self):
+        return self._endpoints
+
+    def set_status(self, msg):
+        self.status_history.append(msg)
+
+
+class _FakeMenuSubSystem:
+    """Minimal MenuSubSystem stand-in for timeout_loop."""
+    def __init__(self, no_endpoints_timeout=30.0, idle_timeout=600.0):
+        self.does_timeout = True
+        self.no_endpoints_timeout = no_endpoints_timeout
+        self.idle_timeout = idle_timeout
+        self._connected = False
+        self._menu = _FakeMenuUI()
+        self.root = MagicMock()
+
+    timeout_loop = MenuSubSystem.timeout_loop
+
+
+class TestTimeoutLoopTwoTier(unittest.IsolatedAsyncioTestCase):
+
+    async def _run_until_shutdown_or_iterations(self, menu, max_iterations=50):
+        """Drive the loop's internal 1s ticks without real wall-clock
+        delay, stopping once shutdown() has been called (does_timeout
+        flips False, matching what a real shutdown() would eventually
+        cause via process exit) or after max_iterations as a safety cap."""
+        call_count = 0
+
+        async def fake_sleep(_secs):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= max_iterations:
+                menu.does_timeout = False  # force the while loop to end
+
+        def fake_shutdown(reason=''):
+            menu.root.shutdown_reason = reason
+            menu.does_timeout = False  # stop the loop, matching real SystemExit unwinding it
+
+        menu.root.shutdown = MagicMock(side_effect=fake_shutdown)
+        with patch('robonet.brain.menu_system.time.time', side_effect=self._clock), \
+             patch('robonet.brain.menu_system.asyncio.sleep', new=fake_sleep):
+            await menu.timeout_loop()
+        return call_count
+
+    def setUp(self):
+        self._now = 1_000_000.0  # arbitrary epoch-ish start
+
+    def _clock(self):
+        # Each call to time.time() advances the fake clock by 1s, matching
+        # one real asyncio.sleep(1.0) per loop iteration.
+        self._now += 1.0
+        return self._now
+
+    async def test_shuts_down_fast_when_nothing_ever_seen(self):
+        menu = _FakeMenuSubSystem(no_endpoints_timeout=5.0, idle_timeout=600.0)
+        await self._run_until_shutdown_or_iterations(menu)
+
+        menu.root.shutdown.assert_called_once()
+        self.assertIn('5s', menu.root.shutdown_reason)
+
+    async def test_does_not_shut_down_while_endpoints_visible(self):
+        menu = _FakeMenuSubSystem(no_endpoints_timeout=3.0, idle_timeout=600.0)
+        menu._menu._endpoints = [MagicMock()]  # something is visible the whole time
+
+        await self._run_until_shutdown_or_iterations(menu, max_iterations=10)
+
+        menu.root.shutdown.assert_not_called()
+
+    async def test_does_not_shut_down_while_connected(self):
+        menu = _FakeMenuSubSystem(no_endpoints_timeout=3.0, idle_timeout=600.0)
+        menu._connected = True
+
+        await self._run_until_shutdown_or_iterations(menu, max_iterations=10)
+
+        menu.root.shutdown.assert_not_called()
+
+    async def test_uses_slow_timeout_once_something_was_seen_then_disappears(self):
+        menu = _FakeMenuSubSystem(no_endpoints_timeout=2.0, idle_timeout=6.0)
+        ep = MagicMock()
+        menu._menu._endpoints = [ep]
+
+        # Custom driver: endpoint visible for the first 2 ticks, then gone.
+        call_count = 0
+        async def fake_sleep(_secs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                menu._menu._endpoints = []  # endpoint disappears
+            if call_count >= 20:
+                menu.does_timeout = False
+
+        def fake_shutdown(reason=''):
+            menu.root.shutdown_reason = reason
+            menu.does_timeout = False
+
+        menu.root.shutdown = MagicMock(side_effect=fake_shutdown)
+        with patch('robonet.brain.menu_system.time.time', side_effect=self._clock), \
+             patch('robonet.brain.menu_system.asyncio.sleep', new=fake_sleep):
+            await menu.timeout_loop()
+
+        menu.root.shutdown.assert_called_once()
+        # Used idle_timeout (6s), not no_endpoints_timeout (2s) -- something
+        # had been seen before it went away.
+        self.assertIn('6s', menu.root.shutdown_reason)
+
+    async def test_does_not_run_at_all_when_does_timeout_is_false(self):
+        menu = _FakeMenuSubSystem()
+        menu.does_timeout = False
+
+        await self._run_until_shutdown_or_iterations(menu)
+
+        menu.root.shutdown.assert_not_called()
+
+
+class TestSelectionMenuAvSources(unittest.TestCase):
+    """The generic AV-sources menu that replaced the desktop-specific
+    camera/desktop binary toggle -- applies to any endpoint type that
+    reports AVSourcesAnnounce, not just desktop ones."""
+
+    def _make_announce(self, video_ids=('desktop', 'webcam:/dev/video0'),
+                       active_video='desktop'):
+        return AVSourcesAnnounce(
+            video_ids=list(video_ids), audio_in_ids=['mic'], audio_out_ids=['spk'],
+            active_video_id=active_video, active_audio_in_id='mic', active_audio_out_id='spk')
+
+    def test_set_av_sources_shows_menu_item(self):
+        menu = SelectionMenu(width=320, height=240)
+        menu.set_av_sources(self._make_announce())
+
+        items = menu._main_items()
+
+        self.assertIn('AV Sources', items)
+
+    def test_no_announce_hides_menu_item(self):
+        menu = SelectionMenu(width=320, height=240)
+
+        items = menu._main_items()
+
+        self.assertNotIn('AV Sources', items)
+
+    def test_clear_av_sources_hides_menu_item_again(self):
+        menu = SelectionMenu(width=320, height=240)
+        menu.set_av_sources(self._make_announce())
+
+        menu.clear_av_sources()
+
+        self.assertNotIn('AV Sources', menu._main_items())
+
+    def test_av_source_items_marks_active_source(self):
+        menu = SelectionMenu(width=320, height=240)
+        menu.set_av_sources(self._make_announce(active_video='webcam:/dev/video0'))
+
+        items = menu._av_source_items()
+
+        self.assertTrue(any(item.startswith('[*]') and 'webcam' in item for item in items))
+        self.assertTrue(any(item.startswith('[ ]') and item.endswith('desktop') for item in items))
+
+    def test_enter_on_source_sends_select_av_source_burst(self):
+        menu = SelectionMenu(width=320, height=240)
+        menu.root = MagicMock()
+        menu.set_av_sources(self._make_announce())
+        menu.menu_state.send('av_sources')
+        menu._cursor = 1  # 'webcam:/dev/video0', the second video id
+
+        menu._handle_av_sources_key('enter')
+
+        menu.root.radio.burst.assert_called_once()
+        sent = menu.root.radio.burst.call_args[0][0]
+        self.assertIsInstance(sent, SelectAVSource)
+        self.assertEqual(sent.kind, 'video')
+        self.assertEqual(sent.source_id, 'webcam:/dev/video0')
+
+    def test_left_right_switches_kind_and_resets_cursor(self):
+        menu = SelectionMenu(width=320, height=240)
+        menu.set_av_sources(self._make_announce())
+        menu.menu_state.send('av_sources')
+        menu._cursor = 1
+
+        menu._handle_av_sources_key('right')
+
+        self.assertEqual(menu._av_kind_index, 1)  # audio_in
+        self.assertEqual(menu._cursor, 0)
+
+    def test_enter_on_main_menu_navigates_to_av_sources_state(self):
+        menu = SelectionMenu(width=320, height=240)
+        menu.root = MagicMock()
+        menu.set_av_sources(self._make_announce())
+        menu.state = MenuVisState.MAIN
+        items = menu._main_items()
+        av_idx = items.index('AV Sources')
+        menu._cursor = av_idx
+
+        menu._handle_main_key('enter')
+
+        self.assertEqual(menu.menu_state.current_state.id, 'av_sources_menu')
+
+
+class TestSelectionMenuLocalhostGating(unittest.TestCase):
+    """Localhost shows as genuinely disabled ([--]) rather than a
+    selectable-but-silently-broken option when localhost_enabled=False."""
+
+    def _make_menu(self, localhost_enabled):
+        menu = SelectionMenu(width=320, height=240)
+        menu._settings = {'localhost_enabled': localhost_enabled}
+        menu.root = MagicMock()
+        menu.root.radio.mode = 'ADHOC'
+        menu.root.radio.NetMode = MagicMock()
+        menu.root.radio.is_scanning = False
+        menu.root.radio.switch_mode = AsyncMock()
+        return menu
+
+    def test_shows_dash_when_disabled(self):
+        menu = self._make_menu(localhost_enabled=False)
+        with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=[]):
+            items = menu._radio_items()
+        self.assertIn('[--]', items[0])
+
+    def test_shows_checkbox_when_enabled(self):
+        menu = self._make_menu(localhost_enabled=True)
+        with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=[]):
+            items = menu._radio_items()
+        self.assertNotIn('[--]', items[0])
+
+    def test_enter_on_disabled_local_does_not_call_switch_mode(self):
+        menu = self._make_menu(localhost_enabled=False)
+        with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=[]):
+            menu._cursor = 0
+            menu._handle_radio_key('enter')
+        menu.root.radio.switch_mode.assert_not_called()
+
+    def test_enter_on_enabled_local_calls_switch_mode(self):
+        menu = self._make_menu(localhost_enabled=True)
+        with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=[]):
+            menu._cursor = 0
+            menu._handle_radio_key('enter')
+        menu.root.radio.switch_mode.assert_called_once()
+
+
+class TestSelectionMenuWiredModeIndexOffsets(unittest.TestCase):
+    """The exact off-by-one risk of inserting a 5th control item ahead of
+    the endpoint list -- verifies the item list and the index arithmetic
+    in _handle_radio_key agree with each other."""
+
+    def _make_menu_with_root(self, mode, is_scanning=False, endpoints=None):
+        menu = SelectionMenu(width=320, height=240)
+        menu.root = MagicMock()
+        menu.root.radio.mode = mode
+        menu.root.radio.NetMode = MagicMock()
+        menu.root.radio.NetMode.LOCALHOST = 'LOCALHOST'
+        menu.root.radio.NetMode.WIFI = 'WIFI'
+        menu.root.radio.NetMode.ADHOC = 'ADHOC'
+        menu.root.radio.NetMode.WIRED = 'WIRED'
+        menu.root.radio.mode = 'WIRED'
+        menu.root.radio.is_scanning = is_scanning
+        with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=endpoints or []):
+            items = menu._radio_items()
+        return menu, items
+
+    def test_five_control_items_before_any_endpoints(self):
+        menu, items = self._make_menu_with_root('WIRED', endpoints=[])
+        self.assertEqual(len(items), 5)
+        self.assertTrue(items[0].startswith('Mode: Local'))
+        self.assertTrue(items[1].startswith('Mode: Wi-Fi'))
+        self.assertTrue(items[2].startswith('Mode: Ad-Hoc'))
+        self.assertTrue(items[3].startswith('Mode: Wired'))
+        self.assertIn('Scanning', items[4])
+
+    def test_wired_mode_shows_as_checked_when_active(self):
+        menu, items = self._make_menu_with_root('WIRED', endpoints=[])
+        self.assertIn('[X]', items[3])
+        self.assertIn('[ ]', items[0])  # localhost not active
+
+    def test_cursor_on_index_3_selects_wired_mode(self):
+        menu = SelectionMenu(width=320, height=240)
+        menu.root = MagicMock()
+        menu.root.radio.mode = 'ADHOC'
+        menu.root.radio.NetMode = MagicMock()
+        menu.root.radio.NetMode.WIRED = 'WIRED'
+        menu.root.radio.is_scanning = False
+        with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=[]):
+            menu._cursor = 3
+            with patch('robonet.brain.util.selection_menu.asyncio.ensure_future') as mock_ensure:
+                menu._handle_radio_key('enter')
+
+        mock_ensure.assert_called_once()
+
+    def test_endpoint_list_starts_at_index_5(self):
+        fake_ep = MagicMock(ip='10.0.0.5', axes=[], streams=[], capabilities_received=True)
+        menu = SelectionMenu(width=320, height=240)
+        menu.root = MagicMock()
+        menu.root.radio.mode = 'ADHOC'
+        menu.root.radio.NetMode = MagicMock()
+        menu.root.radio.is_scanning = False
+
+        with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=[fake_ep]):
+            items = menu._radio_items()
+            self.assertEqual(len(items), 6)  # 5 controls + 1 endpoint
+            menu._cursor = 5  # the endpoint's position
+            result = menu._handle_radio_key('enter')
+
+        self.assertIs(result, fake_ep)
+
+    def test_endpoint_not_ready_returns_none_and_sets_status(self):
+        fake_ep = MagicMock(ip='10.0.0.5', axes=[], streams=[], capabilities_received=False)
+        menu = SelectionMenu(width=320, height=240)
+        menu.root = MagicMock()
+        menu.root.radio.mode = 'ADHOC'
+        menu.root.radio.NetMode = MagicMock()
+        menu.root.radio.is_scanning = False
+
+        with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=[fake_ep]):
+            menu._cursor = 5
+            result = menu._handle_radio_key('enter')
+
+        self.assertIsNone(result)
+
+
+class TestMenuSubSystemConstruction(unittest.TestCase):
+    """MenuSubSystem's real constructor needs real psk key files (it
+    builds its own GstSender/GstReceiver pair) -- provide temp ones and a
+    mocked settings object rather than requiring ~/.robobrain to exist."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix='robonet_menu_test_')
+        self.psk_path = os.path.join(self.tmpdir, 'psk.key')
+        self.server_psk_path = os.path.join(self.tmpdir, 'server_psk.key')
+        with open(self.psk_path, 'wb') as f:
+            f.write(os.urandom(32))
+        with open(self.server_psk_path, 'wb') as f:
+            f.write(os.urandom(32))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _make_settings(self, **overrides):
+        vals = {
+            'psk_file': self.psk_path, 'server_psk_file': self.server_psk_path,
+            'ai_res': [640, 480], 'ai_fps': 30,
+            'auto_shutdown_enabled': False,
+            'auto_shutdown_no_endpoints_timeout': 30.0,
+            'auto_shutdown_idle_timeout': 600.0,
+        }
+        vals.update(overrides)
+        fake = MagicMock()
+        fake.__getitem__.side_effect = vals.__getitem__
+        return fake
+
+    def _construct(self, **setting_overrides):
+        with patch('robonet.brain.menu_system.settings', self._make_settings(**setting_overrides)):
+            return MenuSubSystem()
+
+    def test_shutdown_settings_wired_from_settings(self):
+        menu = self._construct(auto_shutdown_enabled=True,
+                               auto_shutdown_no_endpoints_timeout=15.0,
+                               auto_shutdown_idle_timeout=300.0)
+        self.assertTrue(menu.does_timeout)
+        self.assertEqual(menu.no_endpoints_timeout, 15.0)
+        self.assertEqual(menu.idle_timeout, 300.0)
+
+    def test_default_does_timeout_is_false(self):
+        menu = self._construct(auto_shutdown_enabled=False)
+        self.assertFalse(menu.does_timeout)
+
+    def test_does_timeout_can_still_be_overridden_programmatically(self):
+        # "set to true for AI runs" -- the settings default must not
+        # prevent overriding it directly after construction.
+        menu = self._construct(auto_shutdown_enabled=False)
+        menu.does_timeout = True
+        self.assertTrue(menu.does_timeout)
+
+    def test_on_img_logs_first_frame_once_then_stays_quiet_at_info_level(self):
+        menu = self._construct()
+        with patch('robonet.brain.menu_system.log') as mock_log:
+            menu.on_img(np.zeros((4, 4, 3), dtype=np.uint8))
+            menu.on_img(np.zeros((4, 4, 3), dtype=np.uint8))
+            menu.on_img(np.zeros((4, 4, 3), dtype=np.uint8))
+
+        self.assertEqual(mock_log.info.call_count, 1)  # only the first frame
+        self.assertEqual(mock_log.debug.call_count, 2)  # the rest are DEBUG (silent by default)
+
+    def test_on_img_none_logs_error_but_does_not_update_last_img(self):
+        menu = self._construct()
+        original = menu.last_img
+        menu.on_img(None)
+        self.assertIs(menu.last_img, original)
+
+    def test_on_audio_logs_first_chunk_once_then_stays_quiet(self):
+        menu = self._construct()
+        with patch('robonet.brain.menu_system.log') as mock_log:
+            menu.on_audio(np.zeros(100, dtype=np.float32))
+            menu.on_audio(np.zeros(100, dtype=np.float32))
+
+        self.assertEqual(mock_log.info.call_count, 1)
+        self.assertEqual(mock_log.debug.call_count, 1)
+        np.testing.assert_array_equal(menu.last_audio, np.zeros(100, dtype=np.float32))
+
+
+    def test_gst_sender_property_exposes_the_real_instance(self):
+        menu = self._construct()
+        self.assertIs(menu.gst_sender, menu._gst_sender)
+
+    def test_gst_receiver_property_exposes_the_real_instance(self):
+        menu = self._construct()
+        self.assertIs(menu.gst_receiver, menu._gst_receiver)
+
+
+class TestSubSystemRegistryForConnect(unittest.TestCase):
+    """The registry _connect() picks a SubSystem class from -- importing
+    menu_system.py registers both 'robot' and 'desktop' as a module-level
+    side effect (see the top of that file)."""
+
+    def test_robot_and_desktop_are_registered(self):
+        import robonet.brain.menu_system  # noqa: F401 -- triggers registration
+        from robonet.brain.util.system_base import SubSystem
+        from robonet.brain.robot_system import RobotSubSystem
+        from robonet.brain.desktop_system import DesktopSubSystem
+
+        self.assertIs(SubSystem.for_endpoint_type('robot'), RobotSubSystem)
+        self.assertIs(SubSystem.for_endpoint_type('desktop'), DesktopSubSystem)
+
+    def test_unregistered_type_raises_keyerror(self):
+        import robonet.brain.menu_system  # noqa: F401
+        from robonet.brain.util.system_base import SubSystem
+
+        with self.assertRaises(KeyError):
+            SubSystem.for_endpoint_type('unknown')
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -38,36 +38,39 @@ def make_window_config_for_server(sm, af_thru: ActionFactory = None, af_edit: Ac
     """
     Build a PassthruMglWindowConfig subclass wired to *sm*.
 
-    If *af* is None a new ActionFactory is created and stored on sm.actions.
     All key events in both pass-through and edit mode go through af.on_key().
     """
     if af_thru is None:
         af_thru = ActionFactory()
-        sm.actions = af_thru
 
     if af_edit is None:
         af_edit = ActionFactory()
-        sm.actions = af_edit
 
     register_desktop_actions(af_thru, af_edit, sm)
+
+    # mouse_press/release don't carry texel coordinates themselves (only
+    # px, py, button) -- track the most recent mouse_pos's raw tx, ty so
+    # a press/release can use the same normalized-coordinate approach as
+    # move.
+    _last_frac = {'tx': 0.5, 'ty': 0.5}
 
     def pass_through_cb(event_type, frame, name, *args):
         if event_type == 'mouse_pos':
             px, py, tx, ty, sx, sy = args
+            _last_frac['tx'] = tx
+            _last_frac['ty'] = ty
             af_thru.on_mouse_move(tx, ty)
         elif event_type == 'mouse_press':
             px, py, button = args
-            af_thru.on_mouse_click(px, py, button)
+            af_thru.on_mouse_press(_last_frac['tx'], _last_frac['ty'], button)
+        elif event_type == 'mouse_release':
+            px, py, button = args
+            af_thru.on_mouse_release(_last_frac['tx'], _last_frac['ty'], button)
         elif event_type == 'mouse_scroll':
             x_offset, y_offset = args
             af_thru.on_mouse_scroll(int(y_offset))
         elif event_type == 'key':
             key, action, modifiers = args
-            #wnd_keys = sm.displayer.displayer.config.wnd.keys
-            # Route through ActionFactory first; if nothing consumed it,
-            # forward the raw key to the remote client.
-            #if action == wnd_keys.ACTION_PRESS:
-            # we actually want both press and release going through
             af_thru.on_keyboard(key, action, modifiers)
 
     def edit_cb(event_type, frame, name, *args):
@@ -93,12 +96,10 @@ def make_window_config_for_server_main(sm, af: ActionFactory, obj):
     """
     Build a PassthruMglWindowConfig subclass wired to *sm*.
 
-    If *af* is None a new ActionFactory is created and stored on sm.actions.
     All key events in both pass-through and edit mode go through af.on_key().
     """
     if af is None:
         af = ActionFactory()
-        sm.actions = af
 
     register_desktop_actions(af, sm)
 

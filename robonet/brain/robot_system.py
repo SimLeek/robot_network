@@ -21,10 +21,10 @@ class RobotSubSystem(SubSystem):
     """
     Server-side robot counterpart.
 
-    Handshake:   → WhoAreYouAck → RobotCapabilities(probe)
-                ← RobotCapabilities(populated) → RobotCapabilitiesAck + RobotStart
+    Handshake:   -> WhoAreYouAck -> RobotCapabilities(probe)
+                <- RobotCapabilities(populated) -> RobotCapabilitiesAck + RobotStart
 
-    Control:    keyboard keys defined in axis capabilities → TensorBuffer at CTRL_HZ
+    Control:    keyboard keys defined in axis capabilities -> TensorBuffer at CTRL_HZ
                 Keys are press/release: value is set on press, cleared to 0.0 on release.
     """
     _endpoint_type = 'robot'
@@ -58,7 +58,7 @@ class RobotSubSystem(SubSystem):
             self._root.radio.burst(
                 SparseVectorBuffer(np.asarray([], dtype=np.uint32), np.asarray([], dtype=np.float32)))
 
-    # ── control ───────────────────────────────────────────────────────
+    # -- control -------------------------------------------------------
 
     def _build_key_map(self, axes: list):
         max_n = 0
@@ -108,7 +108,7 @@ class RobotSubSystem(SubSystem):
         else:
             return None
 
-    # ── async loops ───────────────────────────────────────────────────
+    # -- async loops ---------------------------------------------------
 
     async def _control_loop(self):
         dt = 1.0 / self.CTRL_HZ

@@ -13,7 +13,7 @@ Every class inherits BufferBase and declares two class variables:
 
     field_codecs  List of (pack_fn, unpack_fn) pairs, indexed the same
                   way as type_list.  BufferBase.pack_type / unpack_type
-                  just index into this list — no per-class dispatch needed.
+                  just index into this list -- no per-class dispatch needed.
 
 Codec functions are plain module-level callables with signatures:
     pack_fn(value)              -> bytes
@@ -40,6 +40,13 @@ def _pack_uint32(v):
 
 def _unpack_uint32(d, o):
     return struct.unpack_from('!I', d, o)[0], o + 4
+
+def _pack_int32(v):
+    assert isinstance(v, (int, np.integer)) and -0x80000000 <= v <= 0x7FFFFFFF
+    return struct.pack('!i', v)
+
+def _unpack_int32(d, o):
+    return struct.unpack_from('!i', d, o)[0], o + 4
 
 def _pack_float32(v):
     assert isinstance(v, (int, float, np.floating))
@@ -84,6 +91,21 @@ def _unpack_uint32_list(d, o):
     vals = []
     for _ in range(n):
         val, o = _unpack_uint32(d, o)
+        vals.append(val)
+    return vals, o
+
+def _pack_str_list(v):
+    assert isinstance(v, (list, tuple))
+    parts = [struct.pack('!I', len(v))]
+    for s in v:
+        parts.append(_pack_str(s))
+    return b''.join(parts)
+
+def _unpack_str_list(d, o):
+    n = struct.unpack_from('!I', d, o)[0]; o += 4
+    vals = []
+    for _ in range(n):
+        val, o = _unpack_str(d, o)
         vals.append(val)
     return vals, o
 
@@ -149,7 +171,7 @@ def ndarray_codec(dtype):
 def ndarray_list_codec(dtype):
     """
     Returns (pack_fn, unpack_fn) for a *list* of numpy arrays of *dtype*.
-    Wire format: count(4) | [ndim(4) | shape(4*ndim) | raw_bytes] × count
+    Wire format: count(4) | [ndim(4) | shape(4*ndim) | raw_bytes] x count
     """
     _pack_one, _unpack_one = ndarray_codec(dtype)
 
@@ -171,12 +193,14 @@ def ndarray_list_codec(dtype):
 
 # Shared codec instances (reused across classes)
 _uint32        = (_pack_uint32,      _unpack_uint32)
+_int32         = (_pack_int32,       _unpack_int32)
 _float32       = (_pack_float32,     _unpack_float32)
 _bool_         = (_pack_bool,        _unpack_bool)
 _str_          = (_pack_str,         _unpack_str)
 _bytes_        = (_pack_bytes,       _unpack_bytes)
 _uint32_list   = (_pack_uint32_list, _unpack_uint32_list)
 _float32_list  = (_pack_float32_list,_unpack_float32_list)
+_str_list      = (_pack_str_list,    _unpack_str_list)
 _opt_float3    = (_pack_opt_float3,  _unpack_opt_float3)
 
 _f32_arr       = ndarray_codec(np.float32)
@@ -195,8 +219,8 @@ _c128_arr_list  = ndarray_list_codec(np.complex128)
 class BufferBase:
     """
     Inherit from this and set:
-        type_list    — for the buffer_handling framework
-        field_codecs — list of (pack_fn, unpack_fn), same length as
+        type_list    -- for the buffer_handling framework
+        field_codecs -- list of (pack_fn, unpack_fn), same length as
                        the number of distinct type_index values used.
     """
     type_list:    list = []
@@ -260,7 +284,7 @@ class CVCamFrame(BufferBase):
 class MJpegCamFrame(BufferBase):
     """MJPEG-compressed camera frame with brightness and exposure.
 
-    TODO: mjpeg has 8×8 FFTs — consider translating directly into image pyramids
+    TODO: mjpeg has 8x8 FFTs -- consider translating directly into image pyramids
     on the GPU (parallelize the JPEG codec into GLSL/Vulkan).
     """
     type_list    = [bytes, int, str]
@@ -358,7 +382,7 @@ class TemperatureMonitorBuffer(BufferBase):
 
 
 class IMUBuffer(BufferBase):
-    """Accelerometer, gyroscope, and magnetometer — each an optional (x,y,z)."""
+    """Accelerometer, gyroscope, and magnetometer -- each an optional (x,y,z)."""
     type_list    = [Optional[Tuple[float, float, float]]]
     field_codecs = [_opt_float3]
 
@@ -372,8 +396,47 @@ class IMUBuffer(BufferBase):
 
 
 # ============================================================
-# Desktop client — remote capture config (server → client)
+# AV source capability/selection protocol (client <-> server)
 # ============================================================
+
+class AVSourcesAnnounce(BufferBase):
+    """Endpoint -> brain: every available source right now."""
+    type_list    = [List[str], List[str], List[str], str, str, str]
+    field_codecs = [_str_list, _str_list, _str_list, _str_, _str_, _str_]
+
+    def __init__(self, video_ids: List[str] = None, audio_in_ids: List[str] = None,
+                audio_out_ids: List[str] = None, active_video_id: str = '',
+                active_audio_in_id: str = '', active_audio_out_id: str = ''):
+        self.video_ids = video_ids if video_ids is not None else []
+        self.audio_in_ids = audio_in_ids if audio_in_ids is not None else []
+        self.audio_out_ids = audio_out_ids if audio_out_ids is not None else []
+        self.active_video_id = active_video_id
+        self.active_audio_in_id = active_audio_in_id
+        self.active_audio_out_id = active_audio_out_id
+
+
+class SelectAVSource(BufferBase):
+    """Brain -> endpoint: switch to this source id for this kind.
+    kind: 'video' | 'audio_in' | 'audio_out'.
+    """
+    type_list    = [str, str]
+    field_codecs = [_str_, _str_]
+
+    def __init__(self, kind: str, source_id: str):
+        self.kind = kind
+        self.source_id = source_id
+
+
+class AVSourceError(BufferBase):
+    """Endpoint -> brain: a requested SelectAVSource failed."""
+    type_list    = [str, str, str]
+    field_codecs = [_str_, _str_, _str_]
+
+    def __init__(self, kind: str, message: str, reverted_to: str = ''):
+        self.kind = kind
+        self.message = message
+        self.reverted_to = reverted_to
+
 
 class SetInputCropRes(BufferBase):
     type_list    = [int, int]
@@ -424,23 +487,46 @@ class SetInputMicChannels(BufferBase):
 
 
 # ============================================================
-# Desktop client — input events (server → client)
+# Desktop client -- input events (server -> client)
 # ============================================================
 
 class KeyEvent(BufferBase):
-    type_list    = [str]
-    field_codecs = [_str_]
+    """Server -> desktop client: one keyboard event to replay via pyautogui.
 
-    def __init__(self, key: str):
+    key: pyautogui-compatible key name, e.g. 'a', 'enter', 'space', 'shift'.
+    pressed: True for key-down, False for key-up.
+    modifiers: comma-separated held modifiers, e.g. 'ctrl,shift'. Informational;
+        the individual modifier keys also arrive as their own KeyEvents.
+    """
+    type_list    = [str, bool, str]
+    field_codecs = [_str_, _bool_, _str_]
+
+    def __init__(self, key: str, pressed: bool = True, modifiers: str = ''):
         self.key = key
+        self.pressed = pressed
+        self.modifiers = modifiers
+
+
+class SInt32(int):
+    """Marker type,  so pack_obj's type_list.index(annotation) lookup
+    can tell a signed-int field apart from plain uint32 int fields in
+    the same class. Two fields both annotated plain `int` always
+    collapse to the same codec."""
+    pass
 
 
 class MouseEvent(BufferBase):
-    """event_type: 0=move  1=click  2=scroll"""
-    type_list    = [int, int, int, int, int]
-    field_codecs = [_uint32] * 5
+    """Server -> desktop client: one mouse event to replay via pyautogui.
 
-    def __init__(self, event_type: int, x: int, y: int, button: int, delta: int):
+    event_type: 0=move  1=press(button down)  2=release(button up)  3=scroll
+    x, y: absolute position for move/press/release (ignored for scroll).
+    button: 0=left 1=right 2=middle (ignored for move/scroll).
+    delta: scroll amount for scroll events (ignored otherwise).
+    """
+    type_list    = [int, int, int, int, SInt32]
+    field_codecs = [_uint32, _uint32, _uint32, _uint32, _int32]
+
+    def __init__(self, event_type: int, x: int, y: int, button: int, delta: SInt32):
         self.event_type = event_type
         self.x = x; self.y = y
         self.button = button; self.delta = delta
@@ -470,7 +556,7 @@ class WhoAreYouAck(BufferBase):
 
 class RobotCapabilities(BufferBase):  # noqa: F821
     """
-    Robot → brain.  Describes all control axes and sensor streams.
+    Robot -> brain.  Describes all control axes and sensor streams.
 
     json_axes: JSON list of axis descriptors:
         [{"name": "forward",
@@ -531,7 +617,7 @@ class RobotStart(BufferBase):
 
 
 class SudoRequest(BufferBase):
-    """Server → client: request a sudo password via the UI."""
+    """Server -> client: request a sudo password via the UI."""
     type_list    = [str]
     field_codecs = [_str_]
 
@@ -540,7 +626,7 @@ class SudoRequest(BufferBase):
 
 
 class SudoResponse(BufferBase):
-    """Client → server: password reply for a SudoRequest."""
+    """Client -> server: password reply for a SudoRequest."""
     type_list    = [str]
     field_codecs = [_str_]
 

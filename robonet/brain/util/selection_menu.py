@@ -10,6 +10,7 @@ import numpy as np
 
 from robonet.brain.util.bitmapfont import cols_for_width, wrap_text
 from robonet.brain.util.network_scanner import Endpoint
+from robonet.buffers.buffer_objects import SelectAVSource
 from statemachine import StateChart, State
 from robonet.brain.util.bitmapfont import render_text
 
@@ -22,19 +23,22 @@ class MenuVisState(Enum):
 
 
 class MenuStateMachine(StateChart):
-    """Full menu state machine — defines the sub-menu hierarchy."""
+    """Full menu state machine -- defines the sub-menu hierarchy."""
 
     main_menu     = State(initial=True)
     radio_menu    = State()
     settings_menu = State()
-    robot_menu    = State()
+    capabilities_menu = State()
+    av_sources_menu   = State()
 
     # escape / back
-    leave    = radio_menu.to(main_menu) | settings_menu.to(main_menu) | robot_menu.to(main_menu)
+    leave    = (radio_menu.to(main_menu) | settings_menu.to(main_menu)
+               | capabilities_menu.to(main_menu) | av_sources_menu.to(main_menu))
     # enter / select
-    radio    = main_menu.to(radio_menu)
-    settings = main_menu.to(settings_menu)
-    robot    = main_menu.to(robot_menu)
+    radio        = main_menu.to(radio_menu)
+    settings     = main_menu.to(settings_menu)
+    capabilities = main_menu.to(capabilities_menu)
+    av_sources   = main_menu.to(av_sources_menu)
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +53,9 @@ _DIM   = (120, 120, 120)
 _KEY   = (100, 220, 130)   # axis key binding highlight
 
 _MAIN_ITEMS_BASE = ['Radio', 'Settings']
-_ROBOT_PAGES = ['Axes', 'Streams']
+_CAPS_PAGES = ['Axes', 'Streams']
+_AV_SOURCE_KINDS = ['video', 'audio_in', 'audio_out']
+_AV_SOURCE_KIND_LABELS = {'video': 'Video', 'audio_in': 'Audio In', 'audio_out': 'Audio Out'}
 
 def _fmt_keycode(kc: int) -> str:
     if 32 <= kc < 127:
@@ -114,9 +120,13 @@ class SelectionMenu:
         self._edit_key      = ''
         self._edit_buffer   = ''
 
-        # Robot capabilities state
-        self._robot_caps: Optional[dict] = None   # {'axes': [...], 'streams': [...]}
-        self._robot_page: int = 0                  # index into _ROBOT_PAGES
+        # Endpoint capabilities state (axes/streams)
+        self._endpoint_caps: Optional[dict] = None   # {'axes': [...], 'streams': [...]}
+        self._endpoint_page: int = 0                  # index into _CAPS_PAGES
+
+        # AV source selection state
+        self._av_sources = None   # most recent AVSourcesAnnounce, or None
+        self._av_kind_index: int = 0   # index into _AV_SOURCE_KINDS
 
         # Derived layout constants
         self._ch   = 8 * font_scale + 2   # character row height in pixels
@@ -155,9 +165,19 @@ class SelectionMenu:
         self._status    = msg
         self._status_ts = time.time()
 
-    def set_robot_capabilities(self, caps: dict):
-        self._robot_caps = caps
-        self._robot_page = 0
+    def set_endpoint_capabilities(self, caps: dict):
+        self._endpoint_caps = caps
+        self._endpoint_page = 0
+
+    def set_av_sources(self, announce):
+        """Called by MenuSubSystem whenever an AVSourcesAnnounce arrives"""
+        self._av_sources = announce
+        self._av_kind_index = 0
+
+    def clear_av_sources(self):
+        """Called on disconnect so a stale announce from a previous endpoint doesn't linger in the menu."""
+        self._av_sources = None
+        self._av_kind_index = 0
 
     def request_sudo(self, description: str):
         self._sudo_desc = description
@@ -189,16 +209,20 @@ class SelectionMenu:
                 return self._handle_radio_key(key)
             elif self.menu_state.settings_menu.is_active:
                 self._handle_settings_key(key)
-            elif self.menu_state.robot_menu.is_active:
-                self._handle_robot_key(key)
+            elif self.menu_state.capabilities_menu.is_active:
+                self._handle_capabilities_key(key)
+            elif self.menu_state.av_sources_menu.is_active:
+                self._handle_av_sources_key(key)
 
         return None
 
     def _main_items(self) -> List[str]:
-        """Main menu items; 'Robot' appears once capabilities are known."""
+        """Main menu items."""
         items = list(_MAIN_ITEMS_BASE)
-        if self._robot_caps is not None:
-            items.append('Robot')
+        if self._endpoint_caps is not None:
+            items.append('Capabilities')
+        if self._av_sources is not None:
+            items.append('AV Sources')
         return items
 
     # ------------------------------------------------------------------
@@ -227,8 +251,8 @@ class SelectionMenu:
         elif key == 'escape':
             self.state = MenuVisState.HIDDEN
         elif key == 'enter':
-            event = items[self._cursor].lower()
-            self.menu_state.send(event)
+            label = items[self._cursor]
+            self.menu_state.send(label.lower().replace(' ', '_'))
             self._cursor = 0  # fresh cursor for the sub-menu
 
     # --- radio ---------------------------------------------------------
@@ -249,20 +273,22 @@ class SelectionMenu:
         mode    = self.root.radio.mode
         NetMode = self.root.radio.NetMode
         chk     = lambda active: '[X]' if active else '[ ]'
+        localhost_ok = bool(self._cfg['localhost_enabled'])
         items = [
-            f'Mode: Local   {chk(mode == NetMode.LOCALHOST)}',
+            f'Mode: Local   {chk(mode == NetMode.LOCALHOST) if localhost_ok else "[--]"}',
             f'Mode: Wi-Fi   {chk(mode == NetMode.WIFI)}',
             f'Mode: Ad-Hoc  {chk(mode == NetMode.ADHOC)}',
+            f'Mode: Wired   {chk(mode == NetMode.WIRED)}',
             'Stop Scanning' if self.root.radio.is_scanning else 'Start Scanning',
         ]
         for ep in self.get_unique_endpoints():
-            ready = bool(getattr(ep, 'axes', None) or getattr(ep, 'streams', None))
+            ready = bool(getattr(ep, 'capabilities_received', False))
             tag = ep.endpoint_type or 'unknown'
-            label = f'{"✓" if ready else "·"} {ep.ip}  [{tag}]'
+            label = f'{"[ready]" if ready else "[..]"} {ep.ip}  [{tag}]'
             if ep.hostname:
                 label += f'  {ep.hostname}'
             if not ready:
-                label += '  (discovering…)'
+                label += '  (discovering...)'
             items.append(label)
         return items
 
@@ -281,8 +307,11 @@ class SelectionMenu:
         elif key == 'enter' and items:
             ci = self._cursor
             if ci == 0:
-                asyncio.ensure_future(
-                    self.root.radio.switch_mode(self.root.radio.NetMode.LOCALHOST))
+                if bool(self._cfg['localhost_enabled']):
+                    asyncio.ensure_future(
+                        self.root.radio.switch_mode(self.root.radio.NetMode.LOCALHOST))
+                else:
+                    self.set_status('Localhost mode is disabled (localhost_enabled=false)')
             elif ci == 1:
                 asyncio.ensure_future(
                     self.root.radio.switch_mode(self.root.radio.NetMode.WIFI))
@@ -290,16 +319,19 @@ class SelectionMenu:
                 asyncio.ensure_future(
                     self.root.radio.switch_mode(self.root.radio.NetMode.ADHOC))
             elif ci == 3:
+                asyncio.ensure_future(
+                    self.root.radio.switch_mode(self.root.radio.NetMode.WIRED))
+            elif ci == 4:
                 if self.root.radio.is_scanning:
                     asyncio.ensure_future(self.root.radio.stop_scanner_task())
                 else:
                     asyncio.ensure_future(self.root.radio.start_scanner_task())
             else:
-                ep_idx = ci - 4
+                ep_idx = ci - 5
                 if 0 <= ep_idx < len(endpoints):
                     ep = endpoints[ep_idx]
-                    if not (getattr(ep, 'axes', None) or getattr(ep, 'streams', None)):
-                        self.set_status('Endpoint not ready yet — wait for capabilities')
+                    if not getattr(ep, 'capabilities_received', False):
+                        self.set_status('Endpoint not ready yet - wait for capabilities')
                         return None
                     return ep
         return None
@@ -314,7 +346,7 @@ class SelectionMenu:
         items = self._settings_items()
         n     = len(items)
 
-        # ── editing a value ────────────────────────────────────────────
+        # -- editing a value --------------------------------------------
         if self._settings_edit:
             if key == 'backspace':
                 self._edit_buffer = self._edit_buffer[:-1]
@@ -324,7 +356,7 @@ class SelectionMenu:
                 self._commit_edit()
             return
 
-        # ── browsing ───────────────────────────────────────────────────
+        # -- browsing ---------------------------------------------------
         if key == 'up':
             self._cursor = max(0, self._cursor - 1)
         elif key == 'down':
@@ -335,13 +367,13 @@ class SelectionMenu:
         elif key == 'enter' and items:
             k, v, enabled = items[self._cursor]
             if not enabled:
-                self.set_status('Advanced setting — read-only')
+                self.set_status('Advanced setting -- read-only')
                 return
             if isinstance(v, bool):
                 # bools toggle immediately; no text entry needed
                 self._cfg[k] = not v
                 self._cfg.save()
-                self.set_status(f'{k} → {not v}')
+                self.set_status(f'{k} -> {not v}')
             else:
                 self._edit_key    = k
                 self._edit_buffer = str(v)
@@ -370,33 +402,71 @@ class SelectionMenu:
         finally:
             self._settings_edit = False
 
-    def _robot_page_items(self) -> List[str]:
-        if self._robot_caps is None:
+    def _capabilities_page_items(self) -> List[str]:
+        if self._endpoint_caps is None:
             return ['[no capabilities received]']
-        if self._robot_page == 0:
-            return [_fmt_axis(a) for a in self._robot_caps.get('axes', [])] or ['[no axes]']
+        if self._endpoint_page == 0:
+            return [_fmt_axis(a) for a in self._endpoint_caps.get('axes', [])] or ['[no axes]']
         else:
-            return [_fmt_stream(s) for s in self._robot_caps.get('streams', [])] or ['[no streams]']
+            return [_fmt_stream(s) for s in self._endpoint_caps.get('streams', [])] or ['[no streams]']
 
-    def _handle_robot_key(self, key: str):
-        n_pages = len(_ROBOT_PAGES)
-        items = self._robot_page_items()
+    def _handle_capabilities_key(self, key: str):
+        n_pages = len(_CAPS_PAGES)
+        items = self._capabilities_page_items()
         n = len(items)
 
         if key == 'escape':
             self.menu_state.send('leave')
             self._cursor = 0
-            self._robot_page = 0
+            self._endpoint_page = 0
         elif key == 'left':
-            self._robot_page = (self._robot_page - 1) % n_pages
+            self._endpoint_page = (self._endpoint_page - 1) % n_pages
             self._cursor = 0
         elif key == 'right':
-            self._robot_page = (self._robot_page + 1) % n_pages
+            self._endpoint_page = (self._endpoint_page + 1) % n_pages
             self._cursor = 0
         elif key == 'up':
             self._cursor = max(0, self._cursor - 1)
         elif key == 'down':
             self._cursor = min(n - 1, self._cursor + 1)
+
+    def _av_source_items(self) -> List[str]:
+        if self._av_sources is None:
+            return ['[no sources announced]']
+        kind = _AV_SOURCE_KINDS[self._av_kind_index]
+        ids = getattr(self._av_sources, f'{kind}_ids', [])
+        active = getattr(self._av_sources, f'active_{kind}_id', '')
+        if not ids:
+            return ['[none available]']
+        return [f'{"[*]" if sid == active else "[ ]"} {sid}' for sid in ids]
+
+    def _handle_av_sources_key(self, key: str):
+        n_kinds = len(_AV_SOURCE_KINDS)
+        items = self._av_source_items()
+        n = len(items)
+
+        if key == 'escape':
+            self.menu_state.send('leave')
+            self._cursor = 0
+            self._av_kind_index = 0
+        elif key == 'left':
+            self._av_kind_index = (self._av_kind_index - 1) % n_kinds
+            self._cursor = 0
+        elif key == 'right':
+            self._av_kind_index = (self._av_kind_index + 1) % n_kinds
+            self._cursor = 0
+        elif key == 'up':
+            self._cursor = max(0, self._cursor - 1)
+        elif key == 'down':
+            self._cursor = min(n - 1, self._cursor + 1)
+        elif key == 'enter' and self._av_sources is not None:
+            kind = _AV_SOURCE_KINDS[self._av_kind_index]
+            ids = getattr(self._av_sources, f'{kind}_ids', [])
+            if 0 <= self._cursor < len(ids):
+                source_id = ids[self._cursor]
+                if self.root is not None:
+                    self.root.radio.burst(SelectAVSource(kind=kind, source_id=source_id))
+                self.set_status(f'Selecting {kind} -> {source_id}')
 
     # ------------------------------------------------------------------
     # Compositing
@@ -452,13 +522,13 @@ class SelectionMenu:
     def _draw_centered_list(self, img, title: str, items: List[str],
                             cursor: int,
                             base_colors: Optional[List] = None,
-                            footer: str = '[↑↓]=nav [Esc]=back',
+                            footer: str = '[Up/Dn]=nav [Tab]=back',
                             reserve_rows: int = 2):
         """
         Draw a scrollable list keeping the cursor row at vertical centre.
 
-        base_colors  — per-item fallback color; cursor always overrides to _SEL.
-        reserve_rows — rows reserved at the bottom (footer + status + extras).
+        base_colors  -- per-item fallback color; cursor always overrides to _SEL.
+        reserve_rows -- rows reserved at the bottom (footer + status + extras).
                        Footer lands at height - ch*reserve_rows.
                        Status always lands at height - ch (last row).
         """
@@ -512,8 +582,10 @@ class SelectionMenu:
             self._draw_radio_menu(img)
         elif self.menu_state.settings_menu.is_active:
             self._draw_settings_menu(img)
-        elif self.menu_state.robot_menu.is_active:
-            self._draw_robot_menu(img)
+        elif self.menu_state.capabilities_menu.is_active:
+            self._draw_capabilities_menu(img)
+        elif self.menu_state.av_sources_menu.is_active:
+            self._draw_av_sources_menu(img)
 
     def _draw_main_menu(self, img):
         self._draw_centered_list(
@@ -521,7 +593,7 @@ class SelectionMenu:
             title='=== ROBONET ===',
             items=_MAIN_ITEMS_BASE,
             cursor=self._cursor,
-            footer='[Ent]=select  [Esc]=close',
+            footer='[Ent]=select  [Tab]=close',
         )
 
     def _draw_radio_menu(self, img):
@@ -534,7 +606,7 @@ class SelectionMenu:
             items=items,
             cursor=self._cursor,
             base_colors=colors,
-            footer='[Ent]=select  [Esc]=back',
+            footer='[Ent]=select  [Tab]=back',
         )
 
     def _draw_settings_menu(self, img):
@@ -545,9 +617,9 @@ class SelectionMenu:
 
         # When editing: reserve an extra row for the inline input box
         reserve = 3 if self._settings_edit else 2
-        hint    = ('[Ent]=confirm  [Esc]=cancel'
+        hint    = ('[Ent]=confirm  [Tab]=cancel'
                    if self._settings_edit
-                   else '[Ent]=edit/toggle  [Esc]=back')
+                   else '[Ent]=edit/toggle  [Tab]=back')
 
         self._draw_centered_list(
             img,
@@ -565,25 +637,42 @@ class SelectionMenu:
             display = f'{self._edit_key}: {self._edit_buffer}|'
             self._blit_line(img, edit_y, display, _TITLE)
 
-    def _draw_robot_menu(self, img):
+    def _draw_capabilities_menu(self, img):
         ch = self._ch
 
         # Tab bar: dim inactive pages, bright active
         tab_parts = []
-        for i, name in enumerate(_ROBOT_PAGES):
-            tab_parts.append(f'[{name}]' if i == self._robot_page else f' {name} ')
+        for i, name in enumerate(_CAPS_PAGES):
+            tab_parts.append(f'[{name}]' if i == self._endpoint_page else f' {name} ')
         tab_line = '  '.join(tab_parts)
 
-        items = self._robot_page_items()
-        colors = [_KEY if self._robot_page == 0 else _FG] * len(items)
+        items = self._capabilities_page_items()
+        colors = [_KEY if self._endpoint_page == 0 else _FG] * len(items)
 
         self._draw_centered_list(
             img,
-            title=f'=== ROBOT: {tab_line} ===',
+            title=f'=== CAPABILITIES: {tab_line} ===',
             items=items,
             cursor=self._cursor,
             base_colors=colors,
-            footer='[←→]=page  [↑↓]=scroll  [Esc]=back',
+            footer='[<-/->]=page  [Up/Dn]=scroll  [Tab]=back',
+        )
+
+    def _draw_av_sources_menu(self, img):
+        tab_parts = []
+        for i, kind in enumerate(_AV_SOURCE_KINDS):
+            label = _AV_SOURCE_KIND_LABELS[kind]
+            tab_parts.append(f'[{label}]' if i == self._av_kind_index else f' {label} ')
+        tab_line = '  '.join(tab_parts)
+
+        items = self._av_source_items()
+
+        self._draw_centered_list(
+            img,
+            title=f'=== AV SOURCES: {tab_line} ===',
+            items=items,
+            cursor=self._cursor,
+            footer='[<-/->]=kind  [Up/Dn]=scroll  [Ent]=select  [Tab]=back',
         )
 
     def _draw_sudo(self, img):
@@ -594,4 +683,4 @@ class SelectionMenu:
         y  = self._blit_line(img, y, 'Password:', _FG)
         y  = self._blit_line(img, y, '*' * len(self._password) or '_', _TITLE)
         y += self._ch
-        self._blit_line(img, y, '[Ent]=ok  [Esc]=cancel', _DIM)
+        self._blit_line(img, y, '[Ent]=ok  [Tab]=cancel', _DIM)
