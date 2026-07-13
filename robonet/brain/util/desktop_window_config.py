@@ -51,8 +51,7 @@ def make_window_config_for_server(sm, af_thru: ActionFactory = None, af_edit: Ac
     # mouse_press/release don't carry texel coordinates themselves (only
     # px, py, button) -- track the most recent mouse_pos's raw tx, ty so
     # a press/release can use the same normalized-coordinate approach as
-    # move. Passed through unswapped -- the x/y swap happens at the very
-    # last step, right before width/height scaling, not here.
+    # move.
     _last_frac = {'tx': 0.5, 'ty': 0.5}
 
     def pass_through_cb(event_type, frame, name, *args):

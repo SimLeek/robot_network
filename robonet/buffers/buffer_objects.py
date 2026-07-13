@@ -508,14 +508,10 @@ class KeyEvent(BufferBase):
 
 
 class SInt32(int):
-    """Marker type, not a distinct runtime type -- purely so pack_obj's
-    type_list.index(annotation) lookup can tell a signed-int field
-    apart from plain uint32 int fields in the same class. The dispatch
-    is by annotation identity, not field position, so two fields both
-    annotated plain `int` always collapse to the same codec
-    (field_codecs[0]) regardless of what's in later slots -- this let
-    MouseEvent's original all-_uint32 codecs go unnoticed until delta
-    (which can be negative, e.g. scrolling down) needed to differ."""
+    """Marker type,  so pack_obj's type_list.index(annotation) lookup
+    can tell a signed-int field apart from plain uint32 int fields in
+    the same class. Two fields both annotated plain `int` always
+    collapse to the same codec."""
     pass
 
 

@@ -4,10 +4,6 @@ examples/desktop/desktop_endpoint.py -- A remote desktop endpoint
 Start once and leave running in the background
 (e.g. as a systemd --user service);
 
-Captures directly via ximagesrc/pulsesrc -- no separate setup script or
-kernel modules needed. Resolution/fps are controlled the same way as
-for any camera, via cam_res/cam_fps in ~/.robotar/settings.json.
-
 If connecting over a direct wired (ethernet) link,
 also run this once on the endpoint side to get a static IP:
     python -m examples.setup_eth_client

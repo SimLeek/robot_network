@@ -2,11 +2,7 @@
 robonet/brain/util/viewport.py
 
 Display-side zoom/pan for viewing a subregion of a received frame.
-Entirely local -- operates on the already-received numpy frame, no
-interaction with GStreamer or the network at all. Panning/zooming at
-the source would defeat temporal compression on mostly-static desktop
-content and massively increase bitrate for no benefit, since the
-source is already transmitted at native resolution.
+Operates on the numpy frame.
 
 zoom=1.0 always means "whole source frame visible" (the aspect-
 preserving fit baseline, letterboxed if the source and display aspect

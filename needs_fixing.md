@@ -126,6 +126,12 @@ these fixes should be implemented but are either large tasks or are blocked.
   (streaming -> greeting, a new brain session replacing a dead one).
   Exhaustive matrix + chaos-scenario tests in
   tests/test_endpoint_handshake.py.
+  Simleek: I think states are fixed, but now the meny may not update due 
+  to the changed to _robot_capabilities_handler. I remember that was
+  tricky, and I didn't want to send and retrieve through the dict in
+  case it might get another endpoint. Now it sends/retrieves through
+  the dict. The 'code cleanup' may need to be reverted. Main commit
+  382508458f40d5e2515391469b8899fa9c57030e does not have this issue.
 
 - **GstSender still has no video source on the brain's own outbound
   side** (`device=None` in the logs) when the brain machine has no
@@ -166,34 +172,6 @@ these fixes should be implemented but are either large tasks or are blocked.
   work now that F4 itself resolves correctly. Worth confirming on real
   hardware.
 
-- **Audio format mismatch, found via Simleek's own NaN/garbage-value
-  debugging.** The receive pipeline's caps filter didn't specify
-  format=, so audioconvert could negotiate anything (apparently S16LE
-  in practice) while `_pull_chunk` hardcoded `np.float32` reading the
-  raw bytes back -- 16-bit PCM samples reinterpreted as 32-bit floats,
-  which is exactly the "mostly zero, occasional NaN, values like
-  9e-41" pattern that produces garbage. Fixed by explicitly requesting
-  format=F32LE in the caps filter.
-
-- **Mouse buttons had the same GLFW-vs-pyglet mismatch as keys.**
-  `_MOUSE_BUTTON_NAMES` was `{0: left, 1: right, 2: middle}` (GLFW's
-  sequential indices), but pyglet's mouse buttons are bitmask values
-  (confirmed via pyglet.window.mouse source: LEFT=1, MIDDLE=2, RIGHT=4)
-  -- every left click was flipped to a right click. Fixed to
-  `{1: left, 4: right, 2: middle}`. Unlike keys, moderngl_window doesn't
-  expose a normalized mouse-button abstraction, so this stays
-  pyglet-specific; a different backend would need revisiting.
-
-- **Mouse position swap was applied in the wrong place last round.**
-  Swapping the call-site arguments to on_mouse_move fixed positional
-  correctness but broke which scaling factor (screen width vs height)
-  applied to which axis, since the scaling code still assumed the
-  original argument order. Redone cleanly: the swap now happens once,
-  at the source, into clearly-named x_frac/y_frac, with no further
-  swapping downstream. Also added clamping to 0..1 before scaling (the
-  mouse can legitimately report fractions outside that range when it's
-  over letterboxing/padding around the captured image).
-
 - **Two open items, lower confidence:**
   - Alt+F4 giving "error, terminal emulator not set" on LXDE sounds
     like an LXDE keybinding/config issue (LXDE intercepting Alt+F4 for
@@ -207,47 +185,7 @@ these fixes should be implemented but are either large tasks or are blocked.
     but not confirmed either way. Worth knowing whether the offset is a
     fixed amount or scales with position if this comes up again.
 
-- **Mouse release/drag were a real gap in displayarray itself, not
-  robonet.** `PassthruMglWindowConfig` (displayarray/input_mgl.py)
-  overrides on_mouse_press_event to route through _route('mouse_press',
-  ...), but never overrode on_mouse_release_event at all -- confirmed
-  by reading moderngl_window's base window class, which does support
-  it as a real, documented hook. No release event ever reached
-  robonet's code, so the remote mouse button just stayed down forever
-  after any click. Simleek fixed this directly in displayarray (adding
-  the override, plus the same fix for on_mouse_drag_event, which had
-  the same gap for position updates during a drag).
-
-- **Mouse x/y swap, redone again.** Removed clamping entirely (was
-  explicitly asked not to add it) and moved the swap to the very last
-  step -- right before width/height scaling -- instead of swapping the
-  call-site arguments earlier. Mathematically these should be
-  equivalent, but the restructured version is simpler to reason about
-  (pass_through_cb now passes raw tx/ty straight through everywhere,
-  with the single swap point living in one place,
-  DesktopSubSystem._frac_to_pixel).
-
-- **Clamping came back, but at the pixel level, not the fraction
-  level.** Removing it outright crashed: MouseEvent.x/y pack as uint32,
-  and an out-of-range fraction (mouse over letterboxing) produces a
-  negative or over-range pixel value that fails _pack_uint32's
-  assertion. _frac_to_pixel now clamps the final x/y to
-  [0, screen_dimension-1] after scaling, not tx/ty themselves.
-
-- **Desktop now transmits at native screen resolution, not
-  settings['cam_res'].** Corrected an architectural mistake: scaling,
-  cropping, zooming, and aspect-ratio handling all now happen entirely
-  display-side (robonet/brain/util/viewport.py), operating on the
-  already-received full-resolution numpy frame. None of it touches
-  GStreamer or the network -- panning/zooming at the source would
-  defeat temporal compression on mostly-static desktop content and
-  massively increase bitrate for no benefit, since native-resolution
-  desktop content already compresses very well as-is.
-  MultiAVRobotHardware.__init__ gained optional width/height/fps
-  overrides so DesktopHw can pass pyautogui.size() instead of the
-  generic cam_res meant for small AI-facing camera feeds.
-
-- **Zoom/pan implemented, human-facing controls only so far.**
+- **Zoom/pan implemented, needs AI controls.**
   Ctrl+Shift+2 toggles edit mode; scroll zooms (1.0 = whole frame
   visible, letterboxed to preserve aspect ratio; max = 1 source pixel
   per display pixel, computed from actual source/display resolution,
@@ -262,43 +200,6 @@ these fixes should be implemented but are either large tasks or are blocked.
   given how much else changed -- same af.bind_ai_neuron/bind_ai_token
   pattern used elsewhere in this codebase should apply directly once
   it's time to wire it up.
-
-- **Several real bugs found in the zoom/pan feature on first real use:**
-  - MouseEvent.delta can be negative (scrolling down) but every field
-    used _uint32 -- crashed. The real cause wasn't a simple field_codecs
-    typo: pack_obj dispatches by *type identity*
-    (type_list.index(annotation)), not field position, so two fields
-    both annotated plain `int` always collapse to the same codec
-    regardless of what's in later field_codecs slots. Needed a distinct
-    marker type (SInt32) for delta to be reachable at all. Audited every
-    other class in buffer_objects.py for the same pattern -- none found.
-  - Zoom/pan silently stopped working after the first connection:
-    af_edit's handlers were only ever bound once, in
-    DisplaySubSystem.setup() -- swap_subsystem's unbind_all() +
-    re-register cycle (which runs on every connect) wiped them out with
-    nothing re-establishing them. Fixed by moving the binding into
-    DesktopSubSystem._bind_input(), which correctly runs on every
-    connect already (matching af_thru's existing lifecycle).
-  - Architecture correction: Viewport/zoom/pan moved off
-    DisplaySubSystem onto DesktopSubSystem entirely. Zoom/pan is
-    desktop-specific (large/multiple monitors) -- robots have a movable
-    camera instead of a fixed viewport to pan around, and
-    DisplaySubSystem is generic across endpoint types (also optional --
-    everything needs to work without it, e.g. AI-direct sessions).
-  - The menu was tiny because it was composited onto the source frame
-    *before* scaling, not after. The actual compositing pipeline is
-    MenuSubSystem.send_frames_always (self._menu.composite(self.last_img)),
-    not DisplaySubSystem.run_once as originally assumed -- scaling now
-    happens in send_frames_always, right before composite(), using the
-    active DesktopSubSystem's viewport when connected to a desktop or a
-    fixed-baseline-zoom fallback otherwise.
-  - Mouse position didn't account for zoom/pan or even baseline-zoom
-    letterboxing -- was treating the displayed canvas position as if it
-    mapped directly to the source frame, which is only true with no pan,
-    zoom=1.0, and matching aspect ratios. Added Viewport.inverse_map
-    (the counterpart to apply()) and routed _frac_to_pixel through it;
-    verified as a true inverse of the forward crop/scale math in
-    test_viewport.py.
 
 - **The "needs 2 brain runs to connect" bug, root cause found.**
   _robot_capabilities_handler's inline fallback lookup (for when an
@@ -315,53 +216,12 @@ these fixes should be implemented but are either large tasks or are blocked.
   wrong condition instead of using it. No prior test coverage existed
   for this handler at all -- added
   tests/test_radio_capabilities_handler.py.
-
-- **The aspect-ratio/max-zoom bugs were the same root cause.** Both
-  _frac_to_pixel and _on_edit_scroll read source-frame dimensions from
-  DisplaySubSystem.in_img, which is the already-scaled, already-menu-
-  composited out_res frame -- not the true native-resolution source.
-  This made source == display exactly, which (a) collapsed the mouse's
-  inverse-mapping to a no-op identity transform (explaining "max x
-  limited by the texture's aspect ratio" -- the raw, letterbox-bounded
-  canvas fraction was being used unmodified), and (b) collapsed
-  max_zoom to precisely 1.0 (mathematically impossible to zoom past
-  baseline, explaining scroll doing nothing in edit mode). Both now use
-  MenuSubSystem.last_img, the true raw frame set directly from
-  GstReceiver's callback.
-
-- **Ctrl+Shift+2 in MenuSubSystem.handle_keyboard was dead code.**
-  displayarray's PassthruMglWindowConfig.on_key_event already
-  intercepts Ctrl+Shift+<0/1/2> itself (hardcoded keycodes 41/33/64)
-  and sets input_mode directly, returning before ever calling
-  _route('key', ...) -- so handle_keyboard's own check for this
-  combination never actually ran. Removed it; mode-switching is
-  entirely displayarray's own mechanism. send_frames_always now checks
-  cfg.input_mode == 2 directly before running edge-pan, rather than
-  relying on _edit_mouse_pos being cleared by the (dead) key handler.
-
-- **ActionFactory.unbind_all() never cleared mouse_press/release
-  handlers**, a separate, real (if currently harmless in practice)
-  gap -- _bind_input() re-binding on every connect happened to mask it
-  for that specific path. Fixed; added tests/test_action_factory.py
-  (no dedicated coverage existed for this class before).
+  Simleek: Actually it happened again, so this will need more testing later.
 
 - **WiFi auto-connecting when it shouldn't** -- reported but explicitly
   deprioritized (Simleek: "not a super important issue... later todo
   stuff"), and not confirmed against real hardware yet (only tested
   against the sandbox endpoint so far). Revisit once tested against an
   actual robot on the network.
-
-- **Mouse upper-bound clamping removed from _frac_to_pixel, per
-  explicit request.** The reported "invisible wall" when zoomed in
-  (looked square) wasn't tracked down to a definitive root cause in the
-  viewport math itself (compute_crop_and_scale/inverse_map's forward
-  math is verified as a true round-trip in test_viewport.py, and no
-  swap bug was found there on inspection) -- rather than keep
-  chasing it, simplified per Simleek's own suggestion: only the lower
-  bound (0) is enforced now, since that's what actually prevents the
-  uint32 pack crash on a negative value. The upper bound relies on
-  pyautogui/the OS clamping movement at the real screen edge on their
-  own, rather than needing a second, brain-side copy of that same
-  limit to stay perfectly in sync. Worth re-confirming there's no
-  remaining swap bug once this can actually be tested again now that
-  the artificial ceiling is gone.
+  Simleek: This was maybe_auto_connect being too permissive. I fixed it by 
+  adding checks. I expected it to connect on localhost or wired, not wifi.

@@ -37,14 +37,6 @@ class DesktopSubSystem(SubSystem):
         self._tasks = []
         self.handlers = {}
 
-        # Mouse positions arrive as normalized 0-1 texel coordinates
-        # (fraction across the captured frame) -- scaling them by the
-        # endpoint's actual screen resolution (reported in its
-        # capabilities, not the possibly-downscaled transmitted size)
-        # is what turns them into real pixel coordinates on that
-        # machine. Defaults to 1920x1080 if the endpoint didn't report
-        # a 'screen' stream for some reason, rather than dividing by
-        # zero or refusing to move the mouse at all.
         self._screen_width, self._screen_height = 1920, 1080
         for s in getattr(endpoint, 'streams', None) or []:
             if s.get('name') == 'screen' and s.get('type') == 'video':
@@ -52,10 +44,6 @@ class DesktopSubSystem(SubSystem):
                 self._screen_height = s.get('height', self._screen_height)
                 break
 
-        # Zoom/pan: desktop-specific (large or multiple monitors) --
-        # doesn't belong on DisplaySubSystem, which is generic across
-        # endpoint types. Robots have a movable camera instead of a
-        # fixed viewport to zoom/pan around.
         self.viewport = Viewport()
         self._edit_mouse_pos: Optional[tuple] = None
 

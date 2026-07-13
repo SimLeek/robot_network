@@ -1,9 +1,7 @@
 # robot_network (robonet)
 
-Remote control and sensor streaming between a "brain" (the machine a
-human or AI operates from) and one or more "endpoints" (a robot, or a
-desktop machine being remote-controlled), over GStreamer for audio/video
-and an encrypted UDP radio for control/telemetry.
+A general robot controller and remote desktop system. Works over Wi-Fi,
+ethernet, and localhost, and has encrypted and unencrypted communication options.
 
 ## Installation
 
@@ -14,17 +12,23 @@ cd robot_network
 source venv/bin/activate
 ```
 
-`install.sh` installs GStreamer and its plugins and then creates (or reuses) 
-   a `./venv` virtual environment with access to system site-packages
-   (needed for `PyGObject`/GStreamer's Python bindings
+### Ethernet
 
-Activate that virtual environment (`source venv/bin/activate`) before
-running anything below, in every new shell. Re-run `install.sh` (or
-`pip install -e .` in the venv) after pulling if dependencies changed.
+Ethernet requires some special setup.
+
+On the brain or server side:
+
+  ```
+  python -m examples.setup_eth_server
+  ```
+
+On the endpoint side:
+
+  ```
+  python -m examples.setup_eth_client
+  ```
 
 ## Running -- brain side
-
-The brain is the machine a human or AI operates from.
 
 ### Human Control
 For human control, run it as a module, from the repo root:
@@ -38,15 +42,6 @@ endpoint you connect to, with an on-screen menu (default toggle:
 Ctrl+`` ` ``) for picking a network mode and endpoint. Settings live at
 `~/.robobrain/settings.json` (see `robonet/brain/settings.py` for
 every key and its default).
-
-### One-time Brain Setup
-
-- **Wired (direct ethernet cable) connections**
-  ```
-  python -m examples.setup_eth_server
-  ```
-  If this fails because the interface is already a bridge/bond port,
-  use a different interface or configure the bridge itself instead.
 
 ### AI Control
 
@@ -69,21 +64,6 @@ You can either run these as is or modify them for your specific endpoint.
 
 Endpoint settings live at `~/.robotar/settings.json` (see
 `robonet/endpoint/settings.py`).
-
-### One-time Endpoint Setup
-
-These usually only need to be run once per machine:
-
-- **Wired (direct ethernet cable) connections**
-  ```
-  python -m examples.setup_eth_client
-  ```
-
-Desktop-mode capture needs no setup -- it captures directly via
-ximagesrc/pulsesrc. If you're upgrading from an older checkout that ran
-`setup_desktop_capture.sh` (v4l2loopback/snd-aloop), run
-`./examples/teardown_desktop_capture.sh` to remove those kernel modules;
-they're not used anymore.
 
 ## Shared secret (PSK) setup
 

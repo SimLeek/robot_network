@@ -35,17 +35,8 @@ class RobotState(StateMachine):
     explaining_acknowledged -> streaming -> (stop) -> listening
 
     Every event below is defined for every state it could plausibly
-    arrive in, not just the "expected" one -- retransmitted/duplicate/
-    reordered messages are a normal occurrence (the brain side bursts
-    each step a few times for reliability), and a message arriving in
-    an unexpected state must never be a dead end. Two rules used
-    throughout: (1) if we're already at or past a message's target,
-    receiving it again is a same-state self-loop, not an error; (2) if
-    we're earlier than its target, it jumps us forward. who_are_you is
-    the one exception that can move backward (streaming -> greeting):
-    a fresh WhoAreYou after we're already streaming means a new brain
-    session has started and the old one is gone, not a duplicate of the
-    one we already answered.
+    arrive in. A message arriving in an unexpected state must never
+    be a dead end.
     """
     listening = State(initial=True)
     greeting = State()
@@ -63,7 +54,7 @@ class RobotState(StateMachine):
         | streaming.to(greeting)
     )
 
-    # Not defined from `listening` -- an ack before we've even echoed
+    # An ack before we've even echoed
     # WhoAreYou has no sensible target, so the handler skips calling
     # this at all rather than the state machine having to reject it.
     ack_received = (
@@ -86,8 +77,7 @@ class RobotState(StateMachine):
         | streaming.to(streaming)
     )
 
-    # Not defined from listening/greeting/greeting_acknowledged -- an
-    # ack for capabilities we haven't sent yet has no sensible target.
+    # an ack for capabilities we haven't sent yet has no sensible target.
     ack2_received = (
         explaining.to(explaining_acknowledged)
         | explaining_acknowledged.to(explaining_acknowledged)

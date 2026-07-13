@@ -399,7 +399,7 @@ class RadioSubSystem(SubSystem):
 
     def _maybe_auto_connect(self, ep: Endpoint):
         """Connect to the first matching, ready endpoint automatically"""
-        if not self._auto_connect_priority:
+        if not self._auto_connect_priority or self._mode is None or self._mode.name.lower() not in self._auto_connect_priority:
             return
         if self.root is None or self.root.active_sub is not None:
             return  # already connected to something
