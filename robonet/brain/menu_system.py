@@ -278,6 +278,8 @@ class MenuSubSystem(SubSystem):
                     self.root.displayer.update_audio(self.last_audio)
             if self.root.ai is not None:
                 self.root.ai.update_frame(img)
+                if self.last_audio is not None:
+                    self.root.ai.update_audio(self.last_audio)
             t1 = time.time()
             t_remain = max(0.0, 1.0/self.fps - (t1-t0))
             await asyncio.sleep(t_remain)

@@ -256,3 +256,14 @@ these fixes should be implemented but are either large tasks or are blocked.
   an AI subsystem's coroutines would never actually get scheduled. No
   prior test coverage existed for ServerSystem -- added
   tests/test_server_system.py.
+
+- **AI wasn't receiving audio at all.** AISubSystem only had
+  update_frame/in_img -- no audio equivalent existed. send_frames_always
+  already sent both video and audio to a human display but only video to
+  self.root.ai. The video side (menu overlay included, since it's the
+  same already-composited frame) was correctly shared -- just audio was
+  missing entirely. Added update_audio/in_aud to AISubSystem, matching
+  update_frame/in_img exactly, and the corresponding call in
+  send_frames_always. No prior test coverage existed for either
+  AISubSystem or send_frames_always -- added tests/test_ai_system.py and
+  tests/test_send_frames_always.py.

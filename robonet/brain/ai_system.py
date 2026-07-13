@@ -17,7 +17,11 @@ class AISubSystem(SubSystem):
 
     def __init__(self):
         self.in_img = None
+        self.in_aud = None
         self.out_mode = self.OutMode.NEURON
 
     def update_frame(self, img):
         self.in_img = img
+
+    def update_audio(self, aud):
+        self.in_aud = aud
