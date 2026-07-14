@@ -2,15 +2,9 @@
 examples/ai_passthrough_demo.py
 
 Demonstrates AI-driven passthrough control of a connected desktop
-endpoint, through the same af_ai neuron/token interface a real AI
-would use (not by calling DesktopSubSystem's methods directly) --
+endpoint.
 mouse moves in a circle, one right-click, one F11 tap, then a few
 seconds of a 440Hz sine tone sent as the brain's own outbound audio.
-
-Everything here is chosen to be harmless on a normal desktop: a
-right-click just opens a dismissible context menu, F11 toggles
-fullscreen (annoying, not destructive), and the sine tone doesn't
-touch anything visual at all.
 
 Works with or without a human viewer window:
 
@@ -18,8 +12,7 @@ Works with or without a human viewer window:
     python -m examples.ai_passthrough_demo --headless
 
 While the demo runs, desktop.input_source is set to 'ai', so human
-mouse/keyboard input is silently dropped (both trying to drive the
-same remote cursor at once would just fight each other) -- it's
+mouse/keyboard input is silently dropped. It's
 restored to 'human' automatically when the demo finishes.
 """
 
@@ -46,10 +39,9 @@ log = setup_logging()
 
 class AiPassthroughDemo(AISubSystem):
     """Runs the demo sequence once a desktop endpoint connects, then
-    hands control back to human input. A minimal concrete AISubSystem
-    -- satisfies ServerSystem's `assert displayer or ai` for headless
-    runs; a real AI integration would replace this with something that
-    actually reads a model's output instead of a fixed script."""
+    hands control back to human input. A real AI integration would
+    replace this with something that actually reads a model's output
+    instead of a fixed script."""
 
     def __init__(self, radius_frac: float = 0.2, period_s: float = 4.0):
         super().__init__()

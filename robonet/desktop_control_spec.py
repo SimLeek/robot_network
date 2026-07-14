@@ -71,34 +71,31 @@ def keycode_to_pyautogui(key: int, keys=None) -> Optional[str]:
 DESKTOP_CONTROL_INTERFACE_SPEC = {
     'keys_press': {
         'count': len(_SPECIAL_KEY_TO_PYAUTOGUI) + 95,  # + printable ASCII (32-126)
-        'hz': 'event-driven, not polled -- one token per key-down. '
-             'Human typing rarely exceeds ~10/s.',
+        'hz': '~10/s',
     },
     'keys_release': {
         'count': len(_SPECIAL_KEY_TO_PYAUTOGUI) + 95,
-        'hz': 'event-driven -- one token per key-up, roughly mirrors keys_press.',
+        'hz': '~10/s',
     },
     'mouse_move_x': {
         'count': 1,
-        'hz': 'event-driven, can be dense during drags -- '
-             '30-60/s typical if the source polls continuously.',
+        'hz': '~30-60/s',
     },
     'mouse_move_y': {
         'count': 1,
-        'hz': 'event-driven, can be dense during drags -- '
-             '30-60/s typical if the source polls continuously.',
+        'hz': '30-60/s',
     },
     'mouse_press': {
         'count': 3,  # left, right, middle
-        'hz': 'event-driven, rare -- well under 10/s.',
+        'hz': '<10/s',
     },
     'mouse_release': {
         'count': 3,
-        'hz': 'event-driven, rare -- mirrors mouse_press.',
+        'hz': '<10/s',
     },
     'scroll': {
         'count': 1,  # delta -- continuous, not a discrete token
-        'hz': 'event-driven, rare -- well under 10/s.',
+        'hz': '<10/s',
     },
 }
 
