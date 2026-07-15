@@ -378,3 +378,42 @@ these fixes should be implemented but are either large tasks or are blocked.
 
 - Simleek's own assessment: most remaining work is endpoint code, then
   some menu code, very little if any brain code.
+
+- **Fixed device-selection logging placement and DesktopHw's config
+  override bug.** Last round's speaker-device log line landed in
+  CamMicSpkRobotHardware.__init__ -- a completely different class
+  DesktopHw doesn't use at all, which is why it never appeared at the
+  right time. DesktopHw.__init__ took no camera/speaker arguments
+  whatsoever and unconditionally called find_camera_devices()[0] /
+  get_first_speaker_device(), ignoring any possible configuration
+  entirely. Now accepts camera=/speaker= constructor args, checks new
+  camera_device/speaker_device settings if not given, and only
+  auto-detects as a last resort -- logged at construction time (real
+  startup), not connection time. Added
+  tests/test_desktop_hw_device_priority.py.
+
+- **Sine tone still unexplained, and the brain-side sounddevice
+  playback path may never have actually worked at all.** Simleek can
+  see audio data arriving on the brain side (the numpy-buffer waveform
+  display) but has never once heard actual sound through real
+  speakers, and would expect to see an active stream in pavucontrol if
+  sounddevice.OutputStream were genuinely producing output -- never
+  observed. The one time brain->endpoint audio was confirmed audible
+  was on a different robot (basicpibot) using GStreamer for endpoint-
+  side playback, not sounddevice for brain-side playback. So this may
+  be long-standing and never actually verified working, not something
+  broken by recent changes. Worth checking directly whether
+  sd.OutputStream() ever raises/fails silently, and whether PortAudio's
+  host API on the actual machine involved is one pavucontrol would even
+  show at all.
+
+- **GStreamer pipeline-restart timing may be worth a closer look
+  separately:** in the captured log, trying encoder -> probe warning ->
+  encoder selected -> pipeline PLAYING all completed within ~1.1s, right
+  at the moment the AI demo logged "complete" -- consistent with
+  set_mic_device's restore call (switching back from the sine tone to
+  the original mic) not being awaited/confirmed before the demo
+  considers itself done. Didn't get to fixing this directly this round.
+
+- Confirmed AV source switching still explicitly out of scope, per
+  Simleek's own prioritization.

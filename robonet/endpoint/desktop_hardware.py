@@ -17,6 +17,9 @@ from robonet.endpoint.hardware_system import MultiAVRobotHardware
 from robonet.endpoint.radio_system import HOSTNAME
 from robonet.gst_io.devices import find_camera_devices, get_first_speaker_device, DeviceNotFoundError
 from robonet.gst_io.streamer_unencrypted import VIDEO_SOURCE_XIMAGESRC, AUDIO_SOURCE_DESKTOP_MIX
+import robonet.endpoint.settings as settings_
+
+settings = settings_.get()
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +84,7 @@ class DesktopHw(MultiAVRobotHardware):
     capture-side setting.
     """
 
-    def __init__(self):
+    def __init__(self, camera: str = None, speaker: str = None):
         if pyautogui is None:
             raise DesktopCaptureError(
                 "pyautogui could not be imported (it needs a live, connectable "
@@ -90,23 +93,31 @@ class DesktopHw(MultiAVRobotHardware):
                 "environment variable set, e.g. Environment=DISPLAY=:0 in the "
                 "service's [Service] section."
             )
-        try:
-            webcam_device = find_camera_devices()[0]
-        except IndexError:
-            log.error("Could not find a webcam device. Will be starting without one.")
-            webcam_device = None
+        webcam_device = camera or settings['camera_device']
+        if webcam_device is None:
+            try:
+                webcam_device = find_camera_devices()[0]
+            except IndexError:
+                log.error("Could not find a webcam device. Will be starting without one.")
+        log.info(f"[hardware] using camera device: {webcam_device!r}")
+
         video_sources = {DESKTOP_VIDEO_ID: VIDEO_SOURCE_XIMAGESRC}
         if webcam_device:
             video_sources[f'webcam:{webcam_device}'] = webcam_device
 
         audio_inputs = {DESKTOP_AUDIO_IN_ID: AUDIO_SOURCE_DESKTOP_MIX}
 
+        speaker_device = speaker or settings['speaker_device']
+        if speaker_device is None:
+            try:
+                speaker_device = get_first_speaker_device()
+            except DeviceNotFoundError:
+                log.error("Could not find a speaker device. Will be starting without one.")
+        log.info(f"[hardware] using speaker device: {speaker_device!r}")
+
         audio_outputs = {}
-        try:
-            speaker = get_first_speaker_device()
-            audio_outputs[f'speaker:{speaker}'] = speaker
-        except DeviceNotFoundError:
-            log.error("Could not find a speaker device. Will be starting without one.")
+        if speaker_device:
+            audio_outputs[f'speaker:{speaker_device}'] = speaker_device
 
         # Native screen resolution, not settings['cam_res'] -- desktop
         # content is mostly static and compresses well at full res, and
