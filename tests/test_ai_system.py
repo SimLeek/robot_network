@@ -31,6 +31,11 @@ class TestAISubSystem(unittest.TestCase):
         self.assertIsNone(ai.in_img)
         self.assertIsNone(ai.in_aud)
 
+    def test_starts_with_media_not_ready(self):
+        ai = _ConcreteAISubSystem()
+        self.assertFalse(ai.has_video)
+        self.assertFalse(ai.has_audio)
+
     def test_update_frame_stores_it(self):
         ai = _ConcreteAISubSystem()
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -39,6 +44,11 @@ class TestAISubSystem(unittest.TestCase):
 
         self.assertIs(ai.in_img, frame)
 
+    def test_update_frame_sets_has_video(self):
+        ai = _ConcreteAISubSystem()
+        ai.update_frame(np.zeros((480, 640, 3), dtype=np.uint8))
+        self.assertTrue(ai.has_video)
+
     def test_update_audio_stores_it(self):
         ai = _ConcreteAISubSystem()
         audio = np.array([0.1, -0.2, 0.3], dtype=np.float32)
@@ -46,6 +56,11 @@ class TestAISubSystem(unittest.TestCase):
         ai.update_audio(audio)
 
         self.assertIs(ai.in_aud, audio)
+
+    def test_update_audio_sets_has_audio(self):
+        ai = _ConcreteAISubSystem()
+        ai.update_audio(np.array([0.1], dtype=np.float32))
+        self.assertTrue(ai.has_audio)
 
     def test_default_out_mode_is_neuron(self):
         ai = _ConcreteAISubSystem()

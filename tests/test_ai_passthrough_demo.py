@@ -184,12 +184,60 @@ class TestWaitForDesktopConnection(unittest.TestCase):
         self.assertIs(result, demo._root.active_sub)
 
 
+class TestWaitForMediaReady(unittest.TestCase):
+
+    def test_returns_immediately_if_already_flowing(self):
+        demo = AiPassthroughDemo()
+        demo.has_video = True
+        demo.has_audio = True
+        _run(demo._wait_for_media_ready())  # must not hang
+
+    def test_waits_until_both_video_and_audio_are_flowing(self):
+        async def scenario():
+            demo = AiPassthroughDemo()
+            demo.has_video = False
+            demo.has_audio = False
+
+            async def media_arrives_after_a_moment():
+                await asyncio.sleep(0.01)
+                demo.has_video = True
+                await asyncio.sleep(0.01)
+                demo.has_audio = True
+
+            waiter = asyncio.ensure_future(demo._wait_for_media_ready(poll_interval=0.005))
+            feeder = asyncio.ensure_future(media_arrives_after_a_moment())
+            await asyncio.gather(waiter, feeder)
+            return demo
+
+        demo = asyncio.run(scenario())
+        self.assertTrue(demo.has_video)
+        self.assertTrue(demo.has_audio)
+
+    def test_does_not_return_with_only_video_and_no_audio(self):
+        async def scenario():
+            demo = AiPassthroughDemo()
+            demo.has_video = True
+            demo.has_audio = False
+
+            waiter = asyncio.ensure_future(demo._wait_for_media_ready(poll_interval=0.005))
+            done, pending = await asyncio.wait([waiter], timeout=0.05)
+            for p in pending:
+                p.cancel()
+            return done, pending
+
+        done, pending = asyncio.run(scenario())
+        self.assertEqual(len(done), 0)
+        self.assertEqual(len(pending), 1)
+
+
 class TestFullRunSetsAndRestoresInputSource(unittest.TestCase):
 
     def test_sets_ai_then_restores_human_even_if_a_step_raises(self):
         from robonet.brain.desktop_system import DesktopSubSystem
         demo = AiPassthroughDemo(period_s=0.0)
         demo._root = MagicMock()
+        demo.has_video = True
+        demo.has_audio = True
         desktop = MagicMock(spec=DesktopSubSystem)
         desktop.af_ai = MagicMock()
         demo._root.active_sub = desktop

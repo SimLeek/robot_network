@@ -140,7 +140,16 @@ class TestAiMouseButtons(unittest.TestCase):
         sub.ai_mouse_press('middle')
         middle_code = sub._root.radio.burst.call_args[0][0].button
 
-        self.assertEqual((left_code, right_code, middle_code), (0, 1, 2))
+        self.assertEqual((left_code, right_code, middle_code), (1, 4, 2))
+
+    def test_button_table_matches_the_endpoint_s_table_exactly(self):
+        # Regression test for the actual reported bug: this table used
+        # a sequential 0/1/2 convention while the endpoint's own table
+        # uses pyglet's bitmask values (1/2/4) -- code=1 ('right' under
+        # the old, wrong table) decoded as 'left' on the endpoint.
+        from robonet.endpoint.desktop_hardware import _MOUSE_BUTTON_NAMES
+        from robonet.brain.desktop_system import DesktopSubSystem
+        self.assertEqual(DesktopSubSystem._AI_BUTTON_NAMES, _MOUSE_BUTTON_NAMES)
 
     def test_press_uses_the_last_moved_to_position(self):
         sub = self._ready_sub()
@@ -253,7 +262,7 @@ class TestNeuronTokenDispatch(unittest.TestCase):
         sub.af_ai.on_token(AI_TOKEN_MOUSE_MIDDLE_PRESS)
         middle_button = sub._root.radio.burst.call_args[0][0].button
 
-        self.assertEqual((right_button, middle_button), (1, 2))
+        self.assertEqual((right_button, middle_button), (4, 2))
 
     def test_stop_unbinds_af_ai(self):
         sub = self._bound_sub()

@@ -267,3 +267,43 @@ these fixes should be implemented but are either large tasks or are blocked.
   send_frames_always. No prior test coverage existed for either
   AISubSystem or send_frames_always -- added tests/test_ai_system.py and
   tests/test_send_frames_always.py.
+
+- **Fixed from IRL testing round (re-applied after an environment reset
+  lost the first attempt before it could be committed):**
+  1. AI right-click sent the wrong button. _AI_BUTTON_NAMES used a
+     sequential 0/1/2 convention; the endpoint's own _MOUSE_BUTTON_NAMES
+     uses pyglet's bitmask values (1/2/4). code=1 ('right' under the old
+     table) decoded as 'left' on the endpoint. Fixed to match exactly;
+     added a cross-check test importing both tables directly so this
+     can't silently regress again.
+  2. F11 toggled displayarray's own fullscreen instead of reaching the
+     endpoint -- moderngl_window's base Window class binds F11 to
+     fullscreen-toggle by default, before pass_through_cb ever sees it.
+     Disabled via wnd.fullscreen_key = None (moderngl_window's own
+     documented mechanism), applied once the window becomes reachable
+     (guarded/idempotent in DisplaySubSystem.run_once). F1 has no such
+     special handling in moderngl_window at all -- if still not working,
+     most likely reaching the endpoint fine but having no visible effect
+     there (F1 isn't bound to anything by default on most desktops).
+  3. AISubSystem had no way to know if real video/audio had actually
+     started flowing -- added has_video/has_audio flags. Demo now waits
+     on both before starting its sequence -- log showed a ~9s gap
+     between connecting and audio actually flowing, so the sine tone
+     was very likely never actually heard.
+  4. Mouse "offset" after the AI demo ends is very likely not a bug --
+     absolute positioning means the remote cursor snaps to wherever the
+     human's own local mouse currently sits the moment control returns,
+     regardless of where the AI left it. Worth confirming next round.
+  5. Checked test coverage for the discovery issue: the endpoint's own
+     RobotState machine has a clean one-go test already
+     (test_normal_full_handshake). Nothing exercises the real
+     RadioSubSystem/NetworkScanner discovery-then-capabilities flow
+     together end to end -- existing tests only unit-test individual
+     handlers with hand-built fixtures. Worth building if it recurs.
+
+  Also: this session's sandbox lost several installed packages partway
+  through (zmq, python-statemachine, gstreamer GObject bindings,
+  PyV4L2Cam + libv4l-dev, PortAudio, displayarray + its GL/window stack)
+  along with all uncommitted working-tree changes -- unrelated to any
+  code issue, just worth knowing the sandbox itself isn't durable
+  storage. All reinstalled and 398/398 tests confirmed passing again.

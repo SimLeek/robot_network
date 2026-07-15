@@ -112,6 +112,7 @@ class TestRunOnceAppliesNormalization(unittest.TestCase):
         sub.viewport = Viewport()
         sub._edit_mouse_pos = None
         sub._audio_stream = None
+        sub._fullscreen_key_disabled = True  # not under test here -- see test_disable_fullscreen_key.py
         return sub
 
     def _run(self, coro):
