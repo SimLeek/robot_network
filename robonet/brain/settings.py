@@ -10,6 +10,13 @@ log = setup_logging()
 _DEFAULT_SETTINGS: dict[str, Any] = {
     "jpeg_quality": 70,
     "play_audio": True,
+    # None = auto-detect (prefers a device whose name suggests it's the
+    # real system default -- pulse/pipewire routing -- over whatever
+    # sounddevice's own implicit default happens to be, which on Linux
+    # can land on the first raw ALSA hardware device instead of the
+    # actual configured output). Set to a substring of a device name
+    # (case-insensitive) or a sounddevice device index to override.
+    "speaker_device": None,
 }
 
 _DEFAULT_ADVANCED_SETTINGS: dict[str, Any] = {

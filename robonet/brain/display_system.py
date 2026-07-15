@@ -57,6 +57,30 @@ class DisplaySubSystem(SubSystem):
     def start(self):
         self._start_audio(self._audio_sample_rate)
 
+    def _resolve_speaker_device(self):
+        """None = let sounddevice use its own implicit default. A
+        substring of a device name (case-insensitive) or a device
+        index both work directly, and take priority over auto-detect.
+        Auto-detect prefers a device name suggesting real pulse/
+        pipewire routing over sounddevice's own implicit default --
+        on Linux that can land on the first raw ALSA hardware device
+        instead of the one actually configured as the system output."""
+        configured = settings["speaker_device"]
+        if configured is not None:
+            return configured
+        try:
+            devices = sd.query_devices()
+        except Exception as e:
+            log.warning(f'[display] could not query audio devices: {e}')
+            return None
+        for i, d in enumerate(devices):
+            if d.get('max_output_channels', 0) > 0 and 'pulse' in d.get('name', '').lower():
+                return i
+        for i, d in enumerate(devices):
+            if d.get('max_output_channels', 0) > 0 and 'pipewire' in d.get('name', '').lower():
+                return i
+        return None  # nothing preferred found -- fall back to sounddevice's own default
+
     def _start_audio(self, sample_rate: int = 48000):
         """Open a sounddevice OutputStream for the given sample rate.
         Called automatically on setup; call again if sample rate changes."""
@@ -64,15 +88,19 @@ class DisplaySubSystem(SubSystem):
             self._audio_stream.stop()
             self._audio_stream.close()
         self._audio_sample_rate = sample_rate
+        device = self._resolve_speaker_device()
         self._audio_stream = sd.OutputStream(
             samplerate=sample_rate,
             channels=1,
             dtype='float32',
             callback=self._audio_cb,
             blocksize=0,  # let sounddevice pick a low-latency block size
+            device=device,
         )
         self._audio_stream.start()
-        log.info(f'[display] audio output stream started at {sample_rate} Hz')
+        actual = sd.query_devices(self._audio_stream.device)
+        log.info(f"[display] audio output stream started at {sample_rate} Hz on device "
+                f"{self._audio_stream.device} ({actual.get('name', 'unknown')})")
 
     def _audio_cb(self, outdata: np.ndarray, frames: int,
                   time_info, status):

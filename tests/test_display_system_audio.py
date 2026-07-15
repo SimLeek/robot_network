@@ -147,3 +147,53 @@ class TestRunOnceAppliesNormalization(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestResolveSpeakerDevice(unittest.TestCase):
+    """Regression coverage: sd.OutputStream() was never given a device=,
+    relying entirely on sounddevice's own implicit default -- on Linux
+    that can land on the first raw ALSA hardware device rather than the
+    one actually configured as the system output (pulse/pipewire)."""
+
+    def _make_sub(self):
+        sub = DisplaySubSystem.__new__(DisplaySubSystem)
+        sub._audio_stream = None
+        return sub
+
+    def test_explicit_setting_takes_priority_over_auto_detect(self):
+        sub = self._make_sub()
+        with patch('robonet.brain.display_system.settings', {'speaker_device': 3}):
+            self.assertEqual(sub._resolve_speaker_device(), 3)
+
+    def test_prefers_a_pulse_named_device_when_none_configured(self):
+        sub = self._make_sub()
+        devices = [
+            {'name': 'HDA Intel PCH: ALC892 Analog', 'max_output_channels': 2},
+            {'name': 'pulse', 'max_output_channels': 32},
+        ]
+        with patch('robonet.brain.display_system.settings', {'speaker_device': None}), \
+             patch('robonet.brain.display_system.sd.query_devices', return_value=devices):
+            self.assertEqual(sub._resolve_speaker_device(), 1)
+
+    def test_falls_back_to_pipewire_if_no_pulse_device(self):
+        sub = self._make_sub()
+        devices = [
+            {'name': 'HDA Intel PCH: ALC892 Analog', 'max_output_channels': 2},
+            {'name': 'pipewire', 'max_output_channels': 32},
+        ]
+        with patch('robonet.brain.display_system.settings', {'speaker_device': None}), \
+             patch('robonet.brain.display_system.sd.query_devices', return_value=devices):
+            self.assertEqual(sub._resolve_speaker_device(), 1)
+
+    def test_falls_back_to_none_when_nothing_preferred_found(self):
+        sub = self._make_sub()
+        devices = [{'name': 'HDA Intel PCH: ALC892 Analog', 'max_output_channels': 2}]
+        with patch('robonet.brain.display_system.settings', {'speaker_device': None}), \
+             patch('robonet.brain.display_system.sd.query_devices', return_value=devices):
+            self.assertIsNone(sub._resolve_speaker_device())
+
+    def test_query_failure_falls_back_to_none_rather_than_raising(self):
+        sub = self._make_sub()
+        with patch('robonet.brain.display_system.settings', {'speaker_device': None}), \
+             patch('robonet.brain.display_system.sd.query_devices', side_effect=OSError('no backend')):
+            self.assertIsNone(sub._resolve_speaker_device())
