@@ -307,3 +307,21 @@ these fixes should be implemented but are either large tasks or are blocked.
   along with all uncommitted working-tree changes -- unrelated to any
   code issue, just worth knowing the sandbox itself isn't durable
   storage. All reinstalled and 398/398 tests confirmed passing again.
+
+- **Pre-connection capability preview.** The 'radio'/'settings'/
+  'capabilities' menu structure Simleek described already existed
+  (MenuStateMachine, left/right key routing all the way from
+  moderngl_window's Keys through handle_keyboard to
+  _handle_capabilities_key, footer hint bars) -- it just had no
+  pre-connection path. set_endpoint_capabilities was only ever called
+  post-connection, even though ep.axes/ep.streams are already populated
+  on the Endpoint object the moment RobotCapabilities arrives during
+  discovery, well before any connection attempt.
+  Added: right-arrow on a highlighted (ready) endpoint in the radio menu
+  now previews its capabilities via a new preview_endpoint_capabilities
+  path and preview_capabilities/leave_to_radio state transitions,
+  returning to the radio menu (not main_menu) on escape. Preserves
+  whatever the actually-connected endpoint's capabilities are separately
+  (_connected_endpoint_caps) so a preview never clobbers them. No prior
+  test coverage existed for any of this -- added
+  tests/test_capabilities_preview.py.
