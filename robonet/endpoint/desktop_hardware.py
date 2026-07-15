@@ -61,8 +61,9 @@ def build_desktop_capabilities() -> RobotCapabilities:
                               # genuinely different number the brain needs to keep
                               # separate for mouse-position scaling to land correctly.
     streams = [
-        {'name': 'screen', 'type': 'video', 'width': screen.width, 'height': screen.height},
-        {'name': 'mic', 'type': 'audio', 'sample_rate': 48000, 'channels': 1},
+        {'name': 'screen', 'type': 'video', 'io': 'I', 'width': screen.width, 'height': screen.height},
+        {'name': 'mic', 'type': 'audio', 'io': 'I', 'sample_rate': 48000, 'channels': 1},
+        {'name': 'speaker', 'type': 'audio', 'io': 'O', 'sample_rate': 48000, 'channels': 1},
     ]
     return RobotCapabilities.build(axes=axes, streams=streams, hostname=HOSTNAME, endpoint_type='desktop')
 

@@ -114,6 +114,7 @@ class CamMicSpkRobotHardware(RobotHardware, ABC):
                 speaker = get_first_speaker_device()
             except DeviceNotFoundError:
                 log.error("Could not find a speaker device. Will be starting without a speaker.")
+        log.info(f"[hardware] using speaker device: {speaker!r}")
 
         with open(settings["psk_file"], "rb") as f:
             psk = f.read()

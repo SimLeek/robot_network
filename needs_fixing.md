@@ -325,3 +325,56 @@ these fixes should be implemented but are either large tasks or are blocked.
   (_connected_endpoint_caps) so a preview never clobbers them. No prior
   test coverage existed for any of this -- added
   tests/test_capabilities_preview.py.
+
+- **Sine tone still not heard -- correction of scope.** My earlier fix
+  (sounddevice output device selection) was entirely brain-side, but
+  the demo's sine tone travels brain->endpoint and plays on the
+  endpoint's own speaker via alsasink in _AudioRecvPipeline, using
+  examples/desktop/desktop_endpoint.py (robonet/endpoint, not
+  robonet/brain) -- a completely different code path. The endpoint-side
+  device selection (get_first_speaker_device -> find_speaker_devices,
+  which does correctly prepend 'default' when hardware is found) looked
+  structurally sound on read-through, so the exact remaining cause is
+  still open -- added visible logging of the actual device string used
+  ("[hardware] using speaker device: ...") since there was previously
+  none, which should narrow it down next test.
+
+- **Found and fixed the actual cause of "Capabilities" missing from the
+  main menu after connecting.** get_unique_endpoints deduped by raw
+  object id. The scanner's stale-removal path
+  (NetworkScanner._unregister, triggered when an endpoint isn't seen
+  for scan_interval*2 -- plausible on any transient network blip) fully
+  removes an endpoint from by_ip/by_hostname; if it's rediscovered
+  afterward, a *fresh* Endpoint object gets created for it. Meanwhile
+  RadioSubSystem._endpoints still holds the old, capabilities-populated
+  object under a different key (hostname:endpoint_type vs bare
+  hostname/ip), so both end up in the merged dict as distinct-by-id
+  entries. Connecting to the wrong (fresh, empty) one meant
+  ep.axes/ep.streams were empty, so _connect's own
+  `if getattr(ep, 'axes', None) or getattr(ep, 'streams', None)` gate
+  around set_endpoint_capabilities was never satisfied. This is very
+  likely the same root cause behind Simleek's earlier "it happened
+  again" note about _robot_capabilities_handler.
+  Fixed: get_unique_endpoints now dedupes by logical identity (hostname,
+  falling back to ip) instead of object id, preferring whichever
+  instance actually has capabilities_received=True when two collide.
+  Added tests/test_endpoint_dedup.py -- no prior coverage caught this at
+  all, since existing tests only ever populated one object per logical
+  endpoint.
+
+- **Streams now include the speaker (audio output), plus I/O tagging.**
+  build_desktop_capabilities only listed screen and mic -- both inputs
+  from the endpoint's perspective -- with no speaker (output) entry at
+  all, despite streams representing both directions. Added a speaker
+  stream (audio, 48000Hz, 1ch) and an `io: 'I'|'O'` field on every
+  stream entry; _fmt_stream now displays it in the capabilities menu.
+
+- **AV source switching (desktop capture vs camera, mic selection,
+  speaker selection) explicitly deprioritized per Simleek's own
+  request** -- static endpoint-side configuration (already supported via
+  MultiAVRobotHardware's camera/mic/speaker constructor params) is
+  sufficient for now; connecting to an endpoint should just work without
+  needing in-session reconfiguration. Revisit if it becomes a real need.
+
+- Simleek's own assessment: most remaining work is endpoint code, then
+  some menu code, very little if any brain code.

@@ -83,14 +83,15 @@ def _fmt_axis(a: dict) -> str:
 def _fmt_stream(s: dict) -> str:
     name = s.get('name', '?')
     t    = s.get('type', '?')
+    io   = s.get('io', '?')
     if 'mjpeg' in t or 'video' in t:
         w, h = s.get('width', '?'), s.get('height', '?')
-        return f'{name}  {t}  {w}x{h}'
+        return f'{name}  [{io}]  {t}  {w}x{h}'
     if 'audio' in t:
         sr = s.get('sample_rate', '?')
         ch = s.get('channels',    '?')
-        return f'{name}  {t}  {sr}Hz  ch{ch}'
-    return f'{name}  {t}'
+        return f'{name}  [{io}]  {t}  {sr}Hz  ch{ch}'
+    return f'{name}  [{io}]  {t}'
 
 class SelectionMenu:
     """
@@ -275,15 +276,24 @@ class SelectionMenu:
     # --- radio ---------------------------------------------------------
 
     def get_unique_endpoints(self):
-        seen_ids = set()
-        unique_endpoints = []
-
+        """Dedupe by logical identity (hostname, falling back to ip),
+        not raw object id -- the scanner can end up tracking a
+        different Endpoint object for what's logically the same
+        endpoint (e.g. after a transient stale-timeout removal and
+        rediscovery), silently orphaning whichever object actually has
+        capabilities_received=True in favor of a fresh, empty one.
+        When two objects collide on logical identity, keep whichever
+        is actually ready."""
+        best: Dict[str, Endpoint] = {}
         for ep in self._endpoints.values():
-            obj_id = id(ep)  # Or ep.unique_id if your class has one
-            if obj_id not in seen_ids:
-                unique_endpoints.append(ep)
-                seen_ids.add(obj_id)
-        return unique_endpoints
+            logical_key = ep.hostname or ep.ip
+            current = best.get(logical_key)
+            if current is None:
+                best[logical_key] = ep
+            elif (getattr(ep, 'capabilities_received', False)
+                  and not getattr(current, 'capabilities_received', False)):
+                best[logical_key] = ep
+        return list(best.values())
 
     def _radio_items(self) -> List[str]:
         """Build the current radio menu item list."""
