@@ -66,6 +66,13 @@ class AiPassthroughDemo(AISubSystem):
             await asyncio.sleep(poll_interval)
         return self._root.active_sub
 
+    async def _wait_for_media_ready(self, poll_interval: float = 0.5):
+        """Connecting only confirms the handshake completed -- the
+        actual video/audio pipelines can take several more seconds to
+        finish negotiating before real frames start arriving."""
+        while not (self.has_video and self.has_audio):
+            await asyncio.sleep(poll_interval)
+
     async def _circle_mouse(self, af, steps: int = 100):
         for i in range(steps):
             t = (i / steps) * 2 * math.pi
@@ -99,7 +106,10 @@ class AiPassthroughDemo(AISubSystem):
         desktop = await self._wait_for_desktop_connection()
         af = desktop.af_ai
 
-        log.info('[ai-demo] connected -- starting passthrough demo')
+        log.info('[ai-demo] connected -- waiting for video/audio to actually start flowing...')
+        await self._wait_for_media_ready()
+
+        log.info('[ai-demo] video and audio confirmed flowing -- starting passthrough demo')
         desktop.set_input_source('ai')
         try:
             await self._circle_mouse(af)

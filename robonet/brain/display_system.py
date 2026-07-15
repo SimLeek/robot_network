@@ -52,6 +52,7 @@ class DisplaySubSystem(SubSystem):
         self.win_cfg = None
         self.af_thru = None
         self.af_edit = None
+        self._fullscreen_key_disabled = False
 
     def start(self):
         self._start_audio(self._audio_sample_rate)
@@ -107,7 +108,23 @@ class DisplaySubSystem(SubSystem):
             mgl_config=self.win_cfg,
         )
 
+    def _disable_builtin_fullscreen_key(self):
+        """moderngl_window's own base Window class binds F11 to toggle
+        fullscreen by default, before the keypress ever reaches
+        pass_through_cb -- toggling fullscreen mid-keypress disrupts
+        forwarding that same press to the endpoint. fullscreen_key=None
+        is moderngl_window's own documented way to disable this."""
+        if self._fullscreen_key_disabled:
+            return
+        try:
+            wnd = self.displayer.displayer.config.wnd
+        except AttributeError:
+            return  # window not constructed yet -- retry next frame
+        wnd.fullscreen_key = None
+        self._fullscreen_key_disabled = True
+
     async def run_once(self, sm: 'ServerSystem'):
+        self._disable_builtin_fullscreen_key()
         t1 = time.time()
         self.displayer.update(self.in_img, 'screen')
         aud = self.in_aud

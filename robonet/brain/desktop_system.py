@@ -222,7 +222,7 @@ class DesktopSubSystem(SubSystem):
     # zoomed/panned/letterboxed display back into true screen
     # coordinates.
 
-    _AI_BUTTON_NAMES = {0: 'left', 1: 'right', 2: 'middle'}
+    _AI_BUTTON_NAMES = {1: 'left', 4: 'right', 2: 'middle'}  # must match desktop_hardware.py's _MOUSE_BUTTON_NAMES exactly (pyglet bitmask values)
 
     def set_input_source(self, source: str):
         """'human' or 'ai' -- whichever is active gets its input sent;
@@ -256,14 +256,14 @@ class DesktopSubSystem(SubSystem):
     def ai_mouse_press(self, button: str = 'left'):
         if self.input_source != 'ai':
             return
-        code = {v: k for k, v in self._AI_BUTTON_NAMES.items()}.get(button, 0)
+        code = {v: k for k, v in self._AI_BUTTON_NAMES.items()}.get(button, 1)
         x, y = self._ai_frac_to_pixel(self._ai_mouse_x, self._ai_mouse_y)
         self._root.radio.burst(MouseEvent(event_type=1, x=x, y=y, button=code, delta=0))
 
     def ai_mouse_release(self, button: str = 'left'):
         if self.input_source != 'ai':
             return
-        code = {v: k for k, v in self._AI_BUTTON_NAMES.items()}.get(button, 0)
+        code = {v: k for k, v in self._AI_BUTTON_NAMES.items()}.get(button, 1)
         x, y = self._ai_frac_to_pixel(self._ai_mouse_x, self._ai_mouse_y)
         self._root.radio.burst(MouseEvent(event_type=2, x=x, y=y, button=code, delta=0))
 
