@@ -15,7 +15,7 @@ from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC
 from robonet.endpoint.desktop_capture import DesktopCaptureError
 from robonet.endpoint.hardware_system import MultiAVRobotHardware
 from robonet.endpoint.radio_system import HOSTNAME
-from robonet.gst_io.devices import find_camera_devices, get_first_speaker_device, DeviceNotFoundError
+from robonet.gst_io.devices import find_camera_devices, get_first_mic_device, get_first_speaker_device, DeviceNotFoundError
 from robonet.gst_io.streamer_unencrypted import VIDEO_SOURCE_XIMAGESRC, AUDIO_SOURCE_DESKTOP_MIX
 import robonet.endpoint.settings as settings_
 
@@ -84,7 +84,7 @@ class DesktopHw(MultiAVRobotHardware):
     capture-side setting.
     """
 
-    def __init__(self, camera: str = None, speaker: str = None):
+    def __init__(self, camera: str = None, mic: str = None, speaker: str = None):
         if pyautogui is None:
             raise DesktopCaptureError(
                 "pyautogui could not be imported (it needs a live, connectable "
@@ -105,7 +105,20 @@ class DesktopHw(MultiAVRobotHardware):
         if webcam_device:
             video_sources[f'webcam:{webcam_device}'] = webcam_device
 
+        # The desktop mix (monitor + default mic) is always first, so it
+        # stays the default active input. A standalone mic entry is
+        # added alongside it as a selectable alternative (mic-only,
+        # without desktop audio mixed in).
         audio_inputs = {DESKTOP_AUDIO_IN_ID: AUDIO_SOURCE_DESKTOP_MIX}
+        mic_device = mic or settings['mic_device']
+        if mic_device is None:
+            try:
+                mic_device = get_first_mic_device()
+            except DeviceNotFoundError:
+                log.info("No standalone mic found -- desktop mix only.")
+        log.info(f"[hardware] using mic device: {mic_device!r}")
+        if mic_device:
+            audio_inputs[f'mic:{mic_device}'] = mic_device
 
         speaker_device = speaker or settings['speaker_device']
         if speaker_device is None:

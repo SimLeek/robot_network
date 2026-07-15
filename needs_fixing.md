@@ -417,3 +417,44 @@ these fixes should be implemented but are either large tasks or are blocked.
 
 - Confirmed AV source switching still explicitly out of scope, per
   Simleek's own prioritization.
+
+- **Audio deep-dive round (both directions), based on Simleek's beep
+  experiments -- which pinned down more than anything so far:**
+  1. Brain-side playback (sounddevice): found the known failure mode
+     matching every symptom. An exception escaping the OutputStream
+     callback ABORTS the stream: sounddevice only prints to stderr
+     (invisible under our logging) and the stream vanishes from
+     pavucontrol -- permanent silence with a "started" log line and no
+     other trace. Nothing detected this. Fixes: callback body fully
+     guarded (logs + outputs silence instead of dying), a
+     finished_callback that loudly WARNs whenever the stream stops for
+     any reason, status flags at WARNING, a one-time INFO on the first
+     real samples written (separates "callback never got data" from
+     "playing but inaudible/misrouted"), producer-side flatten+float32
+     (a (N,1) or float64 chunk would raise in the callback), and a
+     leftover buffer so chunk/frame size mismatches never discard audio
+     (opus decodes 960-sample chunks; blocksize=0 requests arbitrary
+     frame counts -- the old callback threw every mismatch's tail away).
+     This is NOT the OpenCV main-thread class of issue: PortAudio
+     callbacks legitimately run on their own thread; the hazard is
+     solely that errors there kill the stream silently.
+  2. play_audio setting existed but was read by NOTHING. Now actually
+     gates _start_audio.
+  3. Endpoint-side playback (GStreamer): Simleek's endpoint beep test
+     is the smoking gun -- ALSA 'default' silent, pipewire device
+     audible. alsasink device='default' hits the same unrouted hole.
+     _AudioRecvPipeline now uses autoaudiosink (which picks
+     pipewiresink/pulsesink/alsasink, whichever actually works) when
+     the device is 'default'/'auto'/empty; explicit strings (hw:X,Y)
+     stay honored via alsasink exactly as before. Sink choice logged.
+  4. DesktopHw now supports mic override too (arg -> mic_device
+     setting -> auto-detect), same pattern as camera/speaker; the
+     desktop mix stays first and therefore the default active input.
+  5. New: tests/test_integration_scenarios.py -- full brain->wire->
+     endpoint chains (real pack_obj/unpack_obj, real DesktopHw
+     handlers, mocks only at pyautogui): an AI clicking an on-screen
+     alert box it located by vision, an AI reacting to a 440Hz alarm
+     it detected by FFT in the audio feed, human/AI handoff arriving
+     correctly ordered at the endpoint, and a 12-point circle
+     surviving the wire with exact coordinate fidelity. The first one
+     would have caught the button-code mismatch automatically.

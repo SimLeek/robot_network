@@ -48,6 +48,8 @@ class DisplaySubSystem(SubSystem):
         self._audio_sample_rate: int = 48000
         self._audio_stream: Optional[sd.OutputStream] = None
         self._audio_queue: queue.Queue = queue.Queue(maxsize=8)
+        self._audio_leftover: np.ndarray = np.zeros(0, dtype=np.float32)
+        self._audio_started_playing: bool = False
 
         self.win_cfg = None
         self.af_thru = None
@@ -55,7 +57,12 @@ class DisplaySubSystem(SubSystem):
         self._fullscreen_key_disabled = False
 
     def start(self):
-        self._start_audio(self._audio_sample_rate)
+        # play_audio previously existed in settings but was read by
+        # nothing at all -- now it actually gates playback.
+        if settings["play_audio"]:
+            self._start_audio(self._audio_sample_rate)
+        else:
+            log.info('[display] play_audio=False -- received audio will be displayed but not played')
 
     def _resolve_speaker_device(self):
         """None = let sounddevice use its own implicit default. A
@@ -88,6 +95,8 @@ class DisplaySubSystem(SubSystem):
             self._audio_stream.stop()
             self._audio_stream.close()
         self._audio_sample_rate = sample_rate
+        self._audio_leftover = np.zeros(0, dtype=np.float32)
+        self._audio_started_playing = False
         device = self._resolve_speaker_device()
         self._audio_stream = sd.OutputStream(
             samplerate=sample_rate,
@@ -96,28 +105,49 @@ class DisplaySubSystem(SubSystem):
             callback=self._audio_cb,
             blocksize=0,  # let sounddevice pick a low-latency block size
             device=device,
+            finished_callback=self._on_audio_stream_finished,
         )
         self._audio_stream.start()
         actual = sd.query_devices(self._audio_stream.device)
         log.info(f"[display] audio output stream started at {sample_rate} Hz on device "
                 f"{self._audio_stream.device} ({actual.get('name', 'unknown')})")
 
+    def _on_audio_stream_finished(self):
+        # Fires whenever the stream stops for ANY reason -- including a
+        # callback exception aborting it, which is otherwise completely
+        # invisible (sounddevice only prints to stderr). Expected once
+        # on normal shutdown; at any other time it means playback died.
+        log.warning('[display] audio output stream stopped')
+
     def _audio_cb(self, outdata: np.ndarray, frames: int,
                   time_info, status):
-        # status carries underrun/overflow flags from the driver
-        if status:
-            log.debug(f'[display] audio stream status: {status}')
+        # Runs on PortAudio's own thread. An exception escaping this
+        # function ABORTS THE STREAM: sounddevice prints the traceback
+        # to stderr (invisible under our logging setup) and playback
+        # just stops -- from the outside it looks like permanent
+        # silence with nothing in pavucontrol. So the body is fully
+        # guarded: any failure logs and outputs silence for this
+        # callback instead of killing playback forever.
         try:
-            chunk = self._audio_queue.get_nowait()
-        except queue.Empty:
-            # No data ready -- output silence rather than blocking the audio thread
+            if status:
+                log.warning(f'[display] audio output status: {status}')
+            buf = self._audio_leftover
+            while len(buf) < frames:
+                try:
+                    buf = np.concatenate((buf, self._audio_queue.get_nowait()))
+                except queue.Empty:
+                    break
+            n = min(len(buf), frames)
+            outdata[:n, 0] = buf[:n]
+            if n < frames:
+                outdata[n:] = 0
+            self._audio_leftover = buf[n:]
+            if n and not self._audio_started_playing:
+                self._audio_started_playing = True
+                log.info('[display] first audio samples written to the output device')
+        except Exception as e:
+            log.error(f'[display] audio callback error (outputting silence): {e}')
             outdata[:] = 0
-            return
-        # chunk may be shorter or longer than frames; fit it safely
-        n = min(len(chunk), frames)
-        outdata[:n, 0] = chunk[:n]
-        if n < frames:
-            outdata[n:] = 0
 
     def stop(self):
         if self._audio_stream is not None:
@@ -177,8 +207,22 @@ class DisplaySubSystem(SubSystem):
 
     def update_audio(self, aud):
         self.in_aud = aud
-        # assuming the audio received has the same sample_rate, chunk size, etc.
+        if aud is None:
+            return
+        # Flatten + float32 up front: the stream callback assigns into
+        # a (frames, 1) float32 buffer, and a (N, 1)-shaped or float64
+        # chunk sneaking in here would raise inside the callback --
+        # which aborts the whole stream (see _audio_cb).
+        chunk = np.asarray(aud, dtype=np.float32).reshape(-1)
         try:
-            self._audio_queue.put_nowait(aud)
+            self._audio_queue.put_nowait(chunk)
         except queue.Full:
-            log.debug('[display] audio queue full -- dropping chunk')
+            # Stay realtime: drop the OLDEST chunk, keep the newest.
+            try:
+                self._audio_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._audio_queue.put_nowait(chunk)
+            except queue.Full:
+                log.debug('[display] audio queue full -- dropping chunk')

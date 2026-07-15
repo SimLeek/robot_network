@@ -32,6 +32,7 @@ _SETTINGS: dict[str, Any] = {
     # DesktopHw prefers an explicit constructor arg over this, and this
     # over auto-detect.
     "camera_device": None,
+    "mic_device": None,
     "speaker_device": None,
 }
 

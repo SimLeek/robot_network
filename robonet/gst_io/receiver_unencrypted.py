@@ -267,10 +267,29 @@ class _AudioRecvPipeline:
         outcaps = Gst.ElementFactory.make('capsfilter',   'aoutcaps')
 
         if self._direct_audio:
-            sink = Gst.ElementFactory.make('alsasink', 'asink')
-            if sink:
-                sink.set_property('device', self._audio_device)
-                sink.set_property('sync',   False)
+            dev = self._audio_device
+            if dev and dev not in ('default', 'auto'):
+                # An explicit device string (e.g. 'hw:1,0') is honored
+                # exactly as given, via alsasink.
+                sink = Gst.ElementFactory.make('alsasink', 'asink')
+                if sink:
+                    sink.set_property('device', dev)
+                    sink.set_property('sync',   False)
+                log.info(f'[gst-recv] audio sink: alsasink device={dev!r}')
+            else:
+                # Raw ALSA 'default' is frequently a dead end on
+                # pipewire/pulse systems: confirmed by direct testing on
+                # the actual endpoint, where a test tone on the default
+                # device was silent while the pipewire device played
+                # fine. autoaudiosink picks pipewiresink / pulsesink /
+                # alsasink in whatever order actually works on the box.
+                sink = Gst.ElementFactory.make('autoaudiosink', 'asink')
+                if sink:
+                    try:
+                        sink.set_property('sync', False)
+                    except TypeError:
+                        pass  # property proxying varies by GStreamer version
+                log.info('[gst-recv] audio sink: autoaudiosink (auto-routing)')
         else:
             sink = Gst.ElementFactory.make('appsink', 'asink')
             if sink:

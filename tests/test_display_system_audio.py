@@ -197,3 +197,101 @@ class TestResolveSpeakerDevice(unittest.TestCase):
         with patch('robonet.brain.display_system.settings', {'speaker_device': None}), \
              patch('robonet.brain.display_system.sd.query_devices', side_effect=OSError('no backend')):
             self.assertIsNone(sub._resolve_speaker_device())
+
+
+class TestAudioCallbackRobustness(unittest.TestCase):
+    """The callback runs on PortAudio's own thread, where an escaping
+    exception ABORTS THE STREAM -- sounddevice only prints to stderr,
+    so playback just silently stops forever (nothing in pavucontrol).
+    These verify the callback can no longer die that way, and that
+    chunk/frame size mismatches no longer discard audio."""
+
+    def _make_sub(self):
+        import queue as queue_mod
+        sub = DisplaySubSystem.__new__(DisplaySubSystem)
+        sub._audio_stream = None
+        sub._audio_queue = queue_mod.Queue(maxsize=8)
+        sub._audio_leftover = np.zeros(0, dtype=np.float32)
+        sub._audio_started_playing = True  # silence the first-play INFO log in tests
+        return sub
+
+    def _out(self, frames):
+        return np.zeros((frames, 1), dtype=np.float32)
+
+    def test_chunk_smaller_than_frames_pads_with_silence(self):
+        sub = self._make_sub()
+        sub._audio_queue.put(np.full(4, 0.5, dtype=np.float32))
+        out = self._out(8)
+
+        sub._audio_cb(out, 8, None, None)
+
+        np.testing.assert_array_equal(out[:4, 0], np.full(4, 0.5, dtype=np.float32))
+        np.testing.assert_array_equal(out[4:, 0], np.zeros(4, dtype=np.float32))
+
+    def test_oversized_chunk_tail_is_kept_for_the_next_callback(self):
+        # Regression: the old callback threw the tail away entirely.
+        sub = self._make_sub()
+        sub._audio_queue.put(np.arange(10, dtype=np.float32))
+        out1 = self._out(6)
+        out2 = self._out(6)
+
+        sub._audio_cb(out1, 6, None, None)
+        sub._audio_cb(out2, 6, None, None)
+
+        np.testing.assert_array_equal(out1[:, 0], np.arange(6, dtype=np.float32))
+        np.testing.assert_array_equal(out2[:4, 0], np.arange(6, 10, dtype=np.float32))
+
+    def test_multiple_small_chunks_get_concatenated(self):
+        sub = self._make_sub()
+        sub._audio_queue.put(np.full(3, 0.1, dtype=np.float32))
+        sub._audio_queue.put(np.full(3, 0.2, dtype=np.float32))
+        out = self._out(6)
+
+        sub._audio_cb(out, 6, None, None)
+
+        np.testing.assert_allclose(out[:3, 0], 0.1)
+        np.testing.assert_allclose(out[3:, 0], 0.2)
+
+    def test_empty_queue_outputs_silence_without_raising(self):
+        sub = self._make_sub()
+        out = self._out(8)
+        out.fill(9.9)  # pre-fill garbage to confirm it gets zeroed
+
+        sub._audio_cb(out, 8, None, None)
+
+        np.testing.assert_array_equal(out, np.zeros((8, 1), dtype=np.float32))
+
+    def test_a_poisoned_chunk_cannot_abort_the_stream(self):
+        # The critical guarantee: even a chunk that would raise during
+        # assignment logs-and-silences instead of letting the exception
+        # escape (which would kill the stream permanently).
+        sub = self._make_sub()
+        sub._audio_queue.put('not an array at all')
+        out = self._out(8)
+
+        sub._audio_cb(out, 8, None, None)  # must not raise
+
+    def test_update_audio_flattens_column_shaped_chunks(self):
+        # A (N,1)-shaped chunk assigned into outdata[:n, 0] raises in
+        # the callback -- update_audio must flatten before queueing.
+        sub = self._make_sub()
+        sub.in_aud = None
+
+        sub.update_audio(np.zeros((4, 1), dtype=np.float64))
+
+        queued = sub._audio_queue.get_nowait()
+        self.assertEqual(queued.ndim, 1)
+        self.assertEqual(queued.dtype, np.float32)
+
+    def test_update_audio_drops_oldest_not_newest_when_full(self):
+        sub = self._make_sub()
+        for i in range(8):
+            sub.update_audio(np.full(2, float(i), dtype=np.float32))
+
+        sub.update_audio(np.full(2, 99.0, dtype=np.float32))  # 9th chunk: queue full
+
+        chunks = []
+        while not sub._audio_queue.empty():
+            chunks.append(sub._audio_queue.get_nowait()[0])
+        self.assertNotIn(0.0, chunks)   # oldest was dropped
+        self.assertIn(99.0, chunks)     # newest was kept

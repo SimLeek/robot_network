@@ -15,14 +15,15 @@ from unittest.mock import patch, MagicMock
 
 class TestDesktopHwDevicePriority(unittest.TestCase):
 
-    def _make_settings(self, camera_device=None, speaker_device=None):
-        return {'camera_device': camera_device, 'speaker_device': speaker_device}
+    def _make_settings(self, camera_device=None, mic_device=None, speaker_device=None):
+        return {'camera_device': camera_device, 'mic_device': mic_device, 'speaker_device': speaker_device}
 
     def test_explicit_camera_arg_wins_over_everything(self):
         from robonet.endpoint.desktop_hardware import DesktopHw
         with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pg, \
              patch('robonet.endpoint.desktop_hardware.settings', self._make_settings(camera_device='/dev/video9')), \
              patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=['/dev/video0']), \
+             patch('robonet.endpoint.desktop_hardware.get_first_mic_device', return_value='hw:0,0'), \
              patch('robonet.endpoint.desktop_hardware.get_first_speaker_device', return_value='hw:0,0'):
             mock_pg.size.return_value = MagicMock(width=1920, height=1080)
             hw = DesktopHw(camera='/dev/video5')
@@ -34,6 +35,7 @@ class TestDesktopHwDevicePriority(unittest.TestCase):
         with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pg, \
              patch('robonet.endpoint.desktop_hardware.settings', self._make_settings(camera_device='/dev/video9')), \
              patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=['/dev/video0']), \
+             patch('robonet.endpoint.desktop_hardware.get_first_mic_device', return_value='hw:0,0'), \
              patch('robonet.endpoint.desktop_hardware.get_first_speaker_device', return_value='hw:0,0'):
             mock_pg.size.return_value = MagicMock(width=1920, height=1080)
             hw = DesktopHw()
@@ -46,6 +48,7 @@ class TestDesktopHwDevicePriority(unittest.TestCase):
         with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pg, \
              patch('robonet.endpoint.desktop_hardware.settings', self._make_settings()), \
              patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=['/dev/video0']), \
+             patch('robonet.endpoint.desktop_hardware.get_first_mic_device', return_value='hw:0,0'), \
              patch('robonet.endpoint.desktop_hardware.get_first_speaker_device', return_value='hw:0,0'):
             mock_pg.size.return_value = MagicMock(width=1920, height=1080)
             hw = DesktopHw()
@@ -57,6 +60,7 @@ class TestDesktopHwDevicePriority(unittest.TestCase):
         with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pg, \
              patch('robonet.endpoint.desktop_hardware.settings', self._make_settings(speaker_device='hw:9,9')), \
              patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=[]), \
+             patch('robonet.endpoint.desktop_hardware.get_first_mic_device', return_value='hw:0,0'), \
              patch('robonet.endpoint.desktop_hardware.get_first_speaker_device', return_value='hw:0,0'):
             mock_pg.size.return_value = MagicMock(width=1920, height=1080)
             hw = DesktopHw(speaker='hw:5,5')
@@ -68,6 +72,7 @@ class TestDesktopHwDevicePriority(unittest.TestCase):
         with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pg, \
              patch('robonet.endpoint.desktop_hardware.settings', self._make_settings(speaker_device='hw:9,9')), \
              patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=[]), \
+             patch('robonet.endpoint.desktop_hardware.get_first_mic_device', return_value='hw:0,0'), \
              patch('robonet.endpoint.desktop_hardware.get_first_speaker_device', return_value='hw:0,0'):
             mock_pg.size.return_value = MagicMock(width=1920, height=1080)
             hw = DesktopHw()
@@ -83,6 +88,7 @@ class TestDesktopHwDevicePriority(unittest.TestCase):
         with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pg, \
              patch('robonet.endpoint.desktop_hardware.settings', self._make_settings()), \
              patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=[]), \
+             patch('robonet.endpoint.desktop_hardware.get_first_mic_device', return_value='hw:0,0'), \
              patch('robonet.endpoint.desktop_hardware.get_first_speaker_device', return_value='hw:0,0'):
             mock_pg.size.return_value = MagicMock(width=1920, height=1080)
             hw = DesktopHw()  # must not raise
@@ -92,3 +98,40 @@ class TestDesktopHwDevicePriority(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestDesktopHwMicPriority(unittest.TestCase):
+    """Mic follows the same priority as camera/speaker: constructor
+    arg, then the mic_device setting, then auto-detect. The desktop mix
+    always stays first (and therefore the default active input)."""
+
+    def _make_settings(self, camera_device=None, mic_device=None, speaker_device=None):
+        return {'camera_device': camera_device, 'mic_device': mic_device, 'speaker_device': speaker_device}
+
+    def _build(self, ctor_mic=None, setting_mic=None, detected_mic='hw:0,0'):
+        from robonet.endpoint.desktop_hardware import DesktopHw
+        with patch('robonet.endpoint.desktop_hardware.pyautogui') as mock_pg, \
+             patch('robonet.endpoint.desktop_hardware.settings', self._make_settings(mic_device=setting_mic)), \
+             patch('robonet.endpoint.desktop_hardware.find_camera_devices', return_value=[]), \
+             patch('robonet.endpoint.desktop_hardware.get_first_mic_device', return_value=detected_mic), \
+             patch('robonet.endpoint.desktop_hardware.get_first_speaker_device', return_value='hw:0,0'):
+            mock_pg.size.return_value = MagicMock(width=1920, height=1080)
+            return DesktopHw(mic=ctor_mic)
+
+    def test_explicit_mic_arg_wins(self):
+        hw = self._build(ctor_mic='hw:5,5', setting_mic='hw:9,9')
+        self.assertIn('mic:hw:5,5', hw._audio_inputs)
+        self.assertNotIn('mic:hw:9,9', hw._audio_inputs)
+
+    def test_settings_mic_used_when_no_arg(self):
+        hw = self._build(setting_mic='hw:9,9')
+        self.assertIn('mic:hw:9,9', hw._audio_inputs)
+
+    def test_auto_detect_when_neither_given(self):
+        hw = self._build(detected_mic='hw:2,0')
+        self.assertIn('mic:hw:2,0', hw._audio_inputs)
+
+    def test_desktop_mix_stays_first_and_default(self):
+        hw = self._build(setting_mic='hw:9,9')
+        first_key = next(iter(hw._audio_inputs))
+        self.assertNotIn('mic:', first_key)  # desktop mix entry remains the default active input
