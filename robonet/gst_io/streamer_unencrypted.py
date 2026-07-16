@@ -20,7 +20,7 @@ from typing import Optional, TYPE_CHECKING, Union
 import gi
 gi.require_version('Gst',  '1.0')
 gi.require_version('GLib', '2.0')
-from gi.repository import Gst, GLib, GstAudio
+from gi.repository import Gst, GLib
 
 Gst.init(None)
 
@@ -380,9 +380,13 @@ class _AudioPipeline:
             return False
 
         pay.set_property('pt', 97)
-        info = GstAudio.AudioInfo()
-        info.set_format(GstAudio.AudioFormat.F32LE, self._sample_rate, 1)
-        caps = info.to_caps()
+
+        # Opus needs 48kHz + S16LE on your system
+        target_rate = 48000 if self._audio_codec == 'opus' else self._sample_rate
+        target_format = "S16LE" if self._audio_codec == 'opus' else "F32LE"
+
+        caps_str = f'audio/x-raw,format={target_format},layout=interleaved,rate={target_rate},channels=1'
+        caps = Gst.Caps.from_string(caps_str)
         capsflt.set_property('caps', caps)
         #capsflt.set_property('caps', Gst.Caps.from_string(
         #    f'audio/x-raw,format=F32LE,rate={self._sample_rate},channels=1'))
@@ -417,7 +421,7 @@ class _AudioPipeline:
             p.add(src)
             src_out = src
 
-        # Linking with conversion
+        # Linking
         src_out.link(conv)
         conv.link(resample)
         resample.link(capsflt)
