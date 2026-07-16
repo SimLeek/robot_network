@@ -50,15 +50,7 @@ class DisplaySubSystem(SubSystem):
         self._fullscreen_key_disabled = False
 
     def start(self):
-        # Audio playback lives in the GStreamer receive pipeline
-        # (play_locally on GstReceiver), confirmed working on hardware.
-        # The old sounddevice path is gone: the display loop blocks on
-        # vsync long enough to starve a realtime Python audio callback
-        # into constant clicks/underruns. in_aud still feeds the
-        # on-screen waveform and the AI.
-        if settings["play_audio"]:
-            log.info('[display] play_audio=True -- playback is handled by the '
-                    'GStreamer receive pipeline')
+        pass
 
     def stop(self):
         if self.displayer is not None:

@@ -180,9 +180,7 @@ class SelectionMenu:
         self._endpoint_page = 0
 
     def preview_endpoint_capabilities(self, caps: dict):
-        """Show a discovered (not yet connected) endpoint's capabilities
-        without disturbing whatever the actually-connected endpoint's
-        capabilities are -- those get restored when the preview ends."""
+        """Show a discovered endpoint's capabilities."""
         self._endpoint_caps = caps
         self._endpoint_page = 0
         self._caps_from_preview = True
@@ -276,14 +274,7 @@ class SelectionMenu:
     # --- radio ---------------------------------------------------------
 
     def get_unique_endpoints(self):
-        """Dedupe by logical identity (hostname, falling back to ip),
-        not raw object id -- the scanner can end up tracking a
-        different Endpoint object for what's logically the same
-        endpoint (e.g. after a transient stale-timeout removal and
-        rediscovery), silently orphaning whichever object actually has
-        capabilities_received=True in favor of a fresh, empty one.
-        When two objects collide on logical identity, keep whichever
-        is actually ready."""
+        """Dedupe by logical identity (hostname, falling back to ip)."""
         best: Dict[str, Endpoint] = {}
         for ep in self._endpoints.values():
             logical_key = ep.hostname or ep.ip

@@ -70,6 +70,8 @@ class AiPassthroughDemo(AISubSystem):
         """Connecting only confirms the handshake completed -- the
         actual video/audio pipelines can take several more seconds to
         finish negotiating before real frames start arriving."""
+        # note: the actual audio and video np.ndarrays can be found in:
+        #   self.in_aud and self.in_img
         while not (self.has_video and self.has_audio):
             await asyncio.sleep(poll_interval)
 
@@ -98,10 +100,8 @@ class AiPassthroughDemo(AISubSystem):
         gst_sender = self._root.menu.gst_sender
         original_mic = gst_sender._mic_device
         gst_sender.set_mic_device(AUDIO_SOURCE_SINE_TEST)
-        # Observed live: the tone was only heard on the second
-        # connection onward -- a freshly (re)built audio pipeline needs
-        # a moment before real samples flow. Settle before counting the
-        # tone's duration.
+        # a freshly built audio pipeline needs a moment before real samples flow.
+        # Settle before counting the tone's duration.
         await asyncio.sleep(2.0)
         await asyncio.sleep(seconds)
         gst_sender.set_mic_device(original_mic)

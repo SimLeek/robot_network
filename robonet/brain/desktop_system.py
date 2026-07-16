@@ -34,9 +34,7 @@ from robonet.desktop_control_spec import (
 # >= 0). Buttons are discrete one-shot triggers (tokens). Keyboard
 # isn't listed here -- too many possible keys for a fixed token enum --
 # see ai_key_press/ai_key_release instead.
-# Key hold watchdog: lossy networks drop KeyEvents -- including
-# releases -- leaving the endpoint mashing a key forever (observed
-# live: F11 repeating until process kill). The brain re-sends key-down
+# Key hold watchdog: lossy networks drop KeyEvents. The brain re-sends key-down
 # for every held key at this interval; the endpoint auto-releases any
 # key not refreshed within its KEY_WATCHDOG_TIMEOUT_S (1.0s = 4 missed
 # refreshes).
