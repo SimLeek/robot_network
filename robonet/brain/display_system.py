@@ -61,6 +61,7 @@ class DisplaySubSystem(SubSystem):
         # nothing at all -- now it actually gates playback.
         if settings["play_audio"]:
             self._start_audio(self._audio_sample_rate)
+            # pass # may remove if display glsl/gil blocks audio
         else:
             log.info('[display] play_audio=False -- received audio will be displayed but not played')
 
@@ -98,6 +99,7 @@ class DisplaySubSystem(SubSystem):
         self._audio_leftover = np.zeros(0, dtype=np.float32)
         self._audio_started_playing = False
         device = self._resolve_speaker_device()
+        print(f"resolved device: {device}")
         self._audio_stream = sd.OutputStream(
             samplerate=sample_rate,
             channels=1,
@@ -119,32 +121,37 @@ class DisplaySubSystem(SubSystem):
         # on normal shutdown; at any other time it means playback died.
         log.warning('[display] audio output stream stopped')
 
-    def _audio_cb(self, outdata: np.ndarray, frames: int,
-                  time_info, status):
-        # Runs on PortAudio's own thread. An exception escaping this
-        # function ABORTS THE STREAM: sounddevice prints the traceback
-        # to stderr (invisible under our logging setup) and playback
-        # just stops -- from the outside it looks like permanent
-        # silence with nothing in pavucontrol. So the body is fully
-        # guarded: any failure logs and outputs silence for this
-        # callback instead of killing playback forever.
+    def _audio_cb(self, outdata: np.ndarray, frames: int, time_info, status):
+        # Runs on PortAudio's own thread.
         try:
             if status:
                 log.warning(f'[display] audio output status: {status}')
-            buf = self._audio_leftover
-            while len(buf) < frames:
+            while True:
                 try:
-                    buf = np.concatenate((buf, self._audio_queue.get_nowait()))
+                    chunk = self._audio_queue.get_nowait()
+                    self._audio_leftover = np.concatenate((self._audio_leftover, chunk))
                 except queue.Empty:
                     break
-            n = min(len(buf), frames)
-            outdata[:n, 0] = buf[:n]
-            if n < frames:
+            if not self._audio_started_playing:
+                if len(self._audio_leftover) < 1024:
+                    outdata[:] = 0
+                    return
+                else:
+                    self._audio_started_playing = True
+                    log.info('[display] first audio samples written to the output device')
+            if len(self._audio_leftover) >= frames:
+                outdata[:, 0] = self._audio_leftover[:frames]
+                self._audio_leftover = self._audio_leftover[frames:]
+            else:
+                n = len(self._audio_leftover)
+                log.warning(f'[display] Audio underrun! Missed {frames - n} frames.')
+                if n > 0:
+                    outdata[:n, 0] = self._audio_leftover
                 outdata[n:] = 0
-            self._audio_leftover = buf[n:]
-            if n and not self._audio_started_playing:
-                self._audio_started_playing = True
-                log.info('[display] first audio samples written to the output device')
+                # Force a re-buffer
+                self._audio_leftover = np.array([], dtype='float32')
+                self._audio_started_playing = False
+
         except Exception as e:
             log.error(f'[display] audio callback error (outputting silence): {e}')
             outdata[:] = 0

@@ -74,6 +74,8 @@ class ServerSystem:
             self.ai.start()
         if self.active_sub is not None:
             self.active_sub.start()
+        if self.displayer is not None:
+            self.displayer.start()
 
     def stop(self):
         if self.ai is not None:

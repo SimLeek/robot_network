@@ -94,7 +94,7 @@ class AiPassthroughDemo(AISubSystem):
         await asyncio.sleep(0.1)
         desktop.ai_key_release('f11')
 
-    async def _play_sine_tone(self, seconds: float = 3.0):
+    async def _play_sine_tone(self, seconds: float = 5.0):
         gst_sender = self._root.menu.gst_sender
         original_mic = gst_sender._mic_device
         gst_sender.set_mic_device(AUDIO_SOURCE_SINE_TEST)

@@ -379,7 +379,7 @@ class _AudioPipeline:
 
         pay.set_property('pt', 97)
         capsflt.set_property('caps', Gst.Caps.from_string(
-            f'audio/x-raw,rate={self._sample_rate},channels=1'))
+            f'audio/x-raw,format=F32LE,rate={self._sample_rate},channels=1'))
         sink.set_property('host', self._server_ip)
         sink.set_property('port', AUDIO_PORT)
         sink.set_property('sync', False)
