@@ -368,19 +368,20 @@ class _AudioPipeline:
         is_desktop_mix = (self._mic_device == AUDIO_SOURCE_DESKTOP_MIX)
         is_sine_test = (self._mic_device == AUDIO_SOURCE_SINE_TEST)
 
-        capsflt= Gst.ElementFactory.make('capsfilter',   'acaps')
-        enc    = Gst.ElementFactory.make(self._enc_name, 'aenc')
-        pay    = Gst.ElementFactory.make(_rtp_audio_pay_name(self._audio_codec), 'apay')
-        sink   = Gst.ElementFactory.make('udpsink',      'asink')
+        capsflt = Gst.ElementFactory.make('capsfilter', 'acaps')
+        enc     = Gst.ElementFactory.make(self._enc_name, 'aenc')
+        pay     = Gst.ElementFactory.make(_rtp_audio_pay_name(self._audio_codec), 'apay')
+        sink    = Gst.ElementFactory.make('udpsink', 'asink')
+        conv    = Gst.ElementFactory.make('audioconvert', 'aconv')
+        resample = Gst.ElementFactory.make('audioresample', 'aresample')
 
-        if None in (capsflt, enc, pay, sink):
+        if None in (capsflt, enc, pay, sink, conv, resample):
             log.error('[gst] could not instantiate all audio pipeline elements')
             return False
 
         pay.set_property('pt', 97)
         info = GstAudio.AudioInfo()
         info.set_format(GstAudio.AudioFormat.F32LE, self._sample_rate, 1)
-        # info.set_layout(GstAudio.AudioLayout.INTERLEAVED)  # usually default
         caps = info.to_caps()
         capsflt.set_property('caps', caps)
         #capsflt.set_property('caps', Gst.Caps.from_string(
@@ -389,12 +390,10 @@ class _AudioPipeline:
         sink.set_property('port', AUDIO_PORT)
         sink.set_property('sync', False)
 
-        for el in (capsflt, enc, pay, sink):
+        for el in (capsflt, enc, pay, sink, conv, resample):
             p.add(el)
-        capsflt.link(enc)
-        enc.link(pay)
-        pay.link(sink)
 
+        # Source selection
         if is_desktop_mix:
             src_out = self._build_desktop_mix_source(p)
             if src_out is None:
@@ -418,7 +417,13 @@ class _AudioPipeline:
             p.add(src)
             src_out = src
 
-        src_out.link(capsflt)
+        # Linking with conversion
+        src_out.link(conv)
+        conv.link(resample)
+        resample.link(capsflt)
+        capsflt.link(enc)
+        enc.link(pay)
+        pay.link(sink)
 
         self._pipeline = p
         return True

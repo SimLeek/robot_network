@@ -264,17 +264,17 @@ class _AudioRecvPipeline:
         depay   = Gst.ElementFactory.make(depay_name,     'adepay')
         dec     = Gst.ElementFactory.make(self._dec_name, 'adec')
         conv    = Gst.ElementFactory.make('audioconvert', 'aconv')
+        resample = Gst.ElementFactory.make('audioresample', 'aresample')
         outcaps = Gst.ElementFactory.make('capsfilter',   'aoutcaps')
 
         if self._direct_audio:
             dev = self._audio_device
             if dev and dev not in ('default', 'auto'):
                 # An explicit device string (e.g. 'hw:1,0') is honored
-                # exactly as given, via alsasink.
                 sink = Gst.ElementFactory.make('alsasink', 'asink')
                 if sink:
                     sink.set_property('device', dev)
-                    sink.set_property('sync',   False)
+                    sink.set_property('sync', False)
                 log.info(f'[gst-recv] audio sink: alsasink device={dev!r}')
             else:
                 # Raw ALSA 'default' is frequently a dead end on
@@ -300,32 +300,35 @@ class _AudioRecvPipeline:
                 if self._on_audio is not None:
                     sink.connect('new-sample', self._pull_chunk)
 
-        if None in (src, depay, dec, conv, outcaps, sink):
+        if None in (src, depay, dec, conv, resample, outcaps, sink):
             log.error('[gst-recv] could not instantiate all audio recv elements')
             return False
 
         src.set_property('port', self._info.audio_port)
-        # Opus clock-rate is always 48000 per RFC 7587 regardless of output rate
+
+        # RTP caps for udpsrc
         clock_rate = 48000 if codec == 'opus' else self._info.sample_rate
         src.set_property('caps', Gst.Caps.from_string(
             f'application/x-rtp,media=audio,clock-rate={clock_rate},'
             f'encoding-name={codec.upper()},payload=97'))
 
+        # Output caps: F32LE mono
         info = GstAudio.AudioInfo()
         info.set_format(GstAudio.AudioFormat.F32LE, self._info.sample_rate, 1)
-        # info.set_layout(GstAudio.AudioLayout.INTERLEAVED)  # usually default
         caps = info.to_caps()
         outcaps.set_property('caps', caps)
         #outcaps.set_property('caps', Gst.Caps.from_string(
         #    f'audio/x-raw,format=F32LE,layout=interleaved,rate={self._info.sample_rate},channels=1'))
 
-        for el in (src, depay, dec, conv, outcaps, sink):
+        for el in (src, depay, dec, conv, resample, outcaps, sink):
             p.add(el)
 
+        # Linking
         src.link(depay)
         depay.link(dec)
         dec.link(conv)
-        conv.link(outcaps)
+        conv.link(resample)
+        resample.link(outcaps)
         outcaps.link(sink)
 
         def _pkt_probe(pad, info):
@@ -333,11 +336,13 @@ class _AudioRecvPipeline:
                 self._first_packet = True
                 log.info('[gst-recv] first RTP audio packet received')
             return Gst.PadProbeReturn.OK
+
         src.get_static_pad('src').add_probe(
             Gst.PadProbeType.BUFFER, _pkt_probe)
 
         bus = p.get_bus()
         bus.set_sync_handler(self._on_bus_sync, None)
+
         self._pipeline = p
         return True
 
