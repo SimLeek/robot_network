@@ -40,7 +40,7 @@ class TestSendFramesAlwaysAiAudio(unittest.TestCase):
     def _make_settings(self, **overrides):
         vals = {
             'psk_file': self.psk_path, 'server_psk_file': self.server_psk_path,
-            'ai_res': [640, 480], 'ai_fps': 30,
+            'ai_res': [640, 480], 'ai_fps': 30, 'play_audio': False,
             'auto_shutdown_enabled': False,
             'auto_shutdown_no_endpoints_timeout': 30.0,
             'auto_shutdown_idle_timeout': 600.0,

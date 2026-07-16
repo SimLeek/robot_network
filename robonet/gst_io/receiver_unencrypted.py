@@ -246,12 +246,14 @@ class _AudioRecvPipeline:
 
     def __init__(self, info: GstStreamInfo, dec_name: str,
                  direct_audio: bool, audio_device: str,
-                 on_audio: Optional[Callable[[np.ndarray], None]] = None):
+                 on_audio: Optional[Callable[[np.ndarray], None]] = None,
+                 play_locally: bool = False):
         self._info         = info
         self._dec_name     = dec_name
         self._direct_audio = direct_audio
         self._audio_device = audio_device
         self._on_audio     = on_audio
+        self._play_locally = play_locally
         self._pipeline:    Optional[Gst.Pipeline] = None
         self._first_packet = False
 
@@ -300,6 +302,37 @@ class _AudioRecvPipeline:
                 if self._on_audio is not None:
                     sink.connect('new-sample', self._pull_chunk)
 
+        play_elems = ()
+        if (not self._direct_audio) and self._play_locally:
+            # Local playback branch, tee'd off AFTER decode/convert/
+            # resample but BEFORE the S16LE appsink caps -- the numpy
+            # path keeps its fixed S16LE contract while playback
+            # negotiates whatever the real hardware wants through its
+            # own audioconvert. autoaudiosink for the same reason as
+            # the endpoint path: raw ALSA 'default' is a dead end on
+            # pipewire/pulse systems. This replaces the sounddevice
+            # playback path entirely -- the display loop's vsync
+            # blocking starves a realtime Python audio callback into
+            # constant clicks/underruns, while GStreamer's own threads
+            # are unaffected by it.
+            tee      = Gst.ElementFactory.make('tee',           'atee')
+            q_app    = Gst.ElementFactory.make('queue',         'aq_app')
+            q_play   = Gst.ElementFactory.make('queue',         'aq_play')
+            conv2    = Gst.ElementFactory.make('audioconvert',  'aconv2')
+            playsink = Gst.ElementFactory.make('autoaudiosink', 'aplaysink')
+            if playsink is not None:
+                try:
+                    playsink.set_property('sync', False)
+                except TypeError:
+                    pass  # property proxying varies by GStreamer version
+            play_elems = (tee, q_app, q_play, conv2, playsink)
+            if None in play_elems:
+                log.warning('[gst-recv] local playback elements unavailable -- '
+                            'continuing without local audio playback')
+                play_elems = ()
+            else:
+                log.info('[gst-recv] local audio playback: autoaudiosink (tee off receive pipeline)')
+
         if None in (src, depay, dec, conv, resample, outcaps, sink):
             log.error('[gst-recv] could not instantiate all audio recv elements')
             return False
@@ -320,7 +353,7 @@ class _AudioRecvPipeline:
         #outcaps.set_property('caps', Gst.Caps.from_string(
         #    f'audio/x-raw,format=F32LE,layout=interleaved,rate={self._info.sample_rate},channels=1'))
 
-        for el in (src, depay, dec, conv, resample, outcaps, sink):
+        for el in (src, depay, dec, conv, resample, outcaps, sink) + play_elems:
             p.add(el)
 
         # Linking
@@ -328,7 +361,15 @@ class _AudioRecvPipeline:
         depay.link(dec)
         dec.link(conv)
         conv.link(resample)
-        resample.link(outcaps)
+        if play_elems:
+            resample.link(tee)
+            tee.link(q_app)        # element.link auto-requests a tee src pad
+            q_app.link(outcaps)
+            tee.link(q_play)
+            q_play.link(conv2)
+            conv2.link(playsink)
+        else:
+            resample.link(outcaps)
         outcaps.link(sink)
 
         def _pkt_probe(pad, info):
@@ -401,7 +442,13 @@ class _AudioRecvPipeline:
         if not ok:
             return Gst.FlowReturn.ERROR
         try:
-            chunk = np.frombuffer(mapinfo.data, dtype=np.float32).copy()
+            # Caps are S16LE end-to-end (F32LE is not supported by the
+            # actual audio hardware on most systems, confirmed by
+            # direct testing). Convert to float32 in [-1, 1] here at
+            # the boundary so every downstream consumer (display
+            # waveform, AI, playback queue) sees one consistent format.
+            raw = np.frombuffer(mapinfo.data, dtype=np.int16)
+            chunk = raw.astype(np.float32) / 32768.0
             self._on_audio(chunk)
         except Exception as e:
             log.error(f'[gst-recv] audio callback error: {e}')
@@ -432,11 +479,13 @@ class GstReceiver:
                  recv_img_callback:       Optional[Callable[[np.ndarray], None]] = None,
                  direct_audio:       bool                                   = False,
                  audio_output_device: str                                   = 'default',
-                 recv_audio_callback: Optional[Callable[[np.ndarray], None]] = None):
+                 recv_audio_callback: Optional[Callable[[np.ndarray], None]] = None,
+                 play_locally: bool = False):
         self._recv_image_callback = recv_img_callback
         self._direct_audio        = direct_audio
         self._audio_device        = audio_output_device
         self._recv_audio_callback = recv_audio_callback
+        self._play_locally        = play_locally
 
         self._info:    Optional[GstStreamInfo]      = None
         self._vpipe:   Optional[_VideoRecvPipeline] = None
@@ -521,7 +570,8 @@ class GstReceiver:
         for dec_name in _audio_decoder_candidates(self._info.audio_codec):
             log.info(f'[gst-recv] trying audio decoder: {dec_name}')
             pipe = _AudioRecvPipeline(
-                self._info, dec_name, self._direct_audio, self._audio_device, on_audio=on_audio)
+                self._info, dec_name, self._direct_audio, self._audio_device, on_audio=on_audio,
+                play_locally=self._play_locally)
             if not pipe.build():
                 log.warning(f'[gst-recv] {dec_name}: build failed, trying next')
                 continue

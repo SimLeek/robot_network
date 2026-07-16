@@ -295,3 +295,33 @@ class TestAudioCallbackRobustness(unittest.TestCase):
             chunks.append(sub._audio_queue.get_nowait()[0])
         self.assertNotIn(0.0, chunks)   # oldest was dropped
         self.assertIn(99.0, chunks)     # newest was kept
+
+
+class TestUpdateAudioFormats(unittest.TestCase):
+    """update_audio accepts None (early return, no dtype access), raw
+    int16 (converted to float32 [-1, 1]), and float input unchanged."""
+
+    def _make_sub(self):
+        import queue as queue_mod
+        sub = DisplaySubSystem.__new__(DisplaySubSystem)
+        sub._audio_stream = None
+        sub._audio_queue = queue_mod.Queue(maxsize=8)
+        return sub
+
+    def test_none_does_not_crash_on_dtype_access(self):
+        # Regression: aud.dtype was checked before the None check.
+        sub = self._make_sub()
+        sub.update_audio(None)  # must not raise
+        self.assertIsNone(sub.in_aud)
+
+    def test_int16_input_is_normalized_to_float(self):
+        sub = self._make_sub()
+        sub.update_audio(np.array([0, 16384, -16384], dtype=np.int16))
+        np.testing.assert_allclose(sub.in_aud, [0.0, 0.5, -0.5], atol=1e-6)
+        self.assertEqual(sub.in_aud.dtype, np.float32)
+
+    def test_float_input_passes_through_as_float32(self):
+        sub = self._make_sub()
+        sub.update_audio(np.array([0.25, -0.25], dtype=np.float64))
+        np.testing.assert_allclose(sub.in_aud, [0.25, -0.25])
+        self.assertEqual(sub.in_aud.dtype, np.float32)

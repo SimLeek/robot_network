@@ -458,3 +458,37 @@ these fixes should be implemented but are either large tasks or are blocked.
      correctly ordered at the endpoint, and a 12-point circle
      surviving the wire with exact coordinate fidelity. The first one
      would have caught the button-code mismatch automatically.
+
+- **S16LE end-to-end completed (building on Simleek's commits), plus
+  brain-side playback moved into GStreamer.** Simleek established that
+  F32LE simply isn't supported by the actual audio hardware on most
+  systems and standardized the GStreamer caps on S16LE; the remaining
+  disagreeing layer was _pull_chunk, which still read the bytes as
+  float32 -- S16=2 bytes/sample vs F32=4 explains the measured
+  "almost exactly twice as much data". _pull_chunk now reads int16 and
+  converts to float32 [-1,1] at the boundary, so every consumer
+  (display waveform, AI, playback) keeps one consistent format. The
+  sender's non-opus F32LE fallback is now S16LE unconditionally, and
+  update_audio's None-before-dtype ordering bug is fixed.
+  Brain-side playback: the sounddevice approach is dead on arrival
+  with this display loop -- vsync blocking starves the realtime
+  callback into constant clicks/underruns no matter the buffering
+  (confirmed on hardware). GstReceiver now takes play_locally (wired
+  from the play_audio setting): the receive pipeline tees after
+  decode/convert/resample into the S16LE appsink branch (numpy,
+  unchanged) and an audioconvert->autoaudiosink branch that negotiates
+  its own format with the real hardware. Works headless. The
+  sounddevice machinery in display_system stays present but unstarted
+  until the GStreamer path is confirmed on hardware, then should be
+  removed outright.
+  Still open: sine tone works on the SECOND connection onward, not the
+  first -- plausibly the set_mic_device restore-timing note from
+  earlier, or initial autoaudiosink negotiation; retest after S16LE.
+  The desktop-mix monitor loop carrying the sine back to the brain is
+  intentional and useful (full round-trip health check), per Simleek.
+
+- **Commit authorship corrected: earlier commits this branch were
+  wrongly authored as Simleek** (Claude restored the wiped git config
+  with the repo owner's identity after the environment reset). Config
+  now set to Claude <noreply@anthropic.com> going forward; history not
+  rewritten.

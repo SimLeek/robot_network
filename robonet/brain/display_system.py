@@ -57,13 +57,17 @@ class DisplaySubSystem(SubSystem):
         self._fullscreen_key_disabled = False
 
     def start(self):
-        # play_audio previously existed in settings but was read by
-        # nothing at all -- now it actually gates playback.
+        # Audio playback has moved to the GStreamer receive pipeline
+        # (play_locally on GstReceiver): the display loop blocks on
+        # vsync long enough to starve a realtime sounddevice callback,
+        # producing constant clicks/underruns no matter the buffering
+        # (confirmed on real hardware). in_aud still feeds the on-screen
+        # waveform and the AI. The sounddevice machinery below stays,
+        # unstarted, until the GStreamer path is confirmed working on
+        # hardware -- then it can be removed outright.
         if settings["play_audio"]:
-            self._start_audio(self._audio_sample_rate)
-            # pass # may remove if display glsl/gil blocks audio
-        else:
-            log.info('[display] play_audio=False -- received audio will be displayed but not played')
+            log.info('[display] play_audio=True -- playback is handled by the '
+                    'GStreamer receive pipeline, not sounddevice')
 
     def _resolve_speaker_device(self):
         """None = let sounddevice use its own implicit default. A
@@ -213,14 +217,16 @@ class DisplaySubSystem(SubSystem):
         self.in_img = img
 
     def update_audio(self, aud):
-        if aud.dtype == np.int16:
-            aud = aud.astype(np.float32) / 32768.0  # Normalize to [-1.0, 1.0]
+        if aud is None:
+            self.in_aud = None
+            return
+        # The receive path already converts to float32 [-1, 1], but
+        # accept raw int16 defensively too.
+        if getattr(aud, 'dtype', None) == np.int16:
+            aud = aud.astype(np.float32) / 32768.0
         else:
             aud = np.asarray(aud, dtype=np.float32)
-
         self.in_aud = aud
-        if aud is None:
-            return
         # Flatten + float32 up front: the stream callback assigns into
         # a (frames, 1) float32 buffer, and a (N, 1)-shaped or float64
         # chunk sneaking in here would raise inside the callback --

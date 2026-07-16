@@ -381,11 +381,12 @@ class _AudioPipeline:
 
         pay.set_property('pt', 97)
 
-        # Opus needs 48kHz + S16LE on your system
+        # S16LE end-to-end: F32LE is not actually supported by the audio
+        # hardware on this (and most) systems -- confirmed by direct
+        # testing. Opus additionally requires 48kHz.
         target_rate = 48000 if self._audio_codec == 'opus' else self._sample_rate
-        target_format = "S16LE" if self._audio_codec == 'opus' else "F32LE"
 
-        caps_str = f'audio/x-raw,format={target_format},layout=interleaved,rate={target_rate},channels=1'
+        caps_str = f'audio/x-raw,format=S16LE,layout=interleaved,rate={target_rate},channels=1'
         caps = Gst.Caps.from_string(caps_str)
         capsflt.set_property('caps', caps)
         #capsflt.set_property('caps', Gst.Caps.from_string(

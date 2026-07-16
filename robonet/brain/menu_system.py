@@ -88,10 +88,8 @@ class MenuSubSystem(SubSystem):
                                      mic_device=mic,
                                      sample_rate=48000)
         self._gst_receiver = GstReceiver(recv_img_callback=self.on_img,
-                                         recv_audio_callback=self.on_audio
-                                         #direct_audio=False,  # <- gst will play received audio directly to speaker
-                                         #audio_output_device=speaker
-                                         )
+                                         recv_audio_callback=self.on_audio,
+                                         play_locally=settings["play_audio"])
 
     def set_endpoints(self, eps):
         self._menu.set_endpoints(eps)
