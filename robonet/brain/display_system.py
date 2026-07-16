@@ -213,6 +213,11 @@ class DisplaySubSystem(SubSystem):
         self.in_img = img
 
     def update_audio(self, aud):
+        if aud.dtype == np.int16:
+            aud = aud.astype(np.float32) / 32768.0  # Normalize to [-1.0, 1.0]
+        else:
+            aud = np.asarray(aud, dtype=np.float32)
+
         self.in_aud = aud
         if aud is None:
             return
