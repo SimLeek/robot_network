@@ -20,7 +20,7 @@ from typing import Optional, TYPE_CHECKING, Union
 import gi
 gi.require_version('Gst',  '1.0')
 gi.require_version('GLib', '2.0')
-from gi.repository import Gst, GLib
+from gi.repository import Gst, GLib, GstAudio
 
 Gst.init(None)
 
@@ -378,8 +378,13 @@ class _AudioPipeline:
             return False
 
         pay.set_property('pt', 97)
-        capsflt.set_property('caps', Gst.Caps.from_string(
-            f'audio/x-raw,format=F32LE,rate={self._sample_rate},channels=1'))
+        info = GstAudio.AudioInfo()
+        info.set_format(GstAudio.AudioFormat.F32LE, self._info.sample_rate, 1)
+        # info.set_layout(GstAudio.AudioLayout.INTERLEAVED)  # usually default
+        caps = info.to_caps()
+        capsflt.set_property('caps', caps)
+        #capsflt.set_property('caps', Gst.Caps.from_string(
+        #    f'audio/x-raw,format=F32LE,rate={self._sample_rate},channels=1'))
         sink.set_property('host', self._server_ip)
         sink.set_property('port', AUDIO_PORT)
         sink.set_property('sync', False)

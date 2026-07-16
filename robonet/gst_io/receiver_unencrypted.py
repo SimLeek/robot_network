@@ -18,7 +18,7 @@ from typing import Optional, Callable, TYPE_CHECKING
 import gi
 gi.require_version('Gst',  '1.0')
 gi.require_version('GLib', '2.0')
-from gi.repository import Gst, GLib
+from gi.repository import Gst, GLib, GstAudio
 
 Gst.init(None)
 
@@ -311,8 +311,13 @@ class _AudioRecvPipeline:
             f'application/x-rtp,media=audio,clock-rate={clock_rate},'
             f'encoding-name={codec.upper()},payload=97'))
 
-        outcaps.set_property('caps', Gst.Caps.from_string(
-            f'audio/x-raw,format=F32LE,rate={self._info.sample_rate},channels=1'))
+        info = GstAudio.AudioInfo()
+        info.set_format(GstAudio.AudioFormat.F32LE, self._info.sample_rate, 1)
+        # info.set_layout(GstAudio.AudioLayout.INTERLEAVED)  # usually default
+        caps = info.to_caps()
+        outcaps.set_property('caps', caps)
+        #outcaps.set_property('caps', Gst.Caps.from_string(
+        #    f'audio/x-raw,format=F32LE,layout=interleaved,rate={self._info.sample_rate},channels=1'))
 
         for el in (src, depay, dec, conv, outcaps, sink):
             p.add(el)
