@@ -8,6 +8,7 @@ KeyEvent/MouseEvent bursts.
 from __future__ import annotations
 
 import typing
+import asyncio
 from typing import Dict, Optional
 
 from robonet.brain.util.action_factory import ActionFactory
@@ -33,6 +34,14 @@ from robonet.desktop_control_spec import (
 # >= 0). Buttons are discrete one-shot triggers (tokens). Keyboard
 # isn't listed here -- too many possible keys for a fixed token enum --
 # see ai_key_press/ai_key_release instead.
+# Key hold watchdog: lossy networks drop KeyEvents -- including
+# releases -- leaving the endpoint mashing a key forever (observed
+# live: F11 repeating until process kill). The brain re-sends key-down
+# for every held key at this interval; the endpoint auto-releases any
+# key not refreshed within its KEY_WATCHDOG_TIMEOUT_S (1.0s = 4 missed
+# refreshes).
+KEY_REFRESH_INTERVAL_S = 0.25
+
 AI_NEURON_MOUSE_X = 0
 AI_NEURON_MOUSE_Y = 1
 AI_TOKEN_MOUSE_LEFT_PRESS = 0
@@ -72,6 +81,8 @@ class DesktopSubSystem(SubSystem):
         # nothing here depends on self._root.displayer.
         self.input_source = 'human'
         self._ai_mouse_x, self._ai_mouse_y = 0.5, 0.5
+        self._held_keys_brain: dict = {}   # key name -> modifiers string, for the refresh loop
+        self._running = False
         # Independent of DisplaySubSystem's af_thru/af_edit, which only
         # exist when a display window does. AI passthrough works with
         # no display at all.
@@ -82,10 +93,12 @@ class DesktopSubSystem(SubSystem):
 
     def start(self):
         self._running = True
+        self._running = True
         self._bind_input()
         log.info(describe_control_interface())
 
     def stop(self):
+        self._running = False
         self._running = False
         self._unbind_input()
 
@@ -134,11 +147,9 @@ class DesktopSubSystem(SubSystem):
         self._bound = False
 
     def _on_keyboard(self, key, action, modifiers):
-        if self.input_source != 'human':
-            return
         d = self._root.displayer
-        if d is None or self._root.menu.visible:
-            return  # don't send control while the menu is open
+        if d is None:
+            return
         wkeys = d.displayer.displayer.config.wnd.keys
         if action not in (wkeys.ACTION_PRESS, wkeys.ACTION_RELEASE):
             return  # ignore repeats -- the endpoint's keyDown already covers "held"
@@ -149,8 +160,21 @@ class DesktopSubSystem(SubSystem):
         if getattr(modifiers, 'ctrl', False):  mods.append('ctrl')
         if getattr(modifiers, 'shift', False): mods.append('shift')
         if getattr(modifiers, 'alt', False):   mods.append('alt')
-        self._root.radio.burst(KeyEvent(
-            key=name, pressed=(action == wkeys.ACTION_PRESS), modifiers=','.join(mods)))
+        mods_s = ','.join(mods)
+        pressed = (action == wkeys.ACTION_PRESS)
+        # Track the physical hold BEFORE any transmit gating: a release
+        # swallowed because the menu opened mid-hold (or the input
+        # source switched) must still stop the refresh loop, so the
+        # endpoint's watchdog releases the key within its timeout.
+        if pressed:
+            self._held_keys_brain[name] = mods_s
+        else:
+            self._held_keys_brain.pop(name, None)
+        if self.input_source != 'human':
+            return
+        if self._root.menu.visible:
+            return  # don't send control while the menu is open
+        self._root.radio.burst(KeyEvent(key=name, pressed=pressed, modifiers=mods_s))
 
     def _frac_to_pixel(self, tx: float, ty: float) -> tuple:
         """Raw normalized fractions (within the full displayed canvas,
@@ -273,11 +297,13 @@ class DesktopSubSystem(SubSystem):
         self._root.radio.burst(MouseEvent(event_type=3, x=0, y=0, button=0, delta=int(delta)))
 
     def ai_key_press(self, key: str, modifiers: str = ''):
+        self._held_keys_brain[key] = modifiers  # tracked regardless of gating -- see _on_keyboard
         if self.input_source != 'ai':
             return
         self._root.radio.burst(KeyEvent(key=key, pressed=True, modifiers=modifiers))
 
     def ai_key_release(self, key: str, modifiers: str = ''):
+        self._held_keys_brain.pop(key, None)
         if self.input_source != 'ai':
             return
         self._root.radio.burst(KeyEvent(key=key, pressed=False, modifiers=modifiers))
@@ -323,5 +349,17 @@ class DesktopSubSystem(SubSystem):
         if dx or dy:
             self.viewport.pan_by(dx, dy, source_w, source_h, display_w, display_h)
 
+    def _refresh_held_keys(self):
+        """One watchdog tick: re-send key-down for every held key so
+        the endpoint knows the hold is still real. See
+        KEY_REFRESH_INTERVAL_S for why."""
+        for name, mods_s in list(self._held_keys_brain.items()):
+            self._root.radio.burst(KeyEvent(key=name, pressed=True, modifiers=mods_s))
+
+    async def _key_refresh_loop(self):
+        while self._running:
+            self._refresh_held_keys()
+            await asyncio.sleep(KEY_REFRESH_INTERVAL_S)
+
     def async_loops(self, sm: 'ServerSystem'):
-        return []  # purely event-driven -- no polling loop needed
+        return [self._key_refresh_loop()]  # purely event-driven -- no polling loop needed

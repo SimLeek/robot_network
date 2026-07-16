@@ -152,7 +152,7 @@ class _FakeDesktopHw:
     """Minimal DesktopHw stand-in: just the two attributes
     _on_key_event/_on_mouse_event actually touch."""
     def __init__(self):
-        self._held_keys = set()
+        self._held_keys = {}
         self._held_buttons = set()
 
 
@@ -462,10 +462,12 @@ class TestDesktopSubSystemLifecycle(unittest.TestCase):
 
         sub._root.displayer.af_thru.unbind_keyboard.assert_not_called()
 
-    def test_async_loops_is_empty(self):
+    def test_async_loops_returns_the_key_refresh_loop(self):
         from robonet.brain.desktop_system import DesktopSubSystem
         sub = DesktopSubSystem(endpoint=MagicMock())
-        self.assertEqual(sub.async_loops(MagicMock()), [])
+        loops = sub.async_loops(MagicMock())
+        self.assertEqual(len(loops), 1)  # the key-hold refresh watchdog
+        loops[0].close()  # not running it here -- avoid the un-awaited warning
 
 
 class TestDesktopSubSystemKeyboardForwarding(unittest.TestCase):

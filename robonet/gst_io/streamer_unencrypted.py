@@ -172,11 +172,12 @@ class _VideoPipeline:
         capsflt = Gst.ElementFactory.make('capsfilter',   'vcaps')
         conv    = Gst.ElementFactory.make('videoconvert', 'vconv')
         outcaps = Gst.ElementFactory.make('capsfilter',   'voutcaps')
+        vq      = Gst.ElementFactory.make('queue',        'vq')
         enc     = Gst.ElementFactory.make(self._enc_name, 'venc')
         pay     = Gst.ElementFactory.make(_rtp_pay_name(self._video_codec), 'vpay')
         sink    = Gst.ElementFactory.make('udpsink',      'vsink')
 
-        if None in (src, scale, capsflt, conv, outcaps, enc, pay, sink):
+        if None in (src, scale, capsflt, conv, outcaps, vq, enc, pay, sink):
             log.error('[gst] could not instantiate all video pipeline elements')
             return False
 
@@ -192,11 +193,31 @@ class _VideoPipeline:
         if self._video_codec == 'h264':
             pay.set_property('config-interval', 1)
         _apply_bitrate(enc, self._enc_name, self._bitrate)
+        # Anti-congestion: if the encoder or network can't keep up,
+        # drop stale frames AT THE SOURCE instead of letting a backlog
+        # build -- a backlog is exactly the "receiver drawing
+        # seconds-old frames at 2fps" failure seen on degraded wifi.
+        vq.set_property('leaky', 2)  # downstream: old buffers get dropped
+        vq.set_property('max-size-buffers', 1)
+        vq.set_property('max-size-bytes', 0)
+        vq.set_property('max-size-time', 0)
+        # x264enc's defaults buffer 40+ frames of rc-lookahead plus
+        # B-frame reordering -- well over a second of latency at 30fps
+        # before a single packet leaves the machine.
+        if self._enc_name == 'x264enc':
+            enc.set_property('tune', 'zerolatency')
+            enc.set_property('speed-preset', 'ultrafast')
+            enc.set_property('key-int-max', max(1, int(self._fps)) * 2)
+        elif self._enc_name in ('nvh264enc', 'nvh265enc'):
+            try:
+                enc.set_property('zerolatency', True)
+            except TypeError:
+                pass  # property availability varies across plugin versions
         sink.set_property('host', self._receiver_ip)
         sink.set_property('port', VIDEO_PORT)
         sink.set_property('sync', False)
 
-        for el in (src, scale, capsflt, conv, outcaps, enc, pay, sink):
+        for el in (src, scale, capsflt, conv, outcaps, vq, enc, pay, sink):
             p.add(el)
 
         src.link(scale)
@@ -204,14 +225,15 @@ class _VideoPipeline:
         capsflt.link(conv)
         conv.link(outcaps)
 
+        outcaps.link(vq)
         if self._video_codec in ('h264', 'h265'):
             parse = Gst.ElementFactory.make(f'{self._video_codec}parse', 'vparse')
             p.add(parse)
-            outcaps.link(enc)
+            vq.link(enc)
             enc.link(parse)
             parse.link(pay)
         else:
-            outcaps.link(enc)
+            vq.link(enc)
             enc.link(pay)
 
         pay.link(sink)

@@ -98,6 +98,11 @@ class AiPassthroughDemo(AISubSystem):
         gst_sender = self._root.menu.gst_sender
         original_mic = gst_sender._mic_device
         gst_sender.set_mic_device(AUDIO_SOURCE_SINE_TEST)
+        # Observed live: the tone was only heard on the second
+        # connection onward -- a freshly (re)built audio pipeline needs
+        # a moment before real samples flow. Settle before counting the
+        # tone's duration.
+        await asyncio.sleep(2.0)
         await asyncio.sleep(seconds)
         gst_sender.set_mic_device(original_mic)
 

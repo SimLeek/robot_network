@@ -492,3 +492,34 @@ these fixes should be implemented but are either large tasks or are blocked.
   with the repo owner's identity after the environment reset). Config
   now set to Claude <noreply@anthropic.com> going forward; history not
   rewritten.
+
+- **Post-music-milestone round (audio confirmed good on hardware:
+  clicks gone, quality sufficient for detection/pitch/TTS work):**
+  1. sounddevice playback fully removed from display_system per
+     Simleek's finalize call -- the GStreamer play_locally tee is the
+     confirmed path. Brain settings' speaker_device removed with it.
+  2. Key hold watchdog (both sides). Lossy networks drop KeyEvents
+     including releases -- observed live as F11 mashing until process
+     kill. Brain re-sends key-down every 0.25s per held key
+     (KEY_REFRESH_INTERVAL_S, desktop_system) tracked across BOTH input
+     sources and updated even when transmit is gated (menu open /
+     source switched mid-hold); endpoint auto-releases any held key not
+     refreshed within 1.0s (KEY_WATCHDOG_TIMEOUT_S, desktop_hardware,
+     daemon thread swept every 0.2s). Refresh key-downs don't re-press:
+     already-held keys just restamp. Mouse buttons have the same
+     theoretical stuck risk but no watchdog yet -- repeated mouseDown
+     replay is less obviously safe than keyDown; revisit if observed.
+  3. GStreamer congestion: sender video pipeline had NO queue and
+     x264enc at defaults -- rc-lookahead 40+ frames plus B-frame
+     reordering is over a second of buffering at 30fps before anything
+     leaves the machine, matching "seconds-old frames at 2fps" on
+     degraded wifi. Added a leaky=downstream max-size-buffers=1 queue
+     before the encoder (stale frames drop at the SOURCE) and
+     tune=zerolatency + speed-preset=ultrafast + key-int-max=2s for
+     x264enc (zerolatency=true for nvenc where the property exists).
+     Needs a degraded-network retest to confirm recovery behavior.
+  4. Sine-on-first-connection: demo now waits a 2.0s settle after
+     switching the sender to the test tone before counting duration,
+     per the "stream takes a while to boot" read. If it still misses
+     first connections, next suspect is the endpoint recv pipeline's
+     own decoder-probe window.

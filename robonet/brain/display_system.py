@@ -4,8 +4,6 @@ import asyncio
 import threading
 import time
 from typing import Tuple, Optional
-import queue
-import sounddevice as sd
 import numpy as np
 from displayarray import display
 
@@ -45,11 +43,6 @@ class DisplaySubSystem(SubSystem):
         self.handlers = None
         self.in_img = np.zeros((self.out_res[1], self.out_res[0], 3), dtype=np.uint8)
         self.in_aud = None
-        self._audio_sample_rate: int = 48000
-        self._audio_stream: Optional[sd.OutputStream] = None
-        self._audio_queue: queue.Queue = queue.Queue(maxsize=8)
-        self._audio_leftover: np.ndarray = np.zeros(0, dtype=np.float32)
-        self._audio_started_playing: bool = False
 
         self.win_cfg = None
         self.af_thru = None
@@ -57,114 +50,17 @@ class DisplaySubSystem(SubSystem):
         self._fullscreen_key_disabled = False
 
     def start(self):
-        # Audio playback has moved to the GStreamer receive pipeline
-        # (play_locally on GstReceiver): the display loop blocks on
-        # vsync long enough to starve a realtime sounddevice callback,
-        # producing constant clicks/underruns no matter the buffering
-        # (confirmed on real hardware). in_aud still feeds the on-screen
-        # waveform and the AI. The sounddevice machinery below stays,
-        # unstarted, until the GStreamer path is confirmed working on
-        # hardware -- then it can be removed outright.
+        # Audio playback lives in the GStreamer receive pipeline
+        # (play_locally on GstReceiver), confirmed working on hardware.
+        # The old sounddevice path is gone: the display loop blocks on
+        # vsync long enough to starve a realtime Python audio callback
+        # into constant clicks/underruns. in_aud still feeds the
+        # on-screen waveform and the AI.
         if settings["play_audio"]:
             log.info('[display] play_audio=True -- playback is handled by the '
-                    'GStreamer receive pipeline, not sounddevice')
-
-    def _resolve_speaker_device(self):
-        """None = let sounddevice use its own implicit default. A
-        substring of a device name (case-insensitive) or a device
-        index both work directly, and take priority over auto-detect.
-        Auto-detect prefers a device name suggesting real pulse/
-        pipewire routing over sounddevice's own implicit default --
-        on Linux that can land on the first raw ALSA hardware device
-        instead of the one actually configured as the system output."""
-        configured = settings["speaker_device"]
-        if configured is not None:
-            return configured
-        try:
-            devices = sd.query_devices()
-        except Exception as e:
-            log.warning(f'[display] could not query audio devices: {e}')
-            return None
-        for i, d in enumerate(devices):
-            if d.get('max_output_channels', 0) > 0 and 'pulse' in d.get('name', '').lower():
-                return i
-        for i, d in enumerate(devices):
-            if d.get('max_output_channels', 0) > 0 and 'pipewire' in d.get('name', '').lower():
-                return i
-        return None  # nothing preferred found -- fall back to sounddevice's own default
-
-    def _start_audio(self, sample_rate: int = 48000):
-        """Open a sounddevice OutputStream for the given sample rate.
-        Called automatically on setup; call again if sample rate changes."""
-        if self._audio_stream is not None:
-            self._audio_stream.stop()
-            self._audio_stream.close()
-        self._audio_sample_rate = sample_rate
-        self._audio_leftover = np.zeros(0, dtype=np.float32)
-        self._audio_started_playing = False
-        device = self._resolve_speaker_device()
-        print(f"resolved device: {device}")
-        self._audio_stream = sd.OutputStream(
-            samplerate=sample_rate,
-            channels=1,
-            dtype='float32',
-            callback=self._audio_cb,
-            blocksize=0,  # let sounddevice pick a low-latency block size
-            device=device,
-            finished_callback=self._on_audio_stream_finished,
-        )
-        self._audio_stream.start()
-        actual = sd.query_devices(self._audio_stream.device)
-        log.info(f"[display] audio output stream started at {sample_rate} Hz on device "
-                f"{self._audio_stream.device} ({actual.get('name', 'unknown')})")
-
-    def _on_audio_stream_finished(self):
-        # Fires whenever the stream stops for ANY reason -- including a
-        # callback exception aborting it, which is otherwise completely
-        # invisible (sounddevice only prints to stderr). Expected once
-        # on normal shutdown; at any other time it means playback died.
-        log.warning('[display] audio output stream stopped')
-
-    def _audio_cb(self, outdata: np.ndarray, frames: int, time_info, status):
-        # Runs on PortAudio's own thread.
-        try:
-            if status:
-                log.warning(f'[display] audio output status: {status}')
-            while True:
-                try:
-                    chunk = self._audio_queue.get_nowait()
-                    self._audio_leftover = np.concatenate((self._audio_leftover, chunk))
-                except queue.Empty:
-                    break
-            if not self._audio_started_playing:
-                if len(self._audio_leftover) < 1024:
-                    outdata[:] = 0
-                    return
-                else:
-                    self._audio_started_playing = True
-                    log.info('[display] first audio samples written to the output device')
-            if len(self._audio_leftover) >= frames:
-                outdata[:, 0] = self._audio_leftover[:frames]
-                self._audio_leftover = self._audio_leftover[frames:]
-            else:
-                n = len(self._audio_leftover)
-                log.warning(f'[display] Audio underrun! Missed {frames - n} frames.')
-                if n > 0:
-                    outdata[:n, 0] = self._audio_leftover
-                outdata[n:] = 0
-                # Force a re-buffer
-                self._audio_leftover = np.array([], dtype='float32')
-                self._audio_started_playing = False
-
-        except Exception as e:
-            log.error(f'[display] audio callback error (outputting silence): {e}')
-            outdata[:] = 0
+                    'GStreamer receive pipeline')
 
     def stop(self):
-        if self._audio_stream is not None:
-            self._audio_stream.stop()
-            self._audio_stream.close()
-            self._audio_stream = None
         if self.displayer is not None:
             self.displayer.end()
 
@@ -227,20 +123,3 @@ class DisplaySubSystem(SubSystem):
         else:
             aud = np.asarray(aud, dtype=np.float32)
         self.in_aud = aud
-        # Flatten + float32 up front: the stream callback assigns into
-        # a (frames, 1) float32 buffer, and a (N, 1)-shaped or float64
-        # chunk sneaking in here would raise inside the callback --
-        # which aborts the whole stream (see _audio_cb).
-        chunk = np.asarray(aud, dtype=np.float32).reshape(-1)
-        try:
-            self._audio_queue.put_nowait(chunk)
-        except queue.Full:
-            # Stay realtime: drop the OLDEST chunk, keep the newest.
-            try:
-                self._audio_queue.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self._audio_queue.put_nowait(chunk)
-            except queue.Full:
-                log.debug('[display] audio queue full -- dropping chunk')
