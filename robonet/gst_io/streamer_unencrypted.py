@@ -379,7 +379,7 @@ class _AudioPipeline:
 
         pay.set_property('pt', 97)
         info = GstAudio.AudioInfo()
-        info.set_format(GstAudio.AudioFormat.F32LE, self._info.sample_rate, 1)
+        info.set_format(GstAudio.AudioFormat.F32LE, self._sample_rate, 1)
         # info.set_layout(GstAudio.AudioLayout.INTERLEAVED)  # usually default
         caps = info.to_caps()
         capsflt.set_property('caps', caps)
