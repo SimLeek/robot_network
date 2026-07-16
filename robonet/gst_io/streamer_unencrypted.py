@@ -84,7 +84,7 @@ def _video_encoder_candidates() -> list:
     if not found:
         log.warning('[gst] no video encoder found in GStreamer registry')
     else:
-        log.info(f'[gst] video encoder candidates: {[n for n, _ in found]}')
+        log.info(f'[gst] video encoder candidates: {[n for n,_ in found]}')
     return found
 
 
@@ -101,7 +101,7 @@ def _audio_encoder_candidates() -> list:
     if not found:
         log.warning('[gst] no audio encoder found in GStreamer registry')
     else:
-        log.info(f'[gst] audio encoder candidates: {[n for n, _ in found]}')
+        log.info(f'[gst] audio encoder candidates: {[n for n,_ in found]}')
     return found
 
 
@@ -370,14 +370,18 @@ class _AudioPipeline:
             src  = Gst.ElementFactory.make('pulsesrc',     f'a{name}src')
             conv = Gst.ElementFactory.make('audioconvert', f'a{name}conv')
             rsmp = Gst.ElementFactory.make('audioresample', f'a{name}rsmp')
-            if None in (src, conv, rsmp):
+            q    = Gst.ElementFactory.make('queue',        f'a{name}q')  # per-branch queue
+            if None in (src, conv, rsmp, q):
                 log.warning(f'[gst] could not instantiate pulsesrc branch for {name}')
                 continue
+            q.set_property('leaky', 2)
+            q.set_property('max-size-time', 50 * Gst.MSECOND)
             src.set_property('device', device)
-            p.add(src); p.add(conv); p.add(rsmp)
+            p.add(src); p.add(conv); p.add(rsmp); p.add(q)
             src.link(conv)
             conv.link(rsmp)
-            rsmp.link(mixer)
+            rsmp.link(q)
+            q.link(mixer)
             found_any = True
 
         if not found_any:
@@ -396,8 +400,9 @@ class _AudioPipeline:
         sink    = Gst.ElementFactory.make('udpsink', 'asink')
         conv    = Gst.ElementFactory.make('audioconvert', 'aconv')
         resample = Gst.ElementFactory.make('audioresample', 'aresample')
+        aq      = Gst.ElementFactory.make('queue', 'aq')   # Main leaky queue before encoder
 
-        if None in (capsflt, enc, pay, sink, conv, resample):
+        if None in (capsflt, enc, pay, sink, conv, resample, aq):
             log.error('[gst] could not instantiate all audio pipeline elements')
             return False
 
@@ -409,15 +414,21 @@ class _AudioPipeline:
         target_rate = 48000 if self._audio_codec == 'opus' else self._sample_rate
 
         caps_str = f'audio/x-raw,format=S16LE,layout=interleaved,rate={target_rate},channels=1'
-        caps = Gst.Caps.from_string(caps_str)
-        capsflt.set_property('caps', caps)
+        capsflt.set_property('caps', Gst.Caps.from_string(caps_str))
         #capsflt.set_property('caps', Gst.Caps.from_string(
         #    f'audio/x-raw,format=F32LE,rate={self._sample_rate},channels=1'))
+
+        # Leaky queue - critical for preventing audio backlog on pause/jitter
+        aq.set_property('leaky', 2)                    # drop old buffers
+        aq.set_property('max-size-time', 100 * Gst.MSECOND)
+        aq.set_property('max-size-buffers', 4)
+        aq.set_property('max-size-bytes', 0)
+
         sink.set_property('host', self._server_ip)
         sink.set_property('port', AUDIO_PORT)
         sink.set_property('sync', False)
 
-        for el in (capsflt, enc, pay, sink, conv, resample):
+        for el in (capsflt, enc, pay, sink, conv, resample, aq):
             p.add(el)
 
         # Source selection
@@ -447,10 +458,22 @@ class _AudioPipeline:
         # Linking
         src_out.link(conv)
         conv.link(resample)
-        resample.link(capsflt)
+        resample.link(aq)
+        aq.link(capsflt)
         capsflt.link(enc)
         enc.link(pay)
         pay.link(sink)
+
+        # Low-latency encoder settings
+        if self._enc_name == 'opusenc':
+            enc.set_property('bitrate', 64000)
+            enc.set_property('hard-resync', True)
+            try:
+                enc.set_property('frame-size', 5)   # 5ms frames for lowest latency
+            except TypeError:
+                pass
+        elif self._enc_name in ('avenc_aac', 'omxaacenc'):
+            enc.set_property('bitrate', 96000)
 
         self._pipeline = p
         return True
