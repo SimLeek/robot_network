@@ -48,6 +48,16 @@ AI_TOKEN_MOUSE_RIGHT_PRESS = 2
 AI_TOKEN_MOUSE_RIGHT_RELEASE = 3
 AI_TOKEN_MOUSE_MIDDLE_PRESS = 4
 AI_TOKEN_MOUSE_MIDDLE_RELEASE = 5
+AI_TOKEN_ZOOM_IN = 6
+AI_TOKEN_ZOOM_OUT = 7
+AI_TOKEN_PAN_LEFT = 8
+AI_TOKEN_PAN_RIGHT = 9
+AI_TOKEN_PAN_UP = 10
+AI_TOKEN_PAN_DOWN = 11
+AI_TOKEN_VIEW_RESET = 12
+
+AI_ZOOM_FACTOR = 1.1   # per zoom token, matching the human scroll step
+AI_PAN_STEP = 0.05     # per pan token, as a fraction of the visible view
 
 class DesktopSubSystem(SubSystem):
     """Server-side desktop counterpart."""
@@ -111,6 +121,13 @@ class DesktopSubSystem(SubSystem):
         self.af_ai.bind_ai_token(lambda: self.ai_mouse_release('right'), AI_TOKEN_MOUSE_RIGHT_RELEASE)
         self.af_ai.bind_ai_token(lambda: self.ai_mouse_press('middle'), AI_TOKEN_MOUSE_MIDDLE_PRESS)
         self.af_ai.bind_ai_token(lambda: self.ai_mouse_release('middle'), AI_TOKEN_MOUSE_MIDDLE_RELEASE)
+        self.af_ai.bind_ai_token(lambda: self.ai_zoom(AI_ZOOM_FACTOR), AI_TOKEN_ZOOM_IN)
+        self.af_ai.bind_ai_token(lambda: self.ai_zoom(1.0 / AI_ZOOM_FACTOR), AI_TOKEN_ZOOM_OUT)
+        self.af_ai.bind_ai_token(lambda: self.ai_pan(-AI_PAN_STEP, 0.0), AI_TOKEN_PAN_LEFT)
+        self.af_ai.bind_ai_token(lambda: self.ai_pan(AI_PAN_STEP, 0.0), AI_TOKEN_PAN_RIGHT)
+        self.af_ai.bind_ai_token(lambda: self.ai_pan(0.0, -AI_PAN_STEP), AI_TOKEN_PAN_UP)
+        self.af_ai.bind_ai_token(lambda: self.ai_pan(0.0, AI_PAN_STEP), AI_TOKEN_PAN_DOWN)
+        self.af_ai.bind_ai_token(self.ai_view_reset, AI_TOKEN_VIEW_RESET)
 
         if self._root.displayer is None:
             self._bound = True
@@ -235,14 +252,16 @@ class DesktopSubSystem(SubSystem):
 
     # -- AI passthrough: works with or without a display -------------
     #
-    # Mouse position is direct: (0,0) always means the remote screen's
-    # actual top-left corner, (1,1) its actual bottom-right, regardless
-    # of whatever zoom/pan a human's local viewport happens to be at --
-    # the AI isn't looking through that viewport, so it shouldn't be
-    # affected by it. That's the opposite of _frac_to_pixel, which
-    # exists specifically to translate what a human sees on a possibly
-    # zoomed/panned/letterboxed display back into true screen
-    # coordinates.
+    # The zoom/pan/letterbox viewport exists FOR the AI: it can only
+    # ingest ~800x600-class frames, while the real screen is 1080p+,
+    # so without zoom/pan it literally cannot see enough detail to
+    # interact. send_frames_always applies the shared viewport to the
+    # frame BOTH the human display and the AI receive -- so the AI's
+    # coordinates mean positions within that same zoomed/panned/
+    # letterboxed canvas and route through the same inverse mapping as
+    # human input. (0,0)-(1,1) spans the canvas the AI actually sees,
+    # not the raw screen. The AI drives the viewport itself through
+    # the zoom/pan tokens below, exactly like a human uses edit mode.
 
     _AI_BUTTON_NAMES = {1: 'left', 4: 'right', 2: 'middle'}  # must match desktop_hardware.py's _MOUSE_BUTTON_NAMES exactly (pyglet bitmask values)
 
@@ -254,11 +273,56 @@ class DesktopSubSystem(SubSystem):
         self.input_source = source
 
     def _ai_frac_to_pixel(self, x_frac: float, y_frac: float) -> tuple:
+        """Canvas fractions (within the same viewport-processed frame
+        the AI receives) -> true screen pixels, via the same inverse
+        mapping the human path uses. Uses menu.out_res rather than the
+        displayer's so headless AI-only sessions work identically."""
         x_frac = max(0.0, min(1.0, x_frac))
         y_frac = max(0.0, min(1.0, y_frac))
+        dims = self._viewport_dims()
+        if dims is not None:
+            source_w, source_h, display_w, display_h = dims
+            x_frac, y_frac = self.viewport.inverse_map(
+                x_frac, y_frac, source_w, source_h, display_w, display_h)
         x = max(0, int(x_frac * self._screen_width))
         y = max(0, int(y_frac * self._screen_height))
         return x, y
+
+    def _viewport_dims(self):
+        m = self._root.menu
+        img = getattr(m, 'last_img', None) if m is not None else None
+        if img is None or not hasattr(img, 'shape'):
+            return None  # no frame yet (or a test double) -- treat as identity
+        source_h, source_w = img.shape[:2]
+        display_w, display_h = m.out_res
+        return source_w, source_h, display_w, display_h
+
+    # -- AI view controls: the same zoom/pan a human gets in edit
+    # mode, driven through tokens. Gated on input_source like the rest
+    # of the AI's actions since the viewport is currently SHARED with
+    # the human display -- an AI panning around mid-human-session would
+    # yank the human's view.
+
+    def ai_zoom(self, factor: float):
+        if self.input_source != 'ai':
+            return
+        dims = self._viewport_dims()
+        if dims is None:
+            return
+        self.viewport.zoom_by(factor, *dims)
+
+    def ai_pan(self, dx_frac: float, dy_frac: float):
+        if self.input_source != 'ai':
+            return
+        dims = self._viewport_dims()
+        if dims is None:
+            return
+        self.viewport.pan_by(dx_frac, dy_frac, *dims)
+
+    def ai_view_reset(self):
+        if self.input_source != 'ai':
+            return
+        self.viewport.reset()
 
     def _ai_on_mouse_x(self, value: float):
         self._ai_mouse_x = value

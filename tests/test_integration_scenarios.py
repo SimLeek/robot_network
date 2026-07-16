@@ -45,6 +45,10 @@ def _make_brain_side(screen_width=1920, screen_height=1080):
     sub = DesktopSubSystem(endpoint=endpoint)
     sub._root = MagicMock()
     sub._root.menu.visible = False
+    # Real frame + aspect-matched out_res: baseline viewport is an
+    # identity mapping, so pixel expectations stay exact.
+    sub._root.menu.last_img = np.zeros((screen_height, screen_width, 3), dtype=np.uint8)
+    sub._root.menu.out_res = (640, int(640 * screen_height / screen_width))
     sub._root.displayer = None
     sub.set_input_source('ai')
     sub.start()  # binds af_ai
@@ -238,7 +242,14 @@ class TestCircleSurvivesTheWire(unittest.TestCase):
         _over_the_wire(sub, hw, mock_pg)
 
         arrived = [c.args for c in mock_pg.moveTo.call_args_list]
-        self.assertEqual(arrived, expected)
+        # Coordinates now round-trip through the shared viewport's
+        # float math (by design -- the AI sees through it), so allow a
+        # sub-pixel truncation wobble. Order, count, and axes must
+        # still be exact.
+        self.assertEqual(len(arrived), len(expected))
+        for (ax, ay), (ex, ey) in zip(arrived, expected):
+            self.assertAlmostEqual(ax, ex, delta=1)
+            self.assertAlmostEqual(ay, ey, delta=1)
 
 
 if __name__ == '__main__':

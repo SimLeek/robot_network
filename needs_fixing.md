@@ -523,3 +523,21 @@ these fixes should be implemented but are either large tasks or are blocked.
      per the "stream takes a while to boot" read. If it still misses
      first connections, next suspect is the endpoint recv pipeline's
      own decoder-probe window.
+
+- **AI viewport unification (the merge blocker, fixed).** Claude's
+  earlier design rationale was exactly backwards: the zoom/pan/
+  letterbox viewport exists FOR the AI -- it can only ingest small
+  (~800x600-class) frames while the real screen is 1080p+, so without
+  zoom/pan it literally cannot see enough detail to interact; the
+  human edit-mode was the verification layer, not the point.
+  send_frames_always already applied the shared viewport to the frame
+  the AI receives, so bypassing inverse_map on the AI's mouse output
+  meant what it SAW at (0.5, 0.5) was not where its click landed.
+  Now: AI coordinates mean positions within the same canvas it sees
+  and route through the same inverse mapping as human input
+  (headless-safe via menu.out_res); the AI drives the viewport itself
+  through new tokens (zoom in/out 1.1x, pan l/r/u/d 0.05, view reset)
+  exactly like human edit mode. View controls gate on input_source
+  since the viewport is currently SHARED with the human display --
+  a per-consumer (separate AI) viewport is the eventual right shape
+  if the AI should look around during human-driven sessions.

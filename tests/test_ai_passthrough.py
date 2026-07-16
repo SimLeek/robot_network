@@ -9,6 +9,8 @@ the neuron/token dispatch wiring an AI actually drives through.
 """
 
 import unittest
+
+import numpy as np
 from unittest.mock import MagicMock
 
 from robonet.brain.desktop_system import (
@@ -25,6 +27,11 @@ def _make_sub(screen_width=1920, screen_height=1080):
     sub = DesktopSubSystem(endpoint=endpoint)
     sub._root = MagicMock()
     sub._root.menu.visible = False
+    # Real frame + aspect-matched out_res: at baseline zoom the shared
+    # viewport is then an identity mapping, keeping plain fraction ->
+    # pixel expectations exact. Zoom/pan tests change it deliberately.
+    sub._root.menu.last_img = np.zeros((screen_height, screen_width, 3), dtype=np.uint8)
+    sub._root.menu.out_res = (640, int(640 * screen_height / screen_width))
     sub._root.displayer = None  # AI passthrough must work with no display at all
     return sub
 
@@ -75,18 +82,26 @@ class TestAiMouseMove(unittest.TestCase):
         sent = sub._root.radio.burst.call_args[0][0]
         self.assertEqual((sent.event_type, sent.x, sent.y), (0, 960, 270))
 
-    def test_ignores_any_local_viewport_zoom_pan_state(self):
-        # Unlike the human path (_frac_to_pixel), AI coordinates mean
-        # the same true screen position regardless of what a human's
-        # local viewport is currently zoomed/panned to.
+    def test_routes_through_the_shared_viewport_zoom_pan_state(self):
+        # The viewport exists FOR the AI (it can only ingest small
+        # frames, so it must zoom/pan to see detail) -- send_frames_
+        # always applies the same viewport to the frame the AI
+        # receives, so its coordinates mean positions within that
+        # canvas and MUST route through the same inverse mapping as
+        # human input. The old behavior (bypassing the viewport) meant
+        # what the AI saw at (0.5, 0.5) was not where its click landed.
         sub = self._ready_sub()
-        sub.viewport.zoom = 3.0
-        sub.viewport.pan_x, sub.viewport.pan_y = 0.2, 0.8
+        sub.viewport.zoom = 2.0
+        dims = sub._viewport_dims()
+        expected_xf, expected_yf = sub.viewport.inverse_map(0.5, 0.5, *dims)
 
         sub.ai_mouse_move(0.5, 0.5)
 
         sent = sub._root.radio.burst.call_args[0][0]
-        self.assertEqual((sent.x, sent.y), (960, 540))  # still dead center, untouched by viewport state
+        self.assertEqual((sent.x, sent.y),
+                        (int(expected_xf * 1920), int(expected_yf * 1080)))
+        # And at 2x zoom centered, canvas-center IS screen-center:
+        self.assertEqual((sent.x, sent.y), (960, 540))
 
     def test_clamps_out_of_range_fractions(self):
         sub = self._ready_sub()
@@ -272,3 +287,66 @@ class TestNeuronTokenDispatch(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestAiViewControls(unittest.TestCase):
+    """The AI drives the same viewport a human uses in edit mode --
+    without zoom it cannot see enough detail on a 1080p+ screen to
+    interact at all, since it only ingests small frames."""
+
+    def _ready_sub(self):
+        sub = _make_sub()
+        sub.set_input_source('ai')
+        sub.start()
+        return sub
+
+    def test_zoom_in_token_zooms_the_shared_viewport(self):
+        from robonet.brain.desktop_system import AI_TOKEN_ZOOM_IN
+        sub = self._ready_sub()
+        sub.af_ai.on_token(AI_TOKEN_ZOOM_IN)
+        self.assertGreater(sub.viewport.zoom, 1.0)
+
+    def test_zoom_out_respects_the_floor(self):
+        from robonet.brain.desktop_system import AI_TOKEN_ZOOM_OUT
+        sub = self._ready_sub()
+        for _ in range(5):
+            sub.af_ai.on_token(AI_TOKEN_ZOOM_OUT)
+        self.assertEqual(sub.viewport.zoom, 1.0)
+
+    def test_pan_tokens_move_the_view_when_zoomed(self):
+        from robonet.brain.desktop_system import AI_TOKEN_ZOOM_IN, AI_TOKEN_PAN_RIGHT
+        sub = self._ready_sub()
+        for _ in range(8):
+            sub.af_ai.on_token(AI_TOKEN_ZOOM_IN)
+        before = sub.viewport.pan_x
+        sub.af_ai.on_token(AI_TOKEN_PAN_RIGHT)
+        self.assertGreater(sub.viewport.pan_x, before)
+
+    def test_view_reset_restores_baseline(self):
+        from robonet.brain.desktop_system import AI_TOKEN_ZOOM_IN, AI_TOKEN_VIEW_RESET
+        sub = self._ready_sub()
+        for _ in range(4):
+            sub.af_ai.on_token(AI_TOKEN_ZOOM_IN)
+        sub.af_ai.on_token(AI_TOKEN_VIEW_RESET)
+        self.assertEqual(sub.viewport.zoom, 1.0)
+
+    def test_view_controls_gated_while_human_drives(self):
+        # The viewport is currently SHARED with the human display -- an
+        # AI panning around mid-human-session would yank their view.
+        sub = self._ready_sub()
+        sub.set_input_source('human')
+        sub.ai_zoom(1.5)
+        self.assertEqual(sub.viewport.zoom, 1.0)
+
+    def test_click_lands_where_the_ai_actually_looked(self):
+        # End-to-end coherence: zoom in, look at canvas-center, click --
+        # the click must land at the center of the ZOOMED view, which by
+        # construction (centered 2x zoom) is still screen center, NOT at
+        # some other point computed from raw screen fractions.
+        from robonet.brain.desktop_system import AI_TOKEN_MOUSE_LEFT_PRESS
+        sub = self._ready_sub()
+        sub.viewport.zoom = 2.0
+        sub.ai_mouse_move(0.5, 0.5)
+        sub.af_ai.on_token(AI_TOKEN_MOUSE_LEFT_PRESS)
+        press = sub._root.radio.burst.call_args[0][0]
+        self.assertEqual((press.x, press.y), (960, 540))

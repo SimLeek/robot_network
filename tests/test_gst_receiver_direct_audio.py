@@ -249,7 +249,7 @@ class TestLocalPlaybackTee(unittest.TestCase):
 
 
 class TestPullChunkS16Conversion(unittest.TestCase):
-    """_pull_chunk must read the wire's actual format (S16LE) and hand
+    """_process_sample must read the wire's actual format (S16LE) and hand
     every consumer float32 in [-1, 1]. Reading the wrong width gives
     exactly-2x or exactly-half sample counts -- as measured on real
     hardware when the layers disagreed."""
@@ -266,10 +266,10 @@ class TestPullChunkS16Conversion(unittest.TestCase):
         buf.map.return_value = (True, mapinfo)
         sample = MagicMock()
         sample.get_buffer.return_value = buf
-        sink = MagicMock()
-        sink.emit.return_value = sample
 
-        pipe._pull_chunk(sink)
+        # Post-refactor the conversion lives in _process_sample, fed by
+        # the receiver's own polling thread.
+        pipe._process_sample(sample)
         return received[0]
 
     def test_sample_count_matches_the_s16_wire_format(self):
