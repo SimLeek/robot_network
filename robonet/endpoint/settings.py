@@ -25,7 +25,15 @@ _SETTINGS: dict[str, Any] = {
     # Off by default: could mess with actual wired internet connections
     "auto_wired_setup": False,
     "psk_file": Path.home() / ".robotar" / "psk.key",
-    "server_psk_file": Path.home() / ".robotar" / "server_psk.key"
+    "server_psk_file": Path.home() / ".robotar" / "server_psk.key",
+
+    # DesktopHw's own device selection. None = auto-detect (first
+    # device found). Set explicitly to skip auto-detection entirely --
+    # DesktopHw prefers an explicit constructor arg over this, and this
+    # over auto-detect.
+    "camera_device": None,
+    "mic_device": None,
+    "speaker_device": None,
 }
 
 _DEFAULT_PATH = Path.home() / ".robotar" / "settings.json"

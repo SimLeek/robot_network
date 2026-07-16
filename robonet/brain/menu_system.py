@@ -88,10 +88,8 @@ class MenuSubSystem(SubSystem):
                                      mic_device=mic,
                                      sample_rate=48000)
         self._gst_receiver = GstReceiver(recv_img_callback=self.on_img,
-                                         recv_audio_callback=self.on_audio
-                                         #direct_audio=False,  # <- gst will play received audio directly to speaker
-                                         #audio_output_device=speaker
-                                         )
+                                         recv_audio_callback=self.on_audio,
+                                         play_locally=settings["play_audio"])
 
     def set_endpoints(self, eps):
         self._menu.set_endpoints(eps)
@@ -278,6 +276,8 @@ class MenuSubSystem(SubSystem):
                     self.root.displayer.update_audio(self.last_audio)
             if self.root.ai is not None:
                 self.root.ai.update_frame(img)
+                if self.last_audio is not None:
+                    self.root.ai.update_audio(self.last_audio)
             t1 = time.time()
             t_remain = max(0.0, 1.0/self.fps - (t1-t0))
             await asyncio.sleep(t_remain)

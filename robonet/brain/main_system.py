@@ -70,10 +70,16 @@ class ServerSystem:
     def start(self):
         self.loop = asyncio.get_running_loop()
         self.menu.start()
+        if self.ai is not None:
+            self.ai.start()
         if self.active_sub is not None:
             self.active_sub.start()
+        if self.displayer is not None:
+            self.displayer.start()
 
     def stop(self):
+        if self.ai is not None:
+            self.ai.stop()
         if self.active_sub is not None:
             self.active_sub.stop()
 
@@ -119,10 +125,13 @@ class ServerSystem:
 
     def async_loops(self):
         loops = [
-            self.displayer.run(self),
             *self.radio.async_loops(self),
             *self.menu.async_loops(self)
         ]
+        if self.displayer is not None:
+            loops.append(self.displayer.run(self))
+        if self.ai is not None:
+            loops += [ *self.ai.async_loops(self)]
         if self.active_sub is not None:
             loops += [ *self.active_sub.async_loops(self)]
         return loops

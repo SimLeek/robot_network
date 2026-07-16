@@ -4,8 +4,6 @@ import asyncio
 import threading
 import time
 from typing import Tuple, Optional
-import queue
-import sounddevice as sd
 import numpy as np
 from displayarray import display
 
@@ -45,56 +43,16 @@ class DisplaySubSystem(SubSystem):
         self.handlers = None
         self.in_img = np.zeros((self.out_res[1], self.out_res[0], 3), dtype=np.uint8)
         self.in_aud = None
-        self._audio_sample_rate: int = 48000
-        self._audio_stream: Optional[sd.OutputStream] = None
-        self._audio_queue: queue.Queue = queue.Queue(maxsize=8)
 
         self.win_cfg = None
         self.af_thru = None
         self.af_edit = None
+        self._fullscreen_key_disabled = False
 
     def start(self):
-        self._start_audio(self._audio_sample_rate)
-
-    def _start_audio(self, sample_rate: int = 48000):
-        """Open a sounddevice OutputStream for the given sample rate.
-        Called automatically on setup; call again if sample rate changes."""
-        if self._audio_stream is not None:
-            self._audio_stream.stop()
-            self._audio_stream.close()
-        self._audio_sample_rate = sample_rate
-        self._audio_stream = sd.OutputStream(
-            samplerate=sample_rate,
-            channels=1,
-            dtype='float32',
-            callback=self._audio_cb,
-            blocksize=0,  # let sounddevice pick a low-latency block size
-        )
-        self._audio_stream.start()
-        log.info(f'[display] audio output stream started at {sample_rate} Hz')
-
-    def _audio_cb(self, outdata: np.ndarray, frames: int,
-                  time_info, status):
-        # status carries underrun/overflow flags from the driver
-        if status:
-            log.debug(f'[display] audio stream status: {status}')
-        try:
-            chunk = self._audio_queue.get_nowait()
-        except queue.Empty:
-            # No data ready -- output silence rather than blocking the audio thread
-            outdata[:] = 0
-            return
-        # chunk may be shorter or longer than frames; fit it safely
-        n = min(len(chunk), frames)
-        outdata[:n, 0] = chunk[:n]
-        if n < frames:
-            outdata[n:] = 0
+        pass
 
     def stop(self):
-        if self._audio_stream is not None:
-            self._audio_stream.stop()
-            self._audio_stream.close()
-            self._audio_stream = None
         if self.displayer is not None:
             self.displayer.end()
 
@@ -107,7 +65,23 @@ class DisplaySubSystem(SubSystem):
             mgl_config=self.win_cfg,
         )
 
+    def _disable_builtin_fullscreen_key(self):
+        """moderngl_window's own base Window class binds F11 to toggle
+        fullscreen by default, before the keypress ever reaches
+        pass_through_cb -- toggling fullscreen mid-keypress disrupts
+        forwarding that same press to the endpoint. fullscreen_key=None
+        is moderngl_window's own documented way to disable this."""
+        if self._fullscreen_key_disabled:
+            return
+        try:
+            wnd = self.displayer.displayer.config.wnd
+        except AttributeError:
+            return  # window not constructed yet -- retry next frame
+        wnd.fullscreen_key = None
+        self._fullscreen_key_disabled = True
+
     async def run_once(self, sm: 'ServerSystem'):
+        self._disable_builtin_fullscreen_key()
         t1 = time.time()
         self.displayer.update(self.in_img, 'screen')
         aud = self.in_aud
@@ -131,9 +105,13 @@ class DisplaySubSystem(SubSystem):
         self.in_img = img
 
     def update_audio(self, aud):
+        if aud is None:
+            self.in_aud = None
+            return
+        # The receive path already converts to float32 [-1, 1], but
+        # accept raw int16 defensively too.
+        if getattr(aud, 'dtype', None) == np.int16:
+            aud = aud.astype(np.float32) / 32768.0
+        else:
+            aud = np.asarray(aud, dtype=np.float32)
         self.in_aud = aud
-        # assuming the audio received has the same sample_rate, chunk size, etc.
-        try:
-            self._audio_queue.put_nowait(aud)
-        except queue.Full:
-            log.debug('[display] audio queue full -- dropping chunk')

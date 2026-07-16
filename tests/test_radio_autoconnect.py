@@ -83,7 +83,7 @@ class _FakeRadio:
 class TestMaybeAutoConnect(unittest.TestCase):
 
     def test_fires_when_priority_set_and_endpoint_ready(self):
-        radio = _FakeRadio(priority=['localhost'])
+        radio = _FakeRadio(priority=['localhost'], start_mode=_NetMode.LOCALHOST)
         ep = _FakeEndpoint(axes=[1, 2, 3])
 
         radio._maybe_auto_connect(ep)
@@ -124,7 +124,7 @@ class TestMaybeAutoConnect(unittest.TestCase):
         radio.root.menu._connect.assert_not_called()
 
     def test_any_endpoint_type_matches_everything(self):
-        radio = _FakeRadio(priority=['localhost'], endpoint_type='any')
+        radio = _FakeRadio(priority=['localhost'], endpoint_type='any', start_mode=_NetMode.LOCALHOST)
         ep = _FakeEndpoint(endpoint_type='desktop', axes=[1])
 
         radio._maybe_auto_connect(ep)
@@ -136,7 +136,7 @@ class TestMaybeAutoConnect(unittest.TestCase):
         # report permanently empty axes/streams by design (raw KeyEvent/
         # MouseEvent control, not the axis model), so readiness can't be
         # gated on axes/streams content -- only on capabilities_received.
-        radio = _FakeRadio(priority=['localhost'])
+        radio = _FakeRadio(priority=['localhost'], start_mode=_NetMode.LOCALHOST)
         ep = _FakeEndpoint(axes=[], streams=[], capabilities_received=True)
 
         radio._maybe_auto_connect(ep)

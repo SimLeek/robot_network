@@ -7,6 +7,8 @@ Handles typical desktop hardware such as screens, mics, speakers, keyboards, and
 from __future__ import annotations
 
 import logging
+import threading
+import time
 
 import numpy as np
 
@@ -15,8 +17,18 @@ from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC
 from robonet.endpoint.desktop_capture import DesktopCaptureError
 from robonet.endpoint.hardware_system import MultiAVRobotHardware
 from robonet.endpoint.radio_system import HOSTNAME
-from robonet.gst_io.devices import find_camera_devices, get_first_speaker_device, DeviceNotFoundError
+from robonet.gst_io.devices import find_camera_devices, get_first_mic_device, get_first_speaker_device, DeviceNotFoundError
 from robonet.gst_io.streamer_unencrypted import VIDEO_SOURCE_XIMAGESRC, AUDIO_SOURCE_DESKTOP_MIX
+import robonet.endpoint.settings as settings_
+
+settings = settings_.get()
+
+# Auto-release any held key the brain hasn't refreshed within this
+# window -- the brain re-sends key-down every KEY_REFRESH_INTERVAL_S
+# (0.25s) while a key is genuinely held, so 1.0s means four missed
+# refreshes. Lossy networks drop KeyEvents including releases, which
+# used to leave keys mashed forever (observed live with F11).
+KEY_WATCHDOG_TIMEOUT_S = 1.0
 
 log = logging.getLogger(__name__)
 
@@ -61,8 +73,9 @@ def build_desktop_capabilities() -> RobotCapabilities:
                               # genuinely different number the brain needs to keep
                               # separate for mouse-position scaling to land correctly.
     streams = [
-        {'name': 'screen', 'type': 'video', 'width': screen.width, 'height': screen.height},
-        {'name': 'mic', 'type': 'audio', 'sample_rate': 48000, 'channels': 1},
+        {'name': 'screen', 'type': 'video', 'io': 'I', 'width': screen.width, 'height': screen.height},
+        {'name': 'mic', 'type': 'audio', 'io': 'I', 'sample_rate': 48000, 'channels': 1},
+        {'name': 'speaker', 'type': 'audio', 'io': 'O', 'sample_rate': 48000, 'channels': 1},
     ]
     return RobotCapabilities.build(axes=axes, streams=streams, hostname=HOSTNAME, endpoint_type='desktop')
 
@@ -80,7 +93,7 @@ class DesktopHw(MultiAVRobotHardware):
     capture-side setting.
     """
 
-    def __init__(self):
+    def __init__(self, camera: str = None, mic: str = None, speaker: str = None):
         if pyautogui is None:
             raise DesktopCaptureError(
                 "pyautogui could not be imported (it needs a live, connectable "
@@ -89,23 +102,44 @@ class DesktopHw(MultiAVRobotHardware):
                 "environment variable set, e.g. Environment=DISPLAY=:0 in the "
                 "service's [Service] section."
             )
-        try:
-            webcam_device = find_camera_devices()[0]
-        except IndexError:
-            log.error("Could not find a webcam device. Will be starting without one.")
-            webcam_device = None
+        webcam_device = camera or settings['camera_device']
+        if webcam_device is None:
+            try:
+                webcam_device = find_camera_devices()[0]
+            except IndexError:
+                log.error("Could not find a webcam device. Will be starting without one.")
+        log.info(f"[hardware] using camera device: {webcam_device!r}")
+
         video_sources = {DESKTOP_VIDEO_ID: VIDEO_SOURCE_XIMAGESRC}
         if webcam_device:
             video_sources[f'webcam:{webcam_device}'] = webcam_device
 
+        # The desktop mix (monitor + default mic) is always first, so it
+        # stays the default active input. A standalone mic entry is
+        # added alongside it as a selectable alternative (mic-only,
+        # without desktop audio mixed in).
         audio_inputs = {DESKTOP_AUDIO_IN_ID: AUDIO_SOURCE_DESKTOP_MIX}
+        mic_device = mic or settings['mic_device']
+        if mic_device is None:
+            try:
+                mic_device = get_first_mic_device()
+            except DeviceNotFoundError:
+                log.info("No standalone mic found -- desktop mix only.")
+        log.info(f"[hardware] using mic device: {mic_device!r}")
+        if mic_device:
+            audio_inputs[f'mic:{mic_device}'] = mic_device
+
+        speaker_device = speaker or settings['speaker_device']
+        if speaker_device is None:
+            try:
+                speaker_device = get_first_speaker_device()
+            except DeviceNotFoundError:
+                log.error("Could not find a speaker device. Will be starting without one.")
+        log.info(f"[hardware] using speaker device: {speaker_device!r}")
 
         audio_outputs = {}
-        try:
-            speaker = get_first_speaker_device()
-            audio_outputs[f'speaker:{speaker}'] = speaker
-        except DeviceNotFoundError:
-            log.error("Could not find a speaker device. Will be starting without one.")
+        if speaker_device:
+            audio_outputs[f'speaker:{speaker_device}'] = speaker_device
 
         # Native screen resolution, not settings['cam_res'] -- desktop
         # content is mostly static and compresses well at full res, and
@@ -119,11 +153,16 @@ class DesktopHw(MultiAVRobotHardware):
                          audio_outputs=audio_outputs, sample_rate=48000,
                          width=screen.width, height=screen.height)
 
-        self._held_keys: set = set()
+        self._held_keys: dict = {}   # key name -> last refresh time (monotonic)
         self._held_buttons: set = set()
+        self._kw_stop = threading.Event()
+        self._kw_thread: threading.Thread = None
 
     def setup(self, parent):
         super().setup(parent)
+        self._kw_stop.clear()
+        self._kw_thread = threading.Thread(target=self._key_watchdog_loop, daemon=True)
+        self._kw_thread.start()
         log.info(f'Desktop hardware started (video source: {self._active_video})')
 
     def build_capabilities(self) -> RobotCapabilities:
@@ -141,11 +180,14 @@ class DesktopHw(MultiAVRobotHardware):
     def _on_key_event(self, hostname: str, obj: KeyEvent):
         try:
             if obj.pressed:
-                pyautogui.keyDown(obj.key)
-                self._held_keys.add(obj.key)
+                if obj.key not in self._held_keys:
+                    pyautogui.keyDown(obj.key)
+                # Already-held keys just refresh their watchdog stamp --
+                # the brain re-sends key-down periodically while held.
+                self._held_keys[obj.key] = time.monotonic()
             else:
                 pyautogui.keyUp(obj.key)
-                self._held_keys.discard(obj.key)
+                self._held_keys.pop(obj.key, None)
         except pyautogui.FailSafeException:
             log.warning('pyautogui failsafe triggered (mouse in corner) -- ignoring key event')
         except Exception as e:
@@ -190,7 +232,25 @@ class DesktopHw(MultiAVRobotHardware):
     def halt(self):
         self._release_all_held()
 
+    def _key_watchdog_sweep(self, now: float):
+        for key, last in list(self._held_keys.items()):
+            if now - last > KEY_WATCHDOG_TIMEOUT_S:
+                log.warning(f'[hardware] key watchdog releasing stuck key {key!r} '
+                            f'(no refresh for {now - last:.2f}s)')
+                try:
+                    pyautogui.keyUp(key)
+                except Exception:
+                    pass
+                self._held_keys.pop(key, None)
+
+    def _key_watchdog_loop(self):
+        while not self._kw_stop.wait(0.2):
+            self._key_watchdog_sweep(time.monotonic())
+
     def stop(self):
+        self._kw_stop.set()
+        if self._kw_thread is not None:
+            self._kw_thread.join(timeout=1.0)
         self._release_all_held()
         super().stop()
 

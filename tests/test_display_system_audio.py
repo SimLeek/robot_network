@@ -112,6 +112,7 @@ class TestRunOnceAppliesNormalization(unittest.TestCase):
         sub.viewport = Viewport()
         sub._edit_mouse_pos = None
         sub._audio_stream = None
+        sub._fullscreen_key_disabled = True  # not under test here -- see test_disable_fullscreen_key.py
         return sub
 
     def _run(self, coro):
@@ -146,3 +147,29 @@ class TestRunOnceAppliesNormalization(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestUpdateAudioFormats(unittest.TestCase):
+    """update_audio accepts None (early return, no dtype access), raw
+    int16 (converted to float32 [-1, 1]), and float input unchanged."""
+
+    def _make_sub(self):
+        return DisplaySubSystem.__new__(DisplaySubSystem)
+
+    def test_none_does_not_crash_on_dtype_access(self):
+        # Regression: aud.dtype was checked before the None check.
+        sub = self._make_sub()
+        sub.update_audio(None)  # must not raise
+        self.assertIsNone(sub.in_aud)
+
+    def test_int16_input_is_normalized_to_float(self):
+        sub = self._make_sub()
+        sub.update_audio(np.array([0, 16384, -16384], dtype=np.int16))
+        np.testing.assert_allclose(sub.in_aud, [0.0, 0.5, -0.5], atol=1e-6)
+        self.assertEqual(sub.in_aud.dtype, np.float32)
+
+    def test_float_input_passes_through_as_float32(self):
+        sub = self._make_sub()
+        sub.update_audio(np.array([0.25, -0.25], dtype=np.float64))
+        np.testing.assert_allclose(sub.in_aud, [0.25, -0.25])
+        self.assertEqual(sub.in_aud.dtype, np.float32)

@@ -84,7 +84,7 @@ def _video_encoder_candidates() -> list:
     if not found:
         log.warning('[gst] no video encoder found in GStreamer registry')
     else:
-        log.info(f'[gst] video encoder candidates: {[n for n, _ in found]}')
+        log.info(f'[gst] video encoder candidates: {[n for n,_ in found]}')
     return found
 
 
@@ -101,7 +101,7 @@ def _audio_encoder_candidates() -> list:
     if not found:
         log.warning('[gst] no audio encoder found in GStreamer registry')
     else:
-        log.info(f'[gst] audio encoder candidates: {[n for n, _ in found]}')
+        log.info(f'[gst] audio encoder candidates: {[n for n,_ in found]}')
     return found
 
 
@@ -172,11 +172,12 @@ class _VideoPipeline:
         capsflt = Gst.ElementFactory.make('capsfilter',   'vcaps')
         conv    = Gst.ElementFactory.make('videoconvert', 'vconv')
         outcaps = Gst.ElementFactory.make('capsfilter',   'voutcaps')
+        vq      = Gst.ElementFactory.make('queue',        'vq')
         enc     = Gst.ElementFactory.make(self._enc_name, 'venc')
         pay     = Gst.ElementFactory.make(_rtp_pay_name(self._video_codec), 'vpay')
         sink    = Gst.ElementFactory.make('udpsink',      'vsink')
 
-        if None in (src, scale, capsflt, conv, outcaps, enc, pay, sink):
+        if None in (src, scale, capsflt, conv, outcaps, vq, enc, pay, sink):
             log.error('[gst] could not instantiate all video pipeline elements')
             return False
 
@@ -192,11 +193,31 @@ class _VideoPipeline:
         if self._video_codec == 'h264':
             pay.set_property('config-interval', 1)
         _apply_bitrate(enc, self._enc_name, self._bitrate)
+        # Anti-congestion: if the encoder or network can't keep up,
+        # drop stale frames AT THE SOURCE instead of letting a backlog
+        # build -- a backlog is exactly the "receiver drawing
+        # seconds-old frames at 2fps" failure seen on degraded wifi.
+        vq.set_property('leaky', 2)  # downstream: old buffers get dropped
+        vq.set_property('max-size-buffers', 1)
+        vq.set_property('max-size-bytes', 0)
+        vq.set_property('max-size-time', 0)
+        # x264enc's defaults buffer 40+ frames of rc-lookahead plus
+        # B-frame reordering -- well over a second of latency at 30fps
+        # before a single packet leaves the machine.
+        if self._enc_name == 'x264enc':
+            enc.set_property('tune', 'zerolatency')
+            enc.set_property('speed-preset', 'ultrafast')
+            enc.set_property('key-int-max', max(1, int(self._fps)) * 2)
+        elif self._enc_name in ('nvh264enc', 'nvh265enc'):
+            try:
+                enc.set_property('zerolatency', True)
+            except TypeError:
+                pass  # property availability varies across plugin versions
         sink.set_property('host', self._receiver_ip)
         sink.set_property('port', VIDEO_PORT)
         sink.set_property('sync', False)
 
-        for el in (src, scale, capsflt, conv, outcaps, enc, pay, sink):
+        for el in (src, scale, capsflt, conv, outcaps, vq, enc, pay, sink):
             p.add(el)
 
         src.link(scale)
@@ -204,14 +225,15 @@ class _VideoPipeline:
         capsflt.link(conv)
         conv.link(outcaps)
 
+        outcaps.link(vq)
         if self._video_codec in ('h264', 'h265'):
             parse = Gst.ElementFactory.make(f'{self._video_codec}parse', 'vparse')
             p.add(parse)
-            outcaps.link(enc)
+            vq.link(enc)
             enc.link(parse)
             parse.link(pay)
         else:
-            outcaps.link(enc)
+            vq.link(enc)
             enc.link(pay)
 
         pay.link(sink)
@@ -288,6 +310,7 @@ class _VideoPipeline:
 
 
 AUDIO_SOURCE_DESKTOP_MIX = 'desktop-audio-mix'
+AUDIO_SOURCE_SINE_TEST = 'sine-test-tone'
 
 
 def _pactl_get_default(field: str) -> Optional[str]:
@@ -347,14 +370,18 @@ class _AudioPipeline:
             src  = Gst.ElementFactory.make('pulsesrc',     f'a{name}src')
             conv = Gst.ElementFactory.make('audioconvert', f'a{name}conv')
             rsmp = Gst.ElementFactory.make('audioresample', f'a{name}rsmp')
-            if None in (src, conv, rsmp):
+            q    = Gst.ElementFactory.make('queue',        f'a{name}q')  # per-branch queue
+            if None in (src, conv, rsmp, q):
                 log.warning(f'[gst] could not instantiate pulsesrc branch for {name}')
                 continue
+            q.set_property('leaky', 2)
+            q.set_property('max-size-time', 50 * Gst.MSECOND)
             src.set_property('device', device)
-            p.add(src); p.add(conv); p.add(rsmp)
+            p.add(src); p.add(conv); p.add(rsmp); p.add(q)
             src.link(conv)
             conv.link(rsmp)
-            rsmp.link(mixer)
+            rsmp.link(q)
+            q.link(mixer)
             found_any = True
 
         if not found_any:
@@ -365,33 +392,60 @@ class _AudioPipeline:
     def build(self) -> bool:
         p = Gst.Pipeline.new('audio-send')
         is_desktop_mix = (self._mic_device == AUDIO_SOURCE_DESKTOP_MIX)
+        is_sine_test = (self._mic_device == AUDIO_SOURCE_SINE_TEST)
 
-        capsflt= Gst.ElementFactory.make('capsfilter',   'acaps')
-        enc    = Gst.ElementFactory.make(self._enc_name, 'aenc')
-        pay    = Gst.ElementFactory.make(_rtp_audio_pay_name(self._audio_codec), 'apay')
-        sink   = Gst.ElementFactory.make('udpsink',      'asink')
+        capsflt = Gst.ElementFactory.make('capsfilter', 'acaps')
+        enc     = Gst.ElementFactory.make(self._enc_name, 'aenc')
+        pay     = Gst.ElementFactory.make(_rtp_audio_pay_name(self._audio_codec), 'apay')
+        sink    = Gst.ElementFactory.make('udpsink', 'asink')
+        conv    = Gst.ElementFactory.make('audioconvert', 'aconv')
+        resample = Gst.ElementFactory.make('audioresample', 'aresample')
+        aq      = Gst.ElementFactory.make('queue', 'aq')   # Main leaky queue before encoder
 
-        if None in (capsflt, enc, pay, sink):
+        if None in (capsflt, enc, pay, sink, conv, resample, aq):
             log.error('[gst] could not instantiate all audio pipeline elements')
             return False
 
         pay.set_property('pt', 97)
-        capsflt.set_property('caps', Gst.Caps.from_string(
-            f'audio/x-raw,rate={self._sample_rate},channels=1'))
+
+        # S16LE end-to-end: F32LE is not actually supported by the audio
+        # hardware on this (and most) systems -- confirmed by direct
+        # testing. Opus additionally requires 48kHz.
+        target_rate = 48000 if self._audio_codec == 'opus' else self._sample_rate
+
+        caps_str = f'audio/x-raw,format=S16LE,layout=interleaved,rate={target_rate},channels=1'
+        capsflt.set_property('caps', Gst.Caps.from_string(caps_str))
+        #capsflt.set_property('caps', Gst.Caps.from_string(
+        #    f'audio/x-raw,format=F32LE,rate={self._sample_rate},channels=1'))
+
+        # Leaky queue - critical for preventing audio backlog on pause/jitter
+        aq.set_property('leaky', 2)                    # drop old buffers
+        aq.set_property('max-size-time', 100 * Gst.MSECOND)
+        aq.set_property('max-size-buffers', 4)
+        aq.set_property('max-size-bytes', 0)
+
         sink.set_property('host', self._server_ip)
         sink.set_property('port', AUDIO_PORT)
         sink.set_property('sync', False)
 
-        for el in (capsflt, enc, pay, sink):
+        for el in (capsflt, enc, pay, sink, conv, resample, aq):
             p.add(el)
-        capsflt.link(enc)
-        enc.link(pay)
-        pay.link(sink)
 
+        # Source selection
         if is_desktop_mix:
             src_out = self._build_desktop_mix_source(p)
             if src_out is None:
                 return False
+        elif is_sine_test:
+            src = Gst.ElementFactory.make('audiotestsrc', 'asrc')
+            if src is None:
+                log.error('[gst] could not instantiate audiotestsrc')
+                return False
+            src.set_property('wave', 'sine')
+            src.set_property('freq', 440.0)
+            src.set_property('is-live', True)
+            p.add(src)
+            src_out = src
         else:
             src = Gst.ElementFactory.make('alsasrc', 'asrc')
             if src is None:
@@ -401,7 +455,25 @@ class _AudioPipeline:
             p.add(src)
             src_out = src
 
-        src_out.link(capsflt)
+        # Linking
+        src_out.link(conv)
+        conv.link(resample)
+        resample.link(aq)
+        aq.link(capsflt)
+        capsflt.link(enc)
+        enc.link(pay)
+        pay.link(sink)
+
+        # Low-latency encoder settings
+        if self._enc_name == 'opusenc':
+            enc.set_property('bitrate', 64000)
+            enc.set_property('hard-resync', True)
+            try:
+                enc.set_property('frame-size', 5)   # 5ms frames for lowest latency
+            except TypeError:
+                pass
+        elif self._enc_name in ('avenc_aac', 'omxaacenc'):
+            enc.set_property('bitrate', 96000)
 
         self._pipeline = p
         return True

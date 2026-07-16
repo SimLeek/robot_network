@@ -11,7 +11,7 @@ Pipeline graphs:
 """
 
 from __future__ import annotations
-
+import time
 import threading
 from typing import Optional, Callable, TYPE_CHECKING
 
@@ -246,14 +246,20 @@ class _AudioRecvPipeline:
 
     def __init__(self, info: GstStreamInfo, dec_name: str,
                  direct_audio: bool, audio_device: str,
-                 on_audio: Optional[Callable[[np.ndarray], None]] = None):
+                 on_audio: Optional[Callable[[np.ndarray], None]] = None,
+                 play_locally: bool = False):
         self._info         = info
         self._dec_name     = dec_name
         self._direct_audio = direct_audio
         self._audio_device = audio_device
         self._on_audio     = on_audio
+        self._play_locally = play_locally
         self._pipeline:    Optional[Gst.Pipeline] = None
         self._first_packet = False
+
+        # Polling support for non-direct audio visualizer path
+        self._running: bool = False
+        self._poll_thread: Optional[threading.Thread] = None
 
     def build(self) -> bool:
         codec      = self._info.audio_codec
@@ -264,44 +270,113 @@ class _AudioRecvPipeline:
         depay   = Gst.ElementFactory.make(depay_name,     'adepay')
         dec     = Gst.ElementFactory.make(self._dec_name, 'adec')
         conv    = Gst.ElementFactory.make('audioconvert', 'aconv')
+        resample = Gst.ElementFactory.make('audioresample', 'aresample')
         outcaps = Gst.ElementFactory.make('capsfilter',   'aoutcaps')
 
         if self._direct_audio:
-            sink = Gst.ElementFactory.make('alsasink', 'asink')
-            if sink:
-                sink.set_property('device', self._audio_device)
-                sink.set_property('sync',   False)
+            dev = self._audio_device
+            if dev and dev not in ('default', 'auto'):
+                # An explicit device string (e.g. 'hw:1,0') is honored
+                sink = Gst.ElementFactory.make('alsasink', 'asink')
+                if sink:
+                    sink.set_property('device', dev)
+                    sink.set_property('sync', False)
+                log.info(f'[gst-recv] audio sink: alsasink device={dev!r}')
+            else:
+                # Raw ALSA 'default' is frequently a dead end on
+                # pipewire/pulse systems: confirmed by direct testing on
+                # the actual endpoint, where a test tone on the default
+                # device was silent while the pipewire device played
+                # fine. autoaudiosink picks pipewiresink / pulsesink /
+                # alsasink in whatever order actually works on the box.
+                sink = Gst.ElementFactory.make('autoaudiosink', 'asink')
+                if sink:
+                    try:
+                        sink.set_property('sync', False)
+                    except TypeError:
+                        pass  # property proxying varies by GStreamer version
+                log.info('[gst-recv] audio sink: autoaudiosink (auto-routing)')
         else:
             sink = Gst.ElementFactory.make('appsink', 'asink')
             if sink:
-                sink.set_property('emit-signals', True)
+                # Critical: Use polling instead of signals to avoid GLib/Python bridge latency
+                sink.set_property('emit-signals', False)
                 sink.set_property('max-buffers',  4)
-                sink.set_property('drop',         True)
+                sink.set_property('drop',         False)   # Let leaky queue upstream manage backlog
                 sink.set_property('sync',         False)
-                if self._on_audio is not None:
-                    sink.connect('new-sample', self._pull_chunk)
+                sink.set_property('async',        False)
+                log.info('[gst-recv] audio sink: appsink (polling mode for visualizer)')
 
-        if None in (src, depay, dec, conv, outcaps, sink):
+        play_elems = ()
+        if (not self._direct_audio) and self._play_locally:
+            # Local playback branch, tee'd off AFTER decode/convert/
+            # resample but BEFORE the S16LE appsink caps -- the numpy
+            # path keeps its fixed S16LE contract while playback
+            # negotiates whatever the real hardware wants through its
+            # own audioconvert. autoaudiosink for the same reason as
+            # the endpoint path: raw ALSA 'default' is a dead end on
+            # pipewire/pulse systems. This replaces the sounddevice
+            # playback path entirely -- the display loop's vsync
+            # blocking starves a realtime Python audio callback into
+            # constant clicks/underruns, while GStreamer's own threads
+            # are unaffected by it.
+            tee      = Gst.ElementFactory.make('tee',           'atee')
+            q_app    = Gst.ElementFactory.make('queue',         'aq_app')
+            q_app.set_property('max-size-time', 100 * Gst.MSECOND)
+            q_app.set_property('leaky', 2)  # Leaky on downstream
+            q_play   = Gst.ElementFactory.make('queue',         'aq_play')
+            conv2    = Gst.ElementFactory.make('audioconvert',  'aconv2')
+            playsink = Gst.ElementFactory.make('autoaudiosink', 'aplaysink')
+            if playsink is not None:
+                try:
+                    playsink.set_property('sync', False)
+                except TypeError:
+                    pass  # property proxying varies by GStreamer version
+            play_elems = (tee, q_app, q_play, conv2, playsink)
+            if None in play_elems:
+                log.warning('[gst-recv] local playback elements unavailable -- '
+                            'continuing without local audio playback')
+                play_elems = ()
+            else:
+                log.info('[gst-recv] local audio playback: autoaudiosink (tee off receive pipeline)')
+
+        if None in (src, depay, dec, conv, resample, outcaps, sink):
             log.error('[gst-recv] could not instantiate all audio recv elements')
             return False
 
         src.set_property('port', self._info.audio_port)
-        # Opus clock-rate is always 48000 per RFC 7587 regardless of output rate
+
+        # RTP caps for udpsrc
         clock_rate = 48000 if codec == 'opus' else self._info.sample_rate
         src.set_property('caps', Gst.Caps.from_string(
             f'application/x-rtp,media=audio,clock-rate={clock_rate},'
             f'encoding-name={codec.upper()},payload=97'))
 
-        outcaps.set_property('caps', Gst.Caps.from_string(
-            f'audio/x-raw,format=F32LE,rate={self._info.sample_rate},channels=1'))
+        # Output as S16LE (consistent with sender)
+        caps = Gst.Caps.from_string(
+            f'audio/x-raw,format=S16LE,layout=interleaved,rate={self._info.sample_rate},channels=1'
+        )
+        outcaps.set_property('caps', caps)
+        #outcaps.set_property('caps', Gst.Caps.from_string(
+        #    f'audio/x-raw,format=F32LE,layout=interleaved,rate={self._info.sample_rate},channels=1'))
 
-        for el in (src, depay, dec, conv, outcaps, sink):
+        for el in (src, depay, dec, conv, resample, outcaps, sink) + play_elems:
             p.add(el)
 
+        # Linking
         src.link(depay)
         depay.link(dec)
         dec.link(conv)
-        conv.link(outcaps)
+        conv.link(resample)
+        if play_elems:
+            resample.link(tee)
+            tee.link(q_app)        # element.link auto-requests a tee src pad
+            q_app.link(outcaps)
+            tee.link(q_play)
+            q_play.link(conv2)
+            conv2.link(playsink)
+        else:
+            resample.link(outcaps)
         outcaps.link(sink)
 
         def _pkt_probe(pad, info):
@@ -309,11 +384,13 @@ class _AudioRecvPipeline:
                 self._first_packet = True
                 log.info('[gst-recv] first RTP audio packet received')
             return Gst.PadProbeReturn.OK
+
         src.get_static_pad('src').add_probe(
             Gst.PadProbeType.BUFFER, _pkt_probe)
 
         bus = p.get_bus()
         bus.set_sync_handler(self._on_bus_sync, None)
+
         self._pipeline = p
         return True
 
@@ -363,19 +440,54 @@ class _AudioRecvPipeline:
             log.warning('[gst-recv audio] EOS')
         return Gst.BusSyncReply.DROP
 
-    def _pull_chunk(self, sink) -> Gst.FlowReturn:
-        sample = sink.emit('pull-sample')
-        if sample is None:
-            return Gst.FlowReturn.ERROR
+    def _poll_loop(self):
+        """Dedicated polling thread for appsink to avoid GLib signal latency."""
+        sink = self._pipeline.get_by_name('asink') if self._pipeline else None
+        if not sink:
+            log.error('[gst-recv] polling thread could not find asink')
+            return
+
+        while self._running:
+            # Short timeout poll (100ms) - non-blocking for the thread
+            sample = None
+            try:
+                # 100ms timeout on try-pull-sample is safe; we sleep only when idle
+                sample = sink.emit('try-pull-sample', 100 * Gst.MSECOND)
+            except Exception as e:
+                log.error(f'[gst-recv] try-pull-sample error: {e}')
+                time.sleep(0.01)
+                continue
+            if sample:
+                self._process_sample(sample)
+                # Allow processing a few samples in a burst without sleeping
+                for _ in range(3):  # small burst handling
+                    sample = sink.emit('try-pull-sample', 0)  # non-blocking
+                    if sample:
+                        self._process_sample(sample)
+                    else:
+                        break
+            else:
+                # Yield to other threads / reduce CPU when idle
+                time.sleep(0.001)  # 1ms — responsive but very low CPU
+
+    def _process_sample(self, sample):
+        """Extract and normalize audio chunk (S16LE -> float32)."""
         buf = sample.get_buffer()
         ok, mapinfo = buf.map(Gst.MapFlags.READ)
         if not ok:
             return Gst.FlowReturn.ERROR
         try:
-            chunk = np.frombuffer(mapinfo.data, dtype=np.float32).copy()
-            self._on_audio(chunk)
+            # Caps are S16LE end-to-end (F32LE is not supported by the
+            # actual audio hardware on most systems, confirmed by
+            # direct testing). Convert to float32 in [-1, 1] here at
+            # the boundary so every downstream consumer (display
+            # waveform, AI, playback queue) sees one consistent format.
+            raw = np.frombuffer(mapinfo.data, dtype=np.int16)
+            chunk = raw.astype(np.float32) / 32768.0
+            if self._on_audio:
+                self._on_audio(chunk)
         except Exception as e:
-            log.error(f'[gst-recv] audio callback error: {e}')
+            log.error(f'[gst-recv] audio processing error: {e}')
         finally:
             buf.unmap(mapinfo)
         return Gst.FlowReturn.OK
@@ -387,11 +499,21 @@ class _AudioRecvPipeline:
                 log.error(f'[{self.__class__.__name__}] failed to reach PLAYING')
             else:
                 log.info(f'[{self.__class__.__name__}] successfully transitioned to PLAYING.')
+                self._running = True
+                # Start polling only for visualizer path (non-direct_audio)
+                if not self._direct_audio and self._on_audio is not None:
+                    self._poll_thread = threading.Thread(
+                        target=self._poll_loop, daemon=True, name='gst-audio-poll')
+                    self._poll_thread.start()
 
     def stop(self):
+        self._running = False
+        if self._poll_thread and self._poll_thread.is_alive():
+            self._poll_thread.join(timeout=0.5)  # Short join to avoid blocking shutdown
         if self._pipeline:
             self._pipeline.set_state(Gst.State.NULL)
         self._pipeline = None
+        self._poll_thread = None
 
 
 class GstReceiver:
@@ -403,11 +525,13 @@ class GstReceiver:
                  recv_img_callback:       Optional[Callable[[np.ndarray], None]] = None,
                  direct_audio:       bool                                   = False,
                  audio_output_device: str                                   = 'default',
-                 recv_audio_callback: Optional[Callable[[np.ndarray], None]] = None):
+                 recv_audio_callback: Optional[Callable[[np.ndarray], None]] = None,
+                 play_locally: bool = False):
         self._recv_image_callback = recv_img_callback
         self._direct_audio        = direct_audio
         self._audio_device        = audio_output_device
         self._recv_audio_callback = recv_audio_callback
+        self._play_locally        = play_locally
 
         self._info:    Optional[GstStreamInfo]      = None
         self._vpipe:   Optional[_VideoRecvPipeline] = None
@@ -492,7 +616,8 @@ class GstReceiver:
         for dec_name in _audio_decoder_candidates(self._info.audio_codec):
             log.info(f'[gst-recv] trying audio decoder: {dec_name}')
             pipe = _AudioRecvPipeline(
-                self._info, dec_name, self._direct_audio, self._audio_device, on_audio=on_audio)
+                self._info, dec_name, self._direct_audio, self._audio_device, on_audio=on_audio,
+                play_locally=self._play_locally)
             if not pipe.build():
                 log.warning(f'[gst-recv] {dec_name}: build failed, trying next')
                 continue

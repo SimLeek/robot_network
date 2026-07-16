@@ -40,6 +40,12 @@ class MenuStateMachine(StateChart):
     capabilities = main_menu.to(capabilities_menu)
     av_sources   = main_menu.to(av_sources_menu)
 
+    # pre-connection preview: viewing a discovered (not yet connected)
+    # endpoint's capabilities from within the radio menu, returning to
+    # the radio menu specifically rather than main_menu on escape
+    preview_capabilities = radio_menu.to(capabilities_menu)
+    leave_to_radio        = capabilities_menu.to(radio_menu)
+
 
 # ---------------------------------------------------------------------------
 # Palette (BGR, matching OpenCV convention used by displayarray)
@@ -77,14 +83,15 @@ def _fmt_axis(a: dict) -> str:
 def _fmt_stream(s: dict) -> str:
     name = s.get('name', '?')
     t    = s.get('type', '?')
+    io   = s.get('io', '?')
     if 'mjpeg' in t or 'video' in t:
         w, h = s.get('width', '?'), s.get('height', '?')
-        return f'{name}  {t}  {w}x{h}'
+        return f'{name}  [{io}]  {t}  {w}x{h}'
     if 'audio' in t:
         sr = s.get('sample_rate', '?')
         ch = s.get('channels',    '?')
-        return f'{name}  {t}  {sr}Hz  ch{ch}'
-    return f'{name}  {t}'
+        return f'{name}  [{io}]  {t}  {sr}Hz  ch{ch}'
+    return f'{name}  [{io}]  {t}'
 
 class SelectionMenu:
     """
@@ -123,6 +130,8 @@ class SelectionMenu:
         # Endpoint capabilities state (axes/streams)
         self._endpoint_caps: Optional[dict] = None   # {'axes': [...], 'streams': [...]}
         self._endpoint_page: int = 0                  # index into _CAPS_PAGES
+        self._caps_from_preview: bool = False          # entered via radio-menu preview (pre-connection), not the main menu
+        self._connected_endpoint_caps: Optional[dict] = None  # the real, connected endpoint's caps -- preserved under a preview
 
         # AV source selection state
         self._av_sources = None   # most recent AVSourcesAnnounce, or None
@@ -167,7 +176,14 @@ class SelectionMenu:
 
     def set_endpoint_capabilities(self, caps: dict):
         self._endpoint_caps = caps
+        self._connected_endpoint_caps = caps
         self._endpoint_page = 0
+
+    def preview_endpoint_capabilities(self, caps: dict):
+        """Show a discovered endpoint's capabilities."""
+        self._endpoint_caps = caps
+        self._endpoint_page = 0
+        self._caps_from_preview = True
 
     def set_av_sources(self, announce):
         """Called by MenuSubSystem whenever an AVSourcesAnnounce arrives"""
@@ -258,15 +274,17 @@ class SelectionMenu:
     # --- radio ---------------------------------------------------------
 
     def get_unique_endpoints(self):
-        seen_ids = set()
-        unique_endpoints = []
-
+        """Dedupe by logical identity (hostname, falling back to ip)."""
+        best: Dict[str, Endpoint] = {}
         for ep in self._endpoints.values():
-            obj_id = id(ep)  # Or ep.unique_id if your class has one
-            if obj_id not in seen_ids:
-                unique_endpoints.append(ep)
-                seen_ids.add(obj_id)
-        return unique_endpoints
+            logical_key = ep.hostname or ep.ip
+            current = best.get(logical_key)
+            if current is None:
+                best[logical_key] = ep
+            elif (getattr(ep, 'capabilities_received', False)
+                  and not getattr(current, 'capabilities_received', False)):
+                best[logical_key] = ep
+        return list(best.values())
 
     def _radio_items(self) -> List[str]:
         """Build the current radio menu item list."""
@@ -301,6 +319,17 @@ class SelectionMenu:
             self._cursor = max(0, self._cursor - 1)
         elif key == 'down':
             self._cursor = min(n - 1, self._cursor + 1)
+        elif key == 'right':
+            ep_idx = self._cursor - 5
+            if 0 <= ep_idx < len(endpoints):
+                ep = endpoints[ep_idx]
+                if not getattr(ep, 'capabilities_received', False):
+                    self.set_status('Endpoint not ready yet - wait for capabilities')
+                else:
+                    self.preview_endpoint_capabilities(
+                        {'axes': ep.axes, 'streams': ep.streams})
+                    self.menu_state.send('preview_capabilities')
+                    self._cursor = 0
         elif key == 'escape':
             self.menu_state.send('leave')
             self._cursor = 0
@@ -416,7 +445,12 @@ class SelectionMenu:
         n = len(items)
 
         if key == 'escape':
-            self.menu_state.send('leave')
+            if self._caps_from_preview:
+                self._endpoint_caps = self._connected_endpoint_caps  # restore -- a preview must never leave the real connected endpoint's caps clobbered
+                self._caps_from_preview = False
+                self.menu_state.send('leave_to_radio')
+            else:
+                self.menu_state.send('leave')
             self._cursor = 0
             self._endpoint_page = 0
         elif key == 'left':
@@ -606,7 +640,7 @@ class SelectionMenu:
             items=items,
             cursor=self._cursor,
             base_colors=colors,
-            footer='[Ent]=select  [Tab]=back',
+            footer='[Ent]=connect  [->]=preview caps  [Tab]=back',
         )
 
     def _draw_settings_menu(self, img):

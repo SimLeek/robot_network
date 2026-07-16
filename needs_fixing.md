@@ -225,3 +225,319 @@ these fixes should be implemented but are either large tasks or are blocked.
   actual robot on the network.
   Simleek: This was maybe_auto_connect being too permissive. I fixed it by 
   adding checks. I expected it to connect on localhost or wired, not wifi.
+  Updated 3 tests in test_radio_autoconnect.py that predated this fix and
+  didn't set start_mode to match their priority list -- the new check
+  correctly requires the current mode to actually be in that list.
+
+- **AI passthrough implemented on a new branch (ai_passthrough, off
+  main).** DesktopSubSystem gets a dedicated ActionFactory (af_ai),
+  independent of DisplaySubSystem's af_thru/af_edit (those only exist
+  with a display window; af_ai works headless). Mouse position drives
+  through 2 neurons (AI_NEURON_MOUSE_X/Y, threshold=0), buttons through
+  6 tokens (press/release x left/right/middle); keyboard is direct
+  methods (ai_key_press/release) since there are too many possible keys
+  for a fixed token enum. input_source ('human'/'ai') gates both paths
+  symmetrically -- whichever is active gets sent, the other silently
+  dropped, since both driving the same remote cursor at once would just
+  fight each other. AI mouse coordinates are direct screen fractions
+  (_ai_frac_to_pixel), deliberately not routed through the human path's
+  zoom/pan-aware inverse_map -- an AI isn't looking through a human's
+  local viewport, so it shouldn't be affected by whatever that's zoomed/
+  panned to. examples/ai_passthrough_demo.py demonstrates it: circular
+  mouse motion, one right-click, one F11 tap, and a sine-wave test tone
+  (new AUDIO_SOURCE_SINE_TEST sentinel in streamer_unencrypted.py,
+  audiotestsrc-based, no real mic needed) sent as the brain's own
+  outbound audio via MenuSubSystem's already-public gst_sender. Found
+  and fixed two real, blocking bugs in ServerSystem along the way:
+  async_loops() called self.displayer.run(self) unconditionally, which
+  crashed any headless session immediately despite the constructor's own
+  `assert displayer or ai` explicitly allowing displayer=None; and
+  self.ai's start/stop/async_loops were never called anywhere at all, so
+  an AI subsystem's coroutines would never actually get scheduled. No
+  prior test coverage existed for ServerSystem -- added
+  tests/test_server_system.py.
+
+- **AI wasn't receiving audio at all.** AISubSystem only had
+  update_frame/in_img -- no audio equivalent existed. send_frames_always
+  already sent both video and audio to a human display but only video to
+  self.root.ai. The video side (menu overlay included, since it's the
+  same already-composited frame) was correctly shared -- just audio was
+  missing entirely. Added update_audio/in_aud to AISubSystem, matching
+  update_frame/in_img exactly, and the corresponding call in
+  send_frames_always. No prior test coverage existed for either
+  AISubSystem or send_frames_always -- added tests/test_ai_system.py and
+  tests/test_send_frames_always.py.
+
+- **Fixed from IRL testing round (re-applied after an environment reset
+  lost the first attempt before it could be committed):**
+  1. AI right-click sent the wrong button. _AI_BUTTON_NAMES used a
+     sequential 0/1/2 convention; the endpoint's own _MOUSE_BUTTON_NAMES
+     uses pyglet's bitmask values (1/2/4). code=1 ('right' under the old
+     table) decoded as 'left' on the endpoint. Fixed to match exactly;
+     added a cross-check test importing both tables directly so this
+     can't silently regress again.
+  2. F11 toggled displayarray's own fullscreen instead of reaching the
+     endpoint -- moderngl_window's base Window class binds F11 to
+     fullscreen-toggle by default, before pass_through_cb ever sees it.
+     Disabled via wnd.fullscreen_key = None (moderngl_window's own
+     documented mechanism), applied once the window becomes reachable
+     (guarded/idempotent in DisplaySubSystem.run_once). F1 has no such
+     special handling in moderngl_window at all -- if still not working,
+     most likely reaching the endpoint fine but having no visible effect
+     there (F1 isn't bound to anything by default on most desktops).
+  3. AISubSystem had no way to know if real video/audio had actually
+     started flowing -- added has_video/has_audio flags. Demo now waits
+     on both before starting its sequence -- log showed a ~9s gap
+     between connecting and audio actually flowing, so the sine tone
+     was very likely never actually heard.
+  4. Mouse "offset" after the AI demo ends is very likely not a bug --
+     absolute positioning means the remote cursor snaps to wherever the
+     human's own local mouse currently sits the moment control returns,
+     regardless of where the AI left it. Worth confirming next round.
+  5. Checked test coverage for the discovery issue: the endpoint's own
+     RobotState machine has a clean one-go test already
+     (test_normal_full_handshake). Nothing exercises the real
+     RadioSubSystem/NetworkScanner discovery-then-capabilities flow
+     together end to end -- existing tests only unit-test individual
+     handlers with hand-built fixtures. Worth building if it recurs.
+
+  Also: this session's sandbox lost several installed packages partway
+  through (zmq, python-statemachine, gstreamer GObject bindings,
+  PyV4L2Cam + libv4l-dev, PortAudio, displayarray + its GL/window stack)
+  along with all uncommitted working-tree changes -- unrelated to any
+  code issue, just worth knowing the sandbox itself isn't durable
+  storage. All reinstalled and 398/398 tests confirmed passing again.
+
+- **Pre-connection capability preview.** The 'radio'/'settings'/
+  'capabilities' menu structure Simleek described already existed
+  (MenuStateMachine, left/right key routing all the way from
+  moderngl_window's Keys through handle_keyboard to
+  _handle_capabilities_key, footer hint bars) -- it just had no
+  pre-connection path. set_endpoint_capabilities was only ever called
+  post-connection, even though ep.axes/ep.streams are already populated
+  on the Endpoint object the moment RobotCapabilities arrives during
+  discovery, well before any connection attempt.
+  Added: right-arrow on a highlighted (ready) endpoint in the radio menu
+  now previews its capabilities via a new preview_endpoint_capabilities
+  path and preview_capabilities/leave_to_radio state transitions,
+  returning to the radio menu (not main_menu) on escape. Preserves
+  whatever the actually-connected endpoint's capabilities are separately
+  (_connected_endpoint_caps) so a preview never clobbers them. No prior
+  test coverage existed for any of this -- added
+  tests/test_capabilities_preview.py.
+
+- **Sine tone still not heard -- correction of scope.** My earlier fix
+  (sounddevice output device selection) was entirely brain-side, but
+  the demo's sine tone travels brain->endpoint and plays on the
+  endpoint's own speaker via alsasink in _AudioRecvPipeline, using
+  examples/desktop/desktop_endpoint.py (robonet/endpoint, not
+  robonet/brain) -- a completely different code path. The endpoint-side
+  device selection (get_first_speaker_device -> find_speaker_devices,
+  which does correctly prepend 'default' when hardware is found) looked
+  structurally sound on read-through, so the exact remaining cause is
+  still open -- added visible logging of the actual device string used
+  ("[hardware] using speaker device: ...") since there was previously
+  none, which should narrow it down next test.
+
+- **Found and fixed the actual cause of "Capabilities" missing from the
+  main menu after connecting.** get_unique_endpoints deduped by raw
+  object id. The scanner's stale-removal path
+  (NetworkScanner._unregister, triggered when an endpoint isn't seen
+  for scan_interval*2 -- plausible on any transient network blip) fully
+  removes an endpoint from by_ip/by_hostname; if it's rediscovered
+  afterward, a *fresh* Endpoint object gets created for it. Meanwhile
+  RadioSubSystem._endpoints still holds the old, capabilities-populated
+  object under a different key (hostname:endpoint_type vs bare
+  hostname/ip), so both end up in the merged dict as distinct-by-id
+  entries. Connecting to the wrong (fresh, empty) one meant
+  ep.axes/ep.streams were empty, so _connect's own
+  `if getattr(ep, 'axes', None) or getattr(ep, 'streams', None)` gate
+  around set_endpoint_capabilities was never satisfied. This is very
+  likely the same root cause behind Simleek's earlier "it happened
+  again" note about _robot_capabilities_handler.
+  Fixed: get_unique_endpoints now dedupes by logical identity (hostname,
+  falling back to ip) instead of object id, preferring whichever
+  instance actually has capabilities_received=True when two collide.
+  Added tests/test_endpoint_dedup.py -- no prior coverage caught this at
+  all, since existing tests only ever populated one object per logical
+  endpoint.
+
+- **Streams now include the speaker (audio output), plus I/O tagging.**
+  build_desktop_capabilities only listed screen and mic -- both inputs
+  from the endpoint's perspective -- with no speaker (output) entry at
+  all, despite streams representing both directions. Added a speaker
+  stream (audio, 48000Hz, 1ch) and an `io: 'I'|'O'` field on every
+  stream entry; _fmt_stream now displays it in the capabilities menu.
+
+- **AV source switching (desktop capture vs camera, mic selection,
+  speaker selection) explicitly deprioritized per Simleek's own
+  request** -- static endpoint-side configuration (already supported via
+  MultiAVRobotHardware's camera/mic/speaker constructor params) is
+  sufficient for now; connecting to an endpoint should just work without
+  needing in-session reconfiguration. Revisit if it becomes a real need.
+
+- Simleek's own assessment: most remaining work is endpoint code, then
+  some menu code, very little if any brain code.
+
+- **Fixed device-selection logging placement and DesktopHw's config
+  override bug.** Last round's speaker-device log line landed in
+  CamMicSpkRobotHardware.__init__ -- a completely different class
+  DesktopHw doesn't use at all, which is why it never appeared at the
+  right time. DesktopHw.__init__ took no camera/speaker arguments
+  whatsoever and unconditionally called find_camera_devices()[0] /
+  get_first_speaker_device(), ignoring any possible configuration
+  entirely. Now accepts camera=/speaker= constructor args, checks new
+  camera_device/speaker_device settings if not given, and only
+  auto-detects as a last resort -- logged at construction time (real
+  startup), not connection time. Added
+  tests/test_desktop_hw_device_priority.py.
+
+- **Sine tone still unexplained, and the brain-side sounddevice
+  playback path may never have actually worked at all.** Simleek can
+  see audio data arriving on the brain side (the numpy-buffer waveform
+  display) but has never once heard actual sound through real
+  speakers, and would expect to see an active stream in pavucontrol if
+  sounddevice.OutputStream were genuinely producing output -- never
+  observed. The one time brain->endpoint audio was confirmed audible
+  was on a different robot (basicpibot) using GStreamer for endpoint-
+  side playback, not sounddevice for brain-side playback. So this may
+  be long-standing and never actually verified working, not something
+  broken by recent changes. Worth checking directly whether
+  sd.OutputStream() ever raises/fails silently, and whether PortAudio's
+  host API on the actual machine involved is one pavucontrol would even
+  show at all.
+
+- **GStreamer pipeline-restart timing may be worth a closer look
+  separately:** in the captured log, trying encoder -> probe warning ->
+  encoder selected -> pipeline PLAYING all completed within ~1.1s, right
+  at the moment the AI demo logged "complete" -- consistent with
+  set_mic_device's restore call (switching back from the sine tone to
+  the original mic) not being awaited/confirmed before the demo
+  considers itself done. Didn't get to fixing this directly this round.
+
+- Confirmed AV source switching still explicitly out of scope, per
+  Simleek's own prioritization.
+
+- **Audio deep-dive round (both directions), based on Simleek's beep
+  experiments -- which pinned down more than anything so far:**
+  1. Brain-side playback (sounddevice): found the known failure mode
+     matching every symptom. An exception escaping the OutputStream
+     callback ABORTS the stream: sounddevice only prints to stderr
+     (invisible under our logging) and the stream vanishes from
+     pavucontrol -- permanent silence with a "started" log line and no
+     other trace. Nothing detected this. Fixes: callback body fully
+     guarded (logs + outputs silence instead of dying), a
+     finished_callback that loudly WARNs whenever the stream stops for
+     any reason, status flags at WARNING, a one-time INFO on the first
+     real samples written (separates "callback never got data" from
+     "playing but inaudible/misrouted"), producer-side flatten+float32
+     (a (N,1) or float64 chunk would raise in the callback), and a
+     leftover buffer so chunk/frame size mismatches never discard audio
+     (opus decodes 960-sample chunks; blocksize=0 requests arbitrary
+     frame counts -- the old callback threw every mismatch's tail away).
+     This is NOT the OpenCV main-thread class of issue: PortAudio
+     callbacks legitimately run on their own thread; the hazard is
+     solely that errors there kill the stream silently.
+  2. play_audio setting existed but was read by NOTHING. Now actually
+     gates _start_audio.
+  3. Endpoint-side playback (GStreamer): Simleek's endpoint beep test
+     is the smoking gun -- ALSA 'default' silent, pipewire device
+     audible. alsasink device='default' hits the same unrouted hole.
+     _AudioRecvPipeline now uses autoaudiosink (which picks
+     pipewiresink/pulsesink/alsasink, whichever actually works) when
+     the device is 'default'/'auto'/empty; explicit strings (hw:X,Y)
+     stay honored via alsasink exactly as before. Sink choice logged.
+  4. DesktopHw now supports mic override too (arg -> mic_device
+     setting -> auto-detect), same pattern as camera/speaker; the
+     desktop mix stays first and therefore the default active input.
+  5. New: tests/test_integration_scenarios.py -- full brain->wire->
+     endpoint chains (real pack_obj/unpack_obj, real DesktopHw
+     handlers, mocks only at pyautogui): an AI clicking an on-screen
+     alert box it located by vision, an AI reacting to a 440Hz alarm
+     it detected by FFT in the audio feed, human/AI handoff arriving
+     correctly ordered at the endpoint, and a 12-point circle
+     surviving the wire with exact coordinate fidelity. The first one
+     would have caught the button-code mismatch automatically.
+
+- **S16LE end-to-end completed (building on Simleek's commits), plus
+  brain-side playback moved into GStreamer.** Simleek established that
+  F32LE simply isn't supported by the actual audio hardware on most
+  systems and standardized the GStreamer caps on S16LE; the remaining
+  disagreeing layer was _pull_chunk, which still read the bytes as
+  float32 -- S16=2 bytes/sample vs F32=4 explains the measured
+  "almost exactly twice as much data". _pull_chunk now reads int16 and
+  converts to float32 [-1,1] at the boundary, so every consumer
+  (display waveform, AI, playback) keeps one consistent format. The
+  sender's non-opus F32LE fallback is now S16LE unconditionally, and
+  update_audio's None-before-dtype ordering bug is fixed.
+  Brain-side playback: the sounddevice approach is dead on arrival
+  with this display loop -- vsync blocking starves the realtime
+  callback into constant clicks/underruns no matter the buffering
+  (confirmed on hardware). GstReceiver now takes play_locally (wired
+  from the play_audio setting): the receive pipeline tees after
+  decode/convert/resample into the S16LE appsink branch (numpy,
+  unchanged) and an audioconvert->autoaudiosink branch that negotiates
+  its own format with the real hardware. Works headless. The
+  sounddevice machinery in display_system stays present but unstarted
+  until the GStreamer path is confirmed on hardware, then should be
+  removed outright.
+  Still open: sine tone works on the SECOND connection onward, not the
+  first -- plausibly the set_mic_device restore-timing note from
+  earlier, or initial autoaudiosink negotiation; retest after S16LE.
+  The desktop-mix monitor loop carrying the sine back to the brain is
+  intentional and useful (full round-trip health check), per Simleek.
+
+- **Commit authorship corrected: earlier commits this branch were
+  wrongly authored as Simleek** (Claude restored the wiped git config
+  with the repo owner's identity after the environment reset). Config
+  now set to Claude <noreply@anthropic.com> going forward; history not
+  rewritten.
+
+- **Post-music-milestone round (audio confirmed good on hardware:
+  clicks gone, quality sufficient for detection/pitch/TTS work):**
+  1. sounddevice playback fully removed from display_system per
+     Simleek's finalize call -- the GStreamer play_locally tee is the
+     confirmed path. Brain settings' speaker_device removed with it.
+  2. Key hold watchdog (both sides). Lossy networks drop KeyEvents
+     including releases -- observed live as F11 mashing until process
+     kill. Brain re-sends key-down every 0.25s per held key
+     (KEY_REFRESH_INTERVAL_S, desktop_system) tracked across BOTH input
+     sources and updated even when transmit is gated (menu open /
+     source switched mid-hold); endpoint auto-releases any held key not
+     refreshed within 1.0s (KEY_WATCHDOG_TIMEOUT_S, desktop_hardware,
+     daemon thread swept every 0.2s). Refresh key-downs don't re-press:
+     already-held keys just restamp. Mouse buttons have the same
+     theoretical stuck risk but no watchdog yet -- repeated mouseDown
+     replay is less obviously safe than keyDown; revisit if observed.
+  3. GStreamer congestion: sender video pipeline had NO queue and
+     x264enc at defaults -- rc-lookahead 40+ frames plus B-frame
+     reordering is over a second of buffering at 30fps before anything
+     leaves the machine, matching "seconds-old frames at 2fps" on
+     degraded wifi. Added a leaky=downstream max-size-buffers=1 queue
+     before the encoder (stale frames drop at the SOURCE) and
+     tune=zerolatency + speed-preset=ultrafast + key-int-max=2s for
+     x264enc (zerolatency=true for nvenc where the property exists).
+     Needs a degraded-network retest to confirm recovery behavior.
+  4. Sine-on-first-connection: demo now waits a 2.0s settle after
+     switching the sender to the test tone before counting duration,
+     per the "stream takes a while to boot" read. If it still misses
+     first connections, next suspect is the endpoint recv pipeline's
+     own decoder-probe window.
+
+- **AI viewport unification (the merge blocker, fixed).** Claude's
+  earlier design rationale was exactly backwards: the zoom/pan/
+  letterbox viewport exists FOR the AI -- it can only ingest small
+  (~800x600-class) frames while the real screen is 1080p+, so without
+  zoom/pan it literally cannot see enough detail to interact; the
+  human edit-mode was the verification layer, not the point.
+  send_frames_always already applied the shared viewport to the frame
+  the AI receives, so bypassing inverse_map on the AI's mouse output
+  meant what it SAW at (0.5, 0.5) was not where its click landed.
+  Now: AI coordinates mean positions within the same canvas it sees
+  and route through the same inverse mapping as human input
+  (headless-safe via menu.out_res); the AI drives the viewport itself
+  through new tokens (zoom in/out 1.1x, pan l/r/u/d 0.05, view reset)
+  exactly like human edit mode. View controls gate on input_source
+  since the viewport is currently SHARED with the human display --
+  a per-consumer (separate AI) viewport is the eventual right shape
+  if the AI should look around during human-driven sessions.

@@ -22,7 +22,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 from robonet.gst_io.streamer_unencrypted import (
-    _VideoPipeline, _AudioPipeline, VIDEO_SOURCE_XIMAGESRC, AUDIO_SOURCE_DESKTOP_MIX,
+    _VideoPipeline, _AudioPipeline, VIDEO_SOURCE_XIMAGESRC, AUDIO_SOURCE_DESKTOP_MIX, AUDIO_SOURCE_SINE_TEST,
 )
 
 
@@ -150,6 +150,22 @@ class TestAudioPipelineDesktopMix(unittest.TestCase):
         self.assertNotIn('audiomixer', created)
         _, alsa_elem = created['alsasrc'][0]
         alsa_elem.set_property.assert_any_call('device', 'hw:1,0,0')
+
+    @patch('robonet.gst_io.streamer_unencrypted.Gst.Pipeline.new', return_value=MagicMock())
+    @patch('robonet.gst_io.streamer_unencrypted.Gst.ElementFactory.make')
+    def test_sine_test_tone_uses_audiotestsrc(self, mock_make, _pipeline_new):
+        make_fn, created = _make_factory_mock()
+        mock_make.side_effect = make_fn
+
+        ok = self._make(AUDIO_SOURCE_SINE_TEST).build()
+
+        self.assertTrue(ok)
+        self.assertIn('audiotestsrc', created)
+        self.assertNotIn('alsasrc', created)
+        self.assertNotIn('audiomixer', created)
+        _, sine_elem = created['audiotestsrc'][0]
+        sine_elem.set_property.assert_any_call('wave', 'sine')
+        sine_elem.set_property.assert_any_call('freq', 440.0)
 
 
 class TestPactlGetDefault(unittest.TestCase):

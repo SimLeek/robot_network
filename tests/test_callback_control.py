@@ -152,7 +152,7 @@ class _FakeDesktopHw:
     """Minimal DesktopHw stand-in: just the two attributes
     _on_key_event/_on_mouse_event actually touch."""
     def __init__(self):
-        self._held_keys = set()
+        self._held_keys = {}
         self._held_buttons = set()
 
 
@@ -427,14 +427,15 @@ class TestDesktopSubSystemLifecycle(unittest.TestCase):
         sub._root.displayer.af_thru.bind_mouse_release.assert_called_once_with(sub._on_mouse_release)
         sub._root.displayer.af_thru.bind_mouse_scroll.assert_called_once_with(sub._on_mouse_scroll)
 
-    def test_bind_input_noop_for_ai_driven_session(self):
-        from robonet.brain.desktop_system import DesktopSubSystem
+    def test_bind_input_binds_ai_passthrough_even_without_a_display(self):
+        from robonet.brain.desktop_system import DesktopSubSystem, AI_NEURON_MOUSE_X
         sub = DesktopSubSystem(endpoint=MagicMock())
         sub._root = _make_fake_root(with_displayer=False)
 
         sub.start()
 
-        self.assertFalse(sub._bound)  # nothing to bind to yet
+        self.assertTrue(sub._bound)  # AI passthrough doesn't need a display to bind to
+        self.assertIn(AI_NEURON_MOUSE_X, sub.af_ai._neuron_to_handler_thresholds)
 
     def test_stop_unbinds_and_clears_running(self):
         from robonet.brain.desktop_system import DesktopSubSystem
@@ -461,10 +462,12 @@ class TestDesktopSubSystemLifecycle(unittest.TestCase):
 
         sub._root.displayer.af_thru.unbind_keyboard.assert_not_called()
 
-    def test_async_loops_is_empty(self):
+    def test_async_loops_returns_the_key_refresh_loop(self):
         from robonet.brain.desktop_system import DesktopSubSystem
         sub = DesktopSubSystem(endpoint=MagicMock())
-        self.assertEqual(sub.async_loops(MagicMock()), [])
+        loops = sub.async_loops(MagicMock())
+        self.assertEqual(len(loops), 1)  # the key-hold refresh watchdog
+        loops[0].close()  # not running it here -- avoid the un-awaited warning
 
 
 class TestDesktopSubSystemKeyboardForwarding(unittest.TestCase):
