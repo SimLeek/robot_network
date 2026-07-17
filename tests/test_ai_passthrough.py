@@ -92,6 +92,8 @@ class TestAiMouseMove(unittest.TestCase):
         # what the AI saw at (0.5, 0.5) was not where its click landed.
         sub = self._ready_sub()
         sub.viewport.zoom = 2.0
+        sub.viewport.pan_x = 0.75   # panned: centered zoom would be
+        sub.viewport.pan_y = 0.75   # indistinguishable from the bypass
         dims = sub._viewport_dims()
         expected_xf, expected_yf = sub.viewport.inverse_map(0.5, 0.5, *dims)
 
@@ -100,8 +102,7 @@ class TestAiMouseMove(unittest.TestCase):
         sent = sub._root.radio.burst.call_args[0][0]
         self.assertEqual((sent.x, sent.y),
                         (int(expected_xf * 1920), int(expected_yf * 1080)))
-        # And at 2x zoom centered, canvas-center IS screen-center:
-        self.assertEqual((sent.x, sent.y), (960, 540))
+        self.assertNotEqual((sent.x, sent.y), (960, 540))  # bypass would say center
 
     def test_clamps_out_of_range_fractions(self):
         sub = self._ready_sub()
@@ -338,15 +339,39 @@ class TestAiViewControls(unittest.TestCase):
         sub.ai_zoom(1.5)
         self.assertEqual(sub.viewport.zoom, 1.0)
 
-    def test_click_lands_where_the_ai_actually_looked(self):
-        # End-to-end coherence: zoom in, look at canvas-center, click --
-        # the click must land at the center of the ZOOMED view, which by
-        # construction (centered 2x zoom) is still screen center, NOT at
-        # some other point computed from raw screen fractions.
-        from robonet.brain.desktop_system import AI_TOKEN_MOUSE_LEFT_PRESS
+    def test_zoom_pan_click_lands_in_the_panned_view_not_screen_center(self):
+        # The discriminating flow: zoom -> pan -> click. A centered
+        # zoom clicking canvas-center is indistinguishable from the old
+        # raw-fraction bypass (both give screen center), so this pans
+        # hard toward the bottom-right first. The old behavior would
+        # still send (960, 540); the new behavior must land inside the
+        # panned crop -- and does, per four independent checks.
+        from robonet.brain.desktop_system import (
+            AI_TOKEN_ZOOM_IN, AI_TOKEN_PAN_RIGHT, AI_TOKEN_PAN_DOWN,
+            AI_TOKEN_MOUSE_LEFT_PRESS,
+        )
         sub = self._ready_sub()
-        sub.viewport.zoom = 2.0
-        sub.ai_mouse_move(0.5, 0.5)
+        for _ in range(8):                      # 1.1^8 ~ 2.14x zoom
+            sub.af_ai.on_token(AI_TOKEN_ZOOM_IN)
+        for _ in range(40):                     # far past the clamp: pinned bottom-right
+            sub.af_ai.on_token(AI_TOKEN_PAN_RIGHT)
+            sub.af_ai.on_token(AI_TOKEN_PAN_DOWN)
+
+        sub.ai_mouse_move(0.5, 0.5)             # center of what the AI SEES
         sub.af_ai.on_token(AI_TOKEN_MOUSE_LEFT_PRESS)
+
         press = sub._root.radio.burst.call_args[0][0]
-        self.assertEqual((press.x, press.y), (960, 540))
+        # 1) Not the bypass answer -- the whole point:
+        self.assertNotEqual((press.x, press.y), (960, 540))
+        # 2) Panned right+down, so strictly past screen center:
+        self.assertGreater(press.x, 960)
+        self.assertGreater(press.y, 540)
+        # 3) Exactly consistent with the shared viewport's own inverse:
+        xf, yf = sub.viewport.inverse_map(0.5, 0.5, *sub._viewport_dims())
+        self.assertAlmostEqual(press.x, int(xf * 1920), delta=1)
+        self.assertAlmostEqual(press.y, int(yf * 1080), delta=1)
+        # 4) And matches the geometry directly: crop pinned at the
+        # bottom-right edge, so canvas-center sits at 1 - 1/(2*zoom):
+        z = sub.viewport.zoom
+        self.assertAlmostEqual(press.x, int((1 - 1 / (2 * z)) * 1920), delta=2)
+        self.assertAlmostEqual(press.y, int((1 - 1 / (2 * z)) * 1080), delta=2)
