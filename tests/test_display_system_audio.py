@@ -173,3 +173,73 @@ class TestUpdateAudioFormats(unittest.TestCase):
         sub.update_audio(np.array([0.25, -0.25], dtype=np.float64))
         np.testing.assert_allclose(sub.in_aud, [0.25, -0.25])
         self.assertEqual(sub.in_aud.dtype, np.float32)
+
+
+class TestReshapeStereoToSquareImage(unittest.TestCase):
+    """2-channel images are awkward to display (RGB/RGBA is the
+    standard, not 2) -- the third channel is zero-padded rather than
+    inventing a meaning for it."""
+
+    def test_output_has_three_channels(self):
+        from robonet.brain.display_system import reshape_stereo_to_square_image
+        stereo = np.random.rand(64, 2).astype(np.float32)
+        result = reshape_stereo_to_square_image(stereo)
+        self.assertEqual(result.shape[-1], 3)
+
+    def test_third_channel_is_all_zeros(self):
+        from robonet.brain.display_system import reshape_stereo_to_square_image
+        stereo = np.random.rand(64, 2).astype(np.float32)
+        result = reshape_stereo_to_square_image(stereo)
+        np.testing.assert_array_equal(result[:, :, 2], np.zeros(result.shape[:2]))
+
+    def test_left_and_right_land_in_the_correct_channels(self):
+        from robonet.brain.display_system import reshape_stereo_to_square_image
+        left = np.arange(64, dtype=np.float32)
+        right = np.arange(64, 128, dtype=np.float32)
+        stereo = np.stack([left, right], axis=1)
+
+        result = reshape_stereo_to_square_image(stereo)
+
+        self.assertEqual(set(result[:, :, 0].flatten()), set(left))
+        self.assertEqual(set(result[:, :, 1].flatten()), set(right))
+
+    def test_all_three_channels_share_the_same_2d_shape(self):
+        from robonet.brain.display_system import reshape_stereo_to_square_image
+        stereo = np.random.rand(100, 2).astype(np.float32)
+        result = reshape_stereo_to_square_image(stereo)
+        self.assertEqual(result.ndim, 3)
+        rows, cols, ch = result.shape
+        self.assertEqual(rows * cols, 100)
+        self.assertEqual(ch, 3)
+
+
+class TestRunOnceDispatchesByAudioShape(unittest.TestCase):
+    """run_once must route mono (1D) to the existing grayscale square
+    path unchanged, and stereo (2D) to the new 3-channel path."""
+
+    def _make_sub(self, in_aud):
+        from robonet.brain.util.viewport import Viewport
+        sub = DisplaySubSystem.__new__(DisplaySubSystem)
+        sub.in_img = np.zeros((4, 4, 3), dtype=np.uint8)
+        sub.in_aud = in_aud
+        sub.displayer = MagicMock()
+        sub.frame_time = 0.0
+        sub.out_res = (4, 4)
+        sub.viewport = Viewport()
+        sub._edit_mouse_pos = None
+        sub._fullscreen_key_disabled = True
+        return sub
+
+    def test_mono_audio_still_produces_a_2d_array(self):
+        sub = self._make_sub(np.random.uniform(-1, 1, 64).astype(np.float32))
+        asyncio.run(sub.run_once(MagicMock()))
+        sent = sub.displayer.update.call_args_list[-1].args[0]
+        self.assertEqual(sent.ndim, 2)
+
+    def test_stereo_audio_produces_a_3channel_array(self):
+        stereo = np.random.uniform(-1, 1, (64, 2)).astype(np.float32)
+        sub = self._make_sub(stereo)
+        asyncio.run(sub.run_once(MagicMock()))
+        sent = sub.displayer.update.call_args_list[-1].args[0]
+        self.assertEqual(sent.ndim, 3)
+        self.assertEqual(sent.shape[-1], 3)

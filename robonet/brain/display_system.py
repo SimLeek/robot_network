@@ -29,6 +29,18 @@ def reshape_to_square_matrix(arr):
     
     return arr.reshape(rows, cols)
 
+
+def reshape_stereo_to_square_image(stereo: np.ndarray) -> np.ndarray:
+    """(N, 2) stereo PCM -> (rows, cols, 3) square-ish image: channel 0
+    = left, channel 1 = right, channel 2 = zeros. 2-channel images are
+    awkward to display (RGB/RGBA is the standard, not 2), so the
+    unused third channel is just zero-padded rather than inventing a
+    meaning for it. Only the first two channels are used if more than
+    2 are ever passed."""
+    left  = reshape_to_square_matrix(stereo[:, 0])
+    right = reshape_to_square_matrix(stereo[:, 1])
+    return np.stack([left, right, np.zeros_like(left)], axis=-1)
+
 class DisplaySubSystem(SubSystem):
 
     def __init__(self, out_res: Tuple[int, int] = None, fps=None):
@@ -91,8 +103,10 @@ class DisplaySubSystem(SubSystem):
             # negative half of every waveform was wrapping around via
             # uint8 underflow instead of displaying. Remap -1..1 -> 0..1.
             aud = (aud / 2.0) + 0.5
-            if len(aud.shape)==1:
+            if len(aud.shape) == 1:
                 aud = reshape_to_square_matrix(aud)
+            elif aud.shape[1] >= 2:
+                aud = reshape_stereo_to_square_image(aud)
             self.displayer.update(aud, 'audio')
         elapsed = time.time() - t1
         await asyncio.sleep(max(0.0, self.frame_time - elapsed))

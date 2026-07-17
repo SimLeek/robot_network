@@ -127,8 +127,14 @@ class AiPassthroughDemo(AISubSystem):
                 log.info(f'[ai-demo] center pixel hue: {hue_deg:.1f} deg')
             aud = self.in_aud
             if aud is not None and len(aud) >= 8:
-                spectrum = np.abs(np.fft.rfft(aud))
-                freqs = np.fft.rfftfreq(len(aud), d=1.0 / sample_rate)
+                # Mono (N,) or stereo (N, 2) -- mix stereo down to mono
+                # first: rfft on a 2D array operates along the last
+                # axis (channels here, not time), which would silently
+                # produce a meaningless 2-point-per-sample result
+                # instead of an actual frequency spectrum.
+                mono = aud.mean(axis=1) if aud.ndim == 2 else aud
+                spectrum = np.abs(np.fft.rfft(mono))
+                freqs = np.fft.rfftfreq(len(mono), d=1.0 / sample_rate)
                 peak_hz = freqs[int(np.argmax(spectrum))]
                 log.info(f'[ai-demo] peak audio frequency: {peak_hz:.1f} Hz')
 

@@ -332,3 +332,41 @@ class TestDiagnosticLoop(unittest.TestCase):
         self.assertEqual(len(loops), 2)
         for l in loops:
             l.close()  # avoid the un-awaited-coroutine warning -- not executing them here
+
+
+class TestDiagnosticLoopStereoAudio(unittest.TestCase):
+    """rfft on a raw 2D (N, 2) array operates along the wrong axis
+    (channels, not time) -- must mix down to mono first."""
+
+    def _one_tick(self, demo):
+        calls = []
+
+        async def fake_sleep(_):
+            calls.append(1)
+            if len(calls) >= 2:
+                raise asyncio.CancelledError()
+
+        with patch('asyncio.sleep', side_effect=fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                _run(demo._diagnostic_loop(interval_s=0.0))
+
+    def test_stereo_audio_still_reports_the_correct_peak_frequency(self):
+        demo = AiPassthroughDemo()
+        demo.in_img = None
+        sr = 48000
+        t = np.arange(0, 0.1, 1.0 / sr)
+        tone = (0.5 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+        demo.in_aud = np.stack([tone, tone], axis=1)
+
+        with patch('ai_passthrough_demo.log') as mock_log:
+            self._one_tick(demo)
+
+        logged = ' '.join(str(c.args[0]) for c in mock_log.info.call_args_list)
+        self.assertIn('440.', logged)
+
+    def test_stereo_audio_does_not_raise(self):
+        demo = AiPassthroughDemo()
+        demo.in_img = None
+        demo.in_aud = np.random.uniform(-1, 1, (100, 2)).astype(np.float32)
+
+        self._one_tick(demo)

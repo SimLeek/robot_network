@@ -663,3 +663,49 @@ these fixes should be implemented but are either large tasks or are blocked.
      1D mono -- reshaping only kicks in when channels>1 is explicitly
      requested at the pipeline level, so nothing existing broke, but
      nothing upstream of the pipeline understands stereo yet either).
+
+- **Brain-side stereo consumption (display + AI), and the streaming
+  API demoed on the endpoint side.**
+  1. DisplaySubSystem's waveform square: mono stays exactly as before
+     (2D grayscale). Stereo (N,2) now builds a genuine (rows,cols,3)
+     image -- channel 0=left, 1=right, 2=zeros, since 2-channel images
+     are awkward to display (RGB/RGBA is the standard, not 2) and the
+     unused third channel doesn't need an invented meaning.
+  2. AISubSystem.in_aud is now explicitly documented as mono (N,) or
+     stereo (N,2) -- it already passed either through unchanged, the
+     gap was purely that this wasn't discoverable without reading the
+     pipeline code.
+  3. Found and fixed a latent bug while touching this: the demo's
+     _diagnostic_loop ran rfft directly on in_aud, which for a 2D
+     stereo array operates along the wrong axis (channels, not time) --
+     silently meaningless output rather than an error. Now mixes down
+     to mono first.
+  4. examples/desktop/desktop_endpoint.py: added audio_stream_demo,
+     using GstSender.start_audio_stream()/push()/end() from the
+     endpoint side -- waits for a brain connection, streams a test tone
+     in chunks once, so Simleek can verify the streaming API on real
+     hardware directly, not just the sandboxed loopback tests.
+
+- **Real mistake this round: an accidental `cp -a` in the wrong
+  direction (pristine -> working copy) during a diagnostic A/B test
+  overwrote several files' uncommitted changes from this same round**
+  (display_system.py, ai_system.py, ai_passthrough_demo.py,
+  desktop_endpoint.py, plus test additions to three existing files).
+  Caught immediately by checking known markers post-overwrite; all
+  lost work was still fresh in context and got re-applied verbatim,
+  confirmed via test count matching (506) and a second clean run. Only
+  a genuinely new file (test_desktop_endpoint_audio_stream_demo.py)
+  survived on its own, since cp -a doesn't delete files absent from
+  the source -- it only overwrites/adds shared filenames. Lesson: never
+  sync pristine -> working copy mid-round; only sync working copy ->
+  pristine, and only right before committing.
+
+- **Confirmed pre-existing, unrelated to this round: a test-isolation
+  failure** (test_menu_shutdown_and_ui.TestSelectionMenuLocalhostGating
+  .test_enter_on_enabled_local_calls_switch_mode) that passes cleanly
+  alone but fails when run as part of the full suite ("no current
+  event loop in thread MainThread") -- reproduced identically on the
+  pre-this-round commit too (491 tests, same single failure), so some
+  other test earlier in suite order is leaving the default event loop
+  in a bad state for asyncio.ensure_future's implicit get_event_loop()
+  call. Not investigated further this round; worth a dedicated look.
