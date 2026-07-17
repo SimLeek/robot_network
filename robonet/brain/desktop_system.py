@@ -25,6 +25,7 @@ if typing.TYPE_CHECKING:
 
 from robonet.desktop_control_spec import (
     keycode_to_pyautogui, DESKTOP_CONTROL_INTERFACE_SPEC, describe_control_interface,
+    AI_SUPPORTED_KEYS,
 )
 
 # AI passthrough: neuron/token indices an AI uses to drive mouse input
@@ -145,22 +146,24 @@ class DesktopSubSystem(SubSystem):
     def _log_action_space_size(self):
         """Knowing the actual action-space size is mandatory for
         plugging in an RL/neural-net-style AI -- and there was
-        previously no way to get it at all. Reports what's honestly
-        countable: bound tokens (discrete, e.g. mouse press/release,
-        zoom/pan/reset) and bound neurons (continuous, e.g. mouse x/y).
-        Keyboard keys are NOT included here -- ai_key_press/release take
-        an arbitrary string, not a fixed token index, so they aren't
-        part of this enumerable space yet. If/when keys become fixed
-        tokens, a natural mapping is one token per key with a
-        threshold-gated neuron (0/1, or -1/1, or a 0.5 crossing) rather
-        than separate press/release tokens per key -- flagged here
-        rather than decided unilaterally."""
+        previously no way to get it at all. Reports bound tokens
+        (discrete, e.g. mouse press/release, zoom/pan/reset), bound
+        neurons (continuous, e.g. mouse x/y), and AI_SUPPORTED_KEYS --
+        the exact, curated list ai_key_press/release accept, so
+        developers aren't guessing whether e.g. f11 actually works vs.
+        some pyautogui extra unreachable through this system. Keys are
+        still an open string, not a fixed token index each; if/when
+        they become fixed tokens, a natural mapping is one token per
+        key with a threshold-gated neuron (0/1, or -1/1, or a 0.5
+        crossing) rather than separate press/release tokens per key --
+        flagged here rather than decided unilaterally."""
         n_tokens = len(self.af_ai._token_to_handlers)
         n_neurons = len(self.af_ai._neuron_to_handler_thresholds)
         log.info(f'[desktop] AI action space: {n_tokens} discrete tokens, '
-                f'{n_neurons} continuous neurons. Keyboard keys are NOT '
-                f'included -- ai_key_press/release take an open string, '
-                f'not a fixed token index.')
+                f'{n_neurons} continuous neurons, {len(AI_SUPPORTED_KEYS)} supported '
+                f'keys (ai_key_press/release take one of these exact names -- '
+                f'see robonet.desktop_control_spec.AI_SUPPORTED_KEYS): '
+                f'{AI_SUPPORTED_KEYS}')
 
     def _unbind_input(self):
         if not self._bound:

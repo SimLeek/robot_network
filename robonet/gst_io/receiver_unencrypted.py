@@ -247,13 +247,18 @@ class _AudioRecvPipeline:
     def __init__(self, info: GstStreamInfo, dec_name: str,
                  direct_audio: bool, audio_device: str,
                  on_audio: Optional[Callable[[np.ndarray], None]] = None,
-                 play_locally: bool = False):
+                 play_locally: bool = False, channels: int = 1):
         self._info         = info
         self._dec_name     = dec_name
         self._direct_audio = direct_audio
         self._audio_device = audio_device
         self._on_audio     = on_audio
         self._play_locally = play_locally
+        # Bypasses the wire protocol for now -- GstStreamInfo doesn't
+        # carry a channel count yet (mono has been the only option end
+        # to end until now), so this has to be told rather than
+        # negotiated. Full negotiation is a separate, larger task.
+        self._channels      = channels
         self._pipeline:    Optional[Gst.Pipeline] = None
         self._first_packet = False
 
@@ -354,7 +359,8 @@ class _AudioRecvPipeline:
 
         # Output as S16LE (consistent with sender)
         caps = Gst.Caps.from_string(
-            f'audio/x-raw,format=S16LE,layout=interleaved,rate={self._info.sample_rate},channels=1'
+            f'audio/x-raw,format=S16LE,layout=interleaved,'
+            f'rate={self._info.sample_rate},channels={self._channels}'
         )
         outcaps.set_property('caps', caps)
         #outcaps.set_property('caps', Gst.Caps.from_string(
@@ -484,6 +490,11 @@ class _AudioRecvPipeline:
             # waveform, AI, playback queue) sees one consistent format.
             raw = np.frombuffer(mapinfo.data, dtype=np.int16)
             chunk = raw.astype(np.float32) / 32768.0
+            if self._channels > 1:
+                # (N, channels), interleaved -- matches the send
+                # side's convention. Stays flat 1D for mono (the
+                # default), so no existing consumer is affected.
+                chunk = chunk.reshape(-1, self._channels)
             if self._on_audio:
                 self._on_audio(chunk)
         except Exception as e:

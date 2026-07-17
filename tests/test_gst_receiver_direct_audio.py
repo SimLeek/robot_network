@@ -258,6 +258,7 @@ class TestPullChunkS16Conversion(unittest.TestCase):
         from robonet.gst_io.receiver_unencrypted import _AudioRecvPipeline
         received = []
         pipe = _AudioRecvPipeline.__new__(_AudioRecvPipeline)
+        pipe._channels = 1
         pipe._on_audio = received.append
 
         mapinfo = MagicMock()

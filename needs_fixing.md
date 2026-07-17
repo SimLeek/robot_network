@@ -600,3 +600,66 @@ these fixes should be implemented but are either large tasks or are blocked.
   appsrc/appsink-based real GStreamer testing is fully viable in this
   sandbox with no virtual devices or real hardware needed -- worth
   extending to video if that becomes valuable.
+
+- **Continuous audio streaming, exact key enumeration, real chunking
+  validation, and initial stereo support -- all on send_audio_array.**
+  1. Streaming: play_array only ever sent one fixed, finite array --
+     can't send an infinitely long array for indefinite-length output
+     (TTS, live relay, etc). Added GstSender.start_audio_stream() ->
+     AudioStreamHandle: push() any number of chunks over time (0.1s-1s
+     chunks work well per Simleek's own framing), end() when done. The
+     SAME appsrc/encoder/RTP session stays alive across every pushed
+     chunk -- no per-chunk pipeline rebuild, avoiding exactly the
+     encoder-reset-artifact risk a naive "call play_array per chunk"
+     approach would have. Self-contained like play_array: normal mic
+     audio resumes automatically after end().
+     Empirically validated Simleek's own click hypothesis directly: 5
+     separately-pushed 200ms chunks of a 440Hz tone produced spectral
+     purity identical to a single-array send (0.9970 both ways) and
+     negligible energy above 2kHz (0.00004) -- clicks are broadband/
+     square-wave-like, so this is a direct measurement of exactly the
+     failure mode described. Committed as
+     TestChunkedStreamingRoundTrip in the real (non-mocked) loopback
+     integration file, with generously loosened thresholds from the
+     calibration numbers.
+  2. Key enumeration: added AI_SUPPORTED_KEYS to desktop_control_spec.py
+     -- the actual, curated list (not just a count) of every key name
+     keycode_to_pyautogui can produce: printable ASCII (32-126) plus
+     the special-key table's values, deduplicated (the previous count
+     formula double-counted punctuation overlapping both sets --
+     genuinely 100 keys, not 130). Populates the keys_press/
+     keys_release axes' previously-always-empty 'keys' field in
+     RobotCapabilities, so a connecting brain gets the exact list
+     automatically as part of the existing capabilities handshake --
+     visible in the menu's capabilities preview too. Also reported
+     directly in _log_action_space_size's startup log. Developers no
+     longer have to guess whether e.g. f11 is actually reachable.
+  3. Stereo/multi-channel: play_array/start_audio_stream now derive
+     channels from the array's own shape (N,)=mono, (N,channels)=multi
+     -- can't disagree with what was actually passed. Found and fixed a
+     real bug while testing this: the RECEIVE side's caps still
+     hardcoded channels=1 unconditionally, silently downmixing any
+     stereo audio sent to it (caught by an empirical test showing
+     received chunks came back as flat 1D instead of (N,2)).
+     _AudioRecvPipeline now takes a channels param too; _process_sample
+     reshapes to (N,channels) only when >1, so the mono default path
+     (every existing consumer -- waveform display, AI's FFT) is
+     completely unaffected. Empirically confirmed correct: two
+     different frequencies sent on left/right arrived on the correct
+     channel each, no swap, no bleed (TestStereoRoundTrip). This
+     answers Simleek's own stated uncertainty ("hard to tell what
+     gstreamer will actually support") -- it works, at the raw
+     GStreamer pipeline level, in this sandbox.
+     NOTE: channels is passed directly to _AudioRecvPipeline's
+     constructor, bypassing the wire protocol entirely -- GstStreamInfo
+     doesn't carry a channel count yet (mono was the only option end to
+     end until now), so a receiving GstReceiver can't currently learn
+     the sender's channel count automatically. Full negotiation (adding
+     a channels field to GstStreamInfo's wire format) is a separate,
+     larger task, not attempted this round. Also out of scope this
+     round: brain-side consumption of multi-channel audio beyond the
+     raw pipeline (AISubSystem/DisplaySubSystem's update_audio, the
+     waveform display, and the diagnostic FFT print all still assume
+     1D mono -- reshaping only kicks in when channels>1 is explicitly
+     requested at the pipeline level, so nothing existing broke, but
+     nothing upstream of the pipeline understands stereo yet either).
