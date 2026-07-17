@@ -101,12 +101,11 @@ class DesktopSubSystem(SubSystem):
 
     def start(self):
         self._running = True
-        self._running = True
         self._bind_input()
+        self._log_action_space_size()
         log.info(describe_control_interface())
 
     def stop(self):
-        self._running = False
         self._running = False
         self._unbind_input()
 
@@ -142,6 +141,26 @@ class DesktopSubSystem(SubSystem):
         af_edit.bind_mouse_move(self._on_edit_mouse_move)
         af_edit.bind_mouse_scroll(self._on_edit_scroll)
         self._bound = True
+
+    def _log_action_space_size(self):
+        """Knowing the actual action-space size is mandatory for
+        plugging in an RL/neural-net-style AI -- and there was
+        previously no way to get it at all. Reports what's honestly
+        countable: bound tokens (discrete, e.g. mouse press/release,
+        zoom/pan/reset) and bound neurons (continuous, e.g. mouse x/y).
+        Keyboard keys are NOT included here -- ai_key_press/release take
+        an arbitrary string, not a fixed token index, so they aren't
+        part of this enumerable space yet. If/when keys become fixed
+        tokens, a natural mapping is one token per key with a
+        threshold-gated neuron (0/1, or -1/1, or a 0.5 crossing) rather
+        than separate press/release tokens per key -- flagged here
+        rather than decided unilaterally."""
+        n_tokens = len(self.af_ai._token_to_handlers)
+        n_neurons = len(self.af_ai._neuron_to_handler_thresholds)
+        log.info(f'[desktop] AI action space: {n_tokens} discrete tokens, '
+                f'{n_neurons} continuous neurons. Keyboard keys are NOT '
+                f'included -- ai_key_press/release take an open string, '
+                f'not a fixed token index.')
 
     def _unbind_input(self):
         if not self._bound:

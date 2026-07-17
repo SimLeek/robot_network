@@ -11,6 +11,8 @@ an actual process launcher, not something to unit test.
 import asyncio
 import sys
 import unittest
+
+import numpy as np
 from unittest.mock import MagicMock, AsyncMock, patch
 
 
@@ -44,7 +46,6 @@ from robonet.brain.desktop_system import (
     AI_NEURON_MOUSE_X, AI_NEURON_MOUSE_Y,
     AI_TOKEN_MOUSE_RIGHT_PRESS, AI_TOKEN_MOUSE_RIGHT_RELEASE,
 )
-from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_SINE_TEST
 
 
 def _run(coro):
@@ -130,25 +131,42 @@ class TestTapF11(unittest.TestCase):
 
 class TestPlaySineTone(unittest.TestCase):
 
-    def test_switches_to_sine_test_source(self):
+    def test_sends_a_real_sine_array_through_play_array(self):
         demo = AiPassthroughDemo()
         demo._root = MagicMock()
-        demo._root.menu.gst_sender._mic_device = 'hw:1,0,0'
 
-        _run(demo._play_sine_tone(seconds=0.0))
+        with patch('asyncio.sleep', new=AsyncMock()):
+            _run(demo._play_sine_tone(seconds=0.05, freq_hz=440.0, sample_rate=48000))
 
-        calls = [c.args[0] for c in demo._root.menu.gst_sender.set_mic_device.call_args_list]
-        self.assertEqual(calls[0], AUDIO_SOURCE_SINE_TEST)
+        demo._root.menu.gst_sender.play_array.assert_called_once()
+        array, rate = demo._root.menu.gst_sender.play_array.call_args[0]
+        self.assertEqual(rate, 48000)
+        self.assertEqual(len(array), int(0.05 * 48000))
 
-    def test_restores_the_original_mic_device_afterward(self):
+    def test_array_is_a_genuine_sine_wave_at_the_requested_frequency(self):
         demo = AiPassthroughDemo()
         demo._root = MagicMock()
-        demo._root.menu.gst_sender._mic_device = 'hw:1,0,0'
 
-        _run(demo._play_sine_tone(seconds=0.0))
+        with patch('asyncio.sleep', new=AsyncMock()):
+            _run(demo._play_sine_tone(seconds=0.5, freq_hz=440.0, sample_rate=48000))
 
-        calls = [c.args[0] for c in demo._root.menu.gst_sender.set_mic_device.call_args_list]
-        self.assertEqual(calls[-1], 'hw:1,0,0')
+        array, rate = demo._root.menu.gst_sender.play_array.call_args[0]
+        spectrum = np.abs(np.fft.rfft(array))
+        freqs = np.fft.rfftfreq(len(array), d=1.0 / rate)
+        peak = freqs[int(np.argmax(spectrum))]
+        self.assertAlmostEqual(peak, 440.0, delta=5.0)
+
+    def test_no_mic_device_bookkeeping_needed_by_the_caller(self):
+        # play_array is self-contained now -- the old sine-test sentinel
+        # required the caller to save/restore _mic_device via
+        # set_mic_device; that dance is gone entirely.
+        demo = AiPassthroughDemo()
+        demo._root = MagicMock()
+
+        with patch('asyncio.sleep', new=AsyncMock()):
+            _run(demo._play_sine_tone(seconds=0.0))
+
+        demo._root.menu.gst_sender.set_mic_device.assert_not_called()
 
 
 class TestWaitForDesktopConnection(unittest.TestCase):
@@ -252,3 +270,65 @@ class TestFullRunSetsAndRestoresInputSource(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestDiagnosticLoop(unittest.TestCase):
+    """Continually reports two cheap, human-checkable liveness signals:
+    center-pixel hue (in_img) and peak audio frequency (in_aud)."""
+
+    def _one_tick(self, demo):
+        """Runs exactly one full iteration of the infinite loop: sleep
+        returns normally the first time (letting the logging code after
+        it run), then raises on the second call to break out cleanly."""
+        calls = []
+
+        async def fake_sleep(_):
+            calls.append(1)
+            if len(calls) >= 2:
+                raise asyncio.CancelledError()
+
+        with patch('asyncio.sleep', side_effect=fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                _run(demo._diagnostic_loop(interval_s=0.0))
+
+    def test_logs_center_pixel_hue_for_a_red_frame(self):
+        demo = AiPassthroughDemo()
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        frame[:, :] = (255, 0, 0)  # pure red -- hue 0 deg
+        demo.in_img = frame
+        demo.in_aud = None
+
+        with patch('ai_passthrough_demo.log') as mock_log:
+            self._one_tick(demo)
+
+        logged = ' '.join(str(c.args[0]) for c in mock_log.info.call_args_list)
+        self.assertIn('center pixel hue', logged)
+        self.assertIn('0.0 deg', logged)
+
+    def test_logs_peak_frequency_for_a_known_tone(self):
+        demo = AiPassthroughDemo()
+        demo.in_img = None
+        sr = 48000
+        t = np.arange(0, 0.1, 1.0 / sr)
+        demo.in_aud = (0.5 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+
+        with patch('ai_passthrough_demo.log') as mock_log:
+            self._one_tick(demo)
+
+        logged = ' '.join(str(c.args[0]) for c in mock_log.info.call_args_list)
+        self.assertIn('peak audio frequency', logged)
+        self.assertIn('440.', logged)
+
+    def test_no_image_or_audio_yet_does_not_crash(self):
+        demo = AiPassthroughDemo()
+        demo.in_img = None
+        demo.in_aud = None
+
+        self._one_tick(demo)  # must not raise (other than the intentional CancelledError)
+
+    def test_is_included_in_async_loops_alongside_run(self):
+        demo = AiPassthroughDemo()
+        loops = demo.async_loops(MagicMock())
+        self.assertEqual(len(loops), 2)
+        for l in loops:
+            l.close()  # avoid the un-awaited-coroutine warning -- not executing them here

@@ -541,3 +541,62 @@ these fixes should be implemented but are either large tasks or are blocked.
   since the viewport is currently SHARED with the human display --
   a per-consumer (separate AI) viewport is the eventual right shape
   if the AI should look around during human-driven sessions.
+
+- **New branch (send_audio_array, off main) -- removed all test-only
+  code from streamer_unencrypted.py.** AUDIO_SOURCE_SINE_TEST and its
+  audiotestsrc branch had no business in a production file. Replaced
+  with a genuinely general-purpose GstSender.play_array(samples,
+  sample_rate) API: feeds an arbitrary numpy array into the send
+  pipeline via appsrc (real-time-paced by a background thread -- a
+  real speaker can't play faster than realtime either, and the
+  receiver's low-latency queue isn't deep enough to absorb a whole
+  clip arriving in a burst), reuses whichever encoder is already
+  known-working rather than re-probing, and is fully self-contained:
+  normal mic/desktop-mix audio resumes automatically once the array
+  finishes, no caller-side save/restore needed (the old sine-test
+  sentinel required exactly that dance). ai_passthrough_demo.py now
+  builds its own numpy sine array locally and sends it through this,
+  matching Simleek's exact ask -- "the numpy array itself should have
+  a sine wave built into it, and that numpy array itself should play."
+  Caught and fixed a real bug of my own while adding this: an earlier
+  str_replace had accidentally merged the tail of _bind_input's body
+  (the af_thru/af_edit human-input binding code) into the new
+  _log_action_space_size method, silently breaking human input binding
+  when _bind_input was called on its own. Found via the existing test
+  suite, not observation -- exactly why the suite runs before every
+  commit.
+
+- **AI action-space size is now knowable.** There was no way at all to
+  get the actual size of the AI's action space, which is mandatory for
+  wiring up a real RL/neural-net-style AI. _log_action_space_size (in
+  DesktopSubSystem.start()) now reports bound token count (13:
+  6 mouse + 7 view control) and bound neuron count (2: mouse x/y).
+  Keyboard keys are explicitly NOT included -- ai_key_press/release
+  take an open string, not a fixed token index, so they aren't part of
+  this enumerable space yet. Flagged rather than solved: a natural
+  future mapping is one token per key with a threshold-gated neuron
+  (0/1, -1/1, or a 0.5 crossing) instead of separate press/release
+  tokens per key, but that's a bigger design decision than this round.
+
+- **Continuous liveness diagnostics added to the demo** (not to the
+  core AISubSystem/DesktopSubSystem classes -- would be spammy for a
+  real production AI): _diagnostic_loop logs the HSV hue of in_img's
+  center pixel and the FFT peak frequency of in_aud, once per second,
+  for the demo's whole lifetime via async_loops. Cheap, human-checkable
+  confirmation that video/audio are actually live and changing.
+
+- **New: a real (non-mocked) GStreamer loopback integration test**
+  (tests/test_gstreamer_loopback_integration.py). Sends a numpy sine
+  array through the actual _AudioPipeline and receives it through the
+  actual _AudioRecvPipeline over real UDP loopback -- no
+  Gst.ElementFactory.make mocking, the genuine send/encode/RTP/decode/
+  receive chain. Empirically calibrated before being committed: a
+  1s/440Hz/amplitude-0.5 sine round-tripped with 99.7% of its spectral
+  energy still concentrated within 40Hz of the target frequency, zero
+  NaN, sample count within 1% of sent. Committed thresholds are
+  deliberately looser than that measurement (ratio 0.6-1.6, spectral
+  purity >0.85) to avoid flaking on a slower run while still
+  meaningfully catching a genuinely broken chain. Confirms audiotestsrc/
+  appsrc/appsink-based real GStreamer testing is fully viable in this
+  sandbox with no virtual devices or real hardware needed -- worth
+  extending to video if that becomes valuable.

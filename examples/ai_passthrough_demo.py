@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import colorsys
 import math
+
+import numpy as np
 
 from robonet.brain.ai_system import AISubSystem
 from robonet.brain.desktop_system import (
@@ -31,7 +34,6 @@ from robonet.brain.display_system import DisplaySubSystem
 from robonet.brain.main_system import ServerSystem
 from robonet.brain.menu_system import MenuSubSystem
 from robonet.brain.radio_system import RadioSubSystem
-from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_SINE_TEST
 from robonet.logging_setup import setup_logging
 
 log = setup_logging()
@@ -59,7 +61,7 @@ class AiPassthroughDemo(AISubSystem):
         pass
 
     def async_loops(self, sm):
-        return [self._run()]
+        return [self._run(), self._diagnostic_loop()]
 
     async def _wait_for_desktop_connection(self, poll_interval: float = 0.5) -> DesktopSubSystem:
         while not isinstance(self._root.active_sub, DesktopSubSystem):
@@ -96,15 +98,39 @@ class AiPassthroughDemo(AISubSystem):
         await asyncio.sleep(0.1)
         desktop.ai_key_release('f11')
 
-    async def _play_sine_tone(self, seconds: float = 5.0):
+    async def _play_sine_tone(self, seconds: float = 5.0, freq_hz: float = 440.0,
+                               sample_rate: int = 48000):
         gst_sender = self._root.menu.gst_sender
-        original_mic = gst_sender._mic_device
-        gst_sender.set_mic_device(AUDIO_SOURCE_SINE_TEST)
-        # a freshly built audio pipeline needs a moment before real samples flow.
-        # Settle before counting the tone's duration.
-        await asyncio.sleep(2.0)
-        await asyncio.sleep(seconds)
-        gst_sender.set_mic_device(original_mic)
+        t = np.arange(0, seconds, 1.0 / sample_rate)
+        tone = (0.5 * np.sin(2 * np.pi * freq_hz * t)).astype(np.float32)
+        gst_sender.play_array(tone, sample_rate)
+        # A freshly built audio pipeline needs a moment before real
+        # samples flow -- settle before returning, so callers waiting
+        # on this coroutine know the tone has actually had time to play.
+        await asyncio.sleep(2.0 + seconds)
+
+    async def _diagnostic_loop(self, interval_s: float = 1.0, sample_rate: int = 48000):
+        """Continually reports two cheap, human-checkable signals that
+        the AI's video/audio really are live and changing: the hue of
+        the center pixel (in_img is RGB, matching this codebase's own
+        test conventions), and the dominant frequency in the most
+        recent audio chunk (assumes the pipeline-wide 48kHz standard).
+        Runs for the demo's whole lifetime, independent of _run()'s
+        specific action sequence."""
+        while True:
+            await asyncio.sleep(interval_s)
+            img = self.in_img
+            if img is not None and img.ndim == 3 and img.shape[0] and img.shape[1]:
+                cy, cx = img.shape[0] // 2, img.shape[1] // 2
+                r, g, b = (float(v) / 255.0 for v in img[cy, cx, :3])
+                hue_deg = colorsys.rgb_to_hsv(r, g, b)[0] * 360.0
+                log.info(f'[ai-demo] center pixel hue: {hue_deg:.1f} deg')
+            aud = self.in_aud
+            if aud is not None and len(aud) >= 8:
+                spectrum = np.abs(np.fft.rfft(aud))
+                freqs = np.fft.rfftfreq(len(aud), d=1.0 / sample_rate)
+                peak_hz = freqs[int(np.argmax(spectrum))]
+                log.info(f'[ai-demo] peak audio frequency: {peak_hz:.1f} Hz')
 
     async def _run(self):
         log.info('[ai-demo] waiting for a desktop endpoint to connect...')
