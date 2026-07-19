@@ -475,3 +475,83 @@ class TestPlayArrayChannelInference(unittest.TestCase):
         mock_pipeline_cls.return_value.build.return_value = True
         s.play_array(np.zeros((10, 2), dtype=np.float32))
         self.assertEqual(mock_pipeline_cls.call_args.kwargs['channels'], 2)
+
+
+class TestStartAudioPipelineChannelDefaults(unittest.TestCase):
+    """Desktop mix defaults to stereo (music/video on the desktop is
+    typically stereo) with automatic fallback to mono if 2 channels
+    can't be negotiated. Everything else stays mono."""
+
+    def _make_sender(self, mic_device):
+        from robonet.gst_io.streamer_unencrypted import GstSender
+        s = GstSender.__new__(GstSender)
+        s._mic_device = mic_device
+        s._receiver_ip = '10.0.0.5'
+        s._sample_rate = 48000
+        s._audio_candidates = [('opusenc', 'opus')]
+        return s
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_desktop_mix_tries_stereo_first(self, mock_pipeline_cls):
+        from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_DESKTOP_MIX
+        s = self._make_sender(AUDIO_SOURCE_DESKTOP_MIX)
+        mock_pipeline_cls.return_value.build.return_value = True
+        mock_pipeline_cls.return_value.probe.return_value = True
+
+        s._start_audio_pipeline()
+
+        self.assertEqual(mock_pipeline_cls.call_args.kwargs['channels'], 2)
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_desktop_mix_falls_back_to_mono_when_stereo_probe_fails(self, mock_pipeline_cls):
+        from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_DESKTOP_MIX
+        s = self._make_sender(AUDIO_SOURCE_DESKTOP_MIX)
+        stereo_pipe, mono_pipe = MagicMock(), MagicMock()
+        stereo_pipe.build.return_value = True
+        stereo_pipe.probe.return_value = False  # stereo negotiation fails
+        mono_pipe.build.return_value = True
+        mono_pipe.probe.return_value = True
+        mock_pipeline_cls.side_effect = [stereo_pipe, mono_pipe]
+
+        result = s._start_audio_pipeline()
+
+        self.assertIs(result, mono_pipe)
+        self.assertEqual(mock_pipeline_cls.call_args_list[1].kwargs['channels'], 1)
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_desktop_mix_logs_an_error_on_stereo_fallback(self, mock_pipeline_cls):
+        from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_DESKTOP_MIX
+        s = self._make_sender(AUDIO_SOURCE_DESKTOP_MIX)
+        stereo_pipe, mono_pipe = MagicMock(), MagicMock()
+        stereo_pipe.build.return_value = True
+        stereo_pipe.probe.return_value = False
+        mono_pipe.build.return_value = True
+        mono_pipe.probe.return_value = True
+        mock_pipeline_cls.side_effect = [stereo_pipe, mono_pipe]
+
+        with patch('robonet.gst_io.streamer_unencrypted.log') as mock_log:
+            s._start_audio_pipeline()
+
+        logged = ' '.join(str(c.args[0]) for c in mock_log.error.call_args_list)
+        self.assertIn('falling back to mono', logged)
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_regular_mic_device_stays_mono_only(self, mock_pipeline_cls):
+        s = self._make_sender('hw:1,0,0')  # a specific mic device, not the desktop mix
+        mock_pipeline_cls.return_value.build.return_value = True
+        mock_pipeline_cls.return_value.probe.return_value = True
+
+        s._start_audio_pipeline()
+
+        self.assertEqual(mock_pipeline_cls.call_count, 1)  # no stereo attempt at all
+        self.assertEqual(mock_pipeline_cls.call_args.kwargs['channels'], 1)
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_returns_none_when_both_stereo_and_mono_fail(self, mock_pipeline_cls):
+        from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_DESKTOP_MIX
+        s = self._make_sender(AUDIO_SOURCE_DESKTOP_MIX)
+        mock_pipeline_cls.return_value.build.return_value = False
+
+        result = s._start_audio_pipeline()
+
+        self.assertIsNone(result)

@@ -830,23 +830,33 @@ class GstSender:
                 log.error('[gst] set_mic_device: all audio encoders failed probe')
 
     def _start_audio_pipeline(self) -> Optional[_AudioPipeline]:
-        for enc_name, codec in self._audio_candidates:
-            log.info(f'[gst] trying audio encoder: {enc_name}')
-            pipe = _AudioPipeline(
-                self._mic_device, enc_name, codec,
-                self._receiver_ip, self._sample_rate)
-            if not pipe.build():
-                log.warning(f'[gst] {enc_name}: build failed, trying next')
-                continue
-            if not pipe.probe():
-                log.warning(f'[gst] {enc_name}: probe failed, trying next')
-                pipe.stop()
-                continue
-            log.info(f'[gst] audio encoder selected: {enc_name} ({codec})')
-            self._aenc_name   = enc_name
-            self._audio_codec = codec
-            pipe.play()
-            return pipe
+        # Desktop mix defaults to stereo (music/video playing on the
+        # desktop is typically stereo) with automatic fallback to mono
+        # if 2 channels genuinely can't be negotiated. Everything else
+        # (a specific mic device, brain-side sending) stays mono.
+        channel_candidates = [2, 1] if self._mic_device == AUDIO_SOURCE_DESKTOP_MIX else [1]
+        for channels in channel_candidates:
+            for enc_name, codec in self._audio_candidates:
+                log.info(f'[gst] trying audio encoder: {enc_name} ({channels}ch)')
+                pipe = _AudioPipeline(
+                    self._mic_device, enc_name, codec,
+                    self._receiver_ip, self._sample_rate, channels=channels)
+                if not pipe.build():
+                    log.warning(f'[gst] {enc_name}: build failed, trying next')
+                    continue
+                if not pipe.probe():
+                    log.warning(f'[gst] {enc_name}: probe failed, trying next')
+                    pipe.stop()
+                    continue
+                log.info(f'[gst] audio encoder selected: {enc_name} ({codec}, {channels}ch)')
+                self._aenc_name       = enc_name
+                self._audio_codec     = codec
+                self._active_channels = channels
+                pipe.play()
+                return pipe
+            if channels == 2:
+                log.error('[gst] could not negotiate 2-channel (stereo) desktop mix '
+                         'audio -- falling back to mono')
         return None
 
     def _prepare_one_off_pipeline_args(self):

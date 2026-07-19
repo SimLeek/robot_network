@@ -42,29 +42,33 @@ def _stub_out_missing_displayarray_font_submodule():
 
 _stub_out_missing_displayarray_font_submodule()
 
-from robonet.brain.display_system import reshape_to_square_matrix, DisplaySubSystem
+from robonet.brain.display_system import reshape_to_square_image, DisplaySubSystem
 
 
-class TestReshapeToSquareMatrix(unittest.TestCase):
+class TestReshapeToSquareImageMono(unittest.TestCase):
+    """Mono (1D) input: stays a plain 2D array -- pad_to_rgb only
+    triggers for arrays that already have a trailing channel axis with
+    fewer than 3 channels, and a 1D array reshapes straight to 2D with
+    no such axis at all."""
 
     def test_perfect_square_reshapes_square(self):
         arr = np.arange(16)
-        result = reshape_to_square_matrix(arr)
+        result = reshape_to_square_image(arr)
         self.assertEqual(result.shape, (4, 4))
 
     def test_prime_length_falls_back_to_one_row(self):
         arr = np.arange(13)  # prime -- only divisors are 1 and 13
-        result = reshape_to_square_matrix(arr)
+        result = reshape_to_square_image(arr)
         self.assertEqual(result.shape, (1, 13))
 
     def test_picks_the_most_square_factor_pair(self):
         arr = np.arange(24)  # factor pairs: 1x24, 2x12, 3x8, 4x6 -- 4x6 is most square
-        result = reshape_to_square_matrix(arr)
+        result = reshape_to_square_image(arr)
         self.assertEqual(result.shape, (4, 6))
 
     def test_preserves_all_elements(self):
         arr = np.arange(30)
-        result = reshape_to_square_matrix(arr)
+        result = reshape_to_square_image(arr)
         self.assertEqual(result.size, 30)
         np.testing.assert_array_equal(result.flatten(), arr)
 
@@ -175,42 +179,43 @@ class TestUpdateAudioFormats(unittest.TestCase):
         self.assertEqual(sub.in_aud.dtype, np.float32)
 
 
-class TestReshapeStereoToSquareImage(unittest.TestCase):
+class TestReshapeToSquareImageStereo(unittest.TestCase):
     """2-channel images are awkward to display (RGB/RGBA is the
-    standard, not 2) -- the third channel is zero-padded rather than
-    inventing a meaning for it."""
+    standard, not 2) -- pad_to_rgb zero-pads the third channel rather
+    than inventing a meaning for it."""
 
     def test_output_has_three_channels(self):
-        from robonet.brain.display_system import reshape_stereo_to_square_image
         stereo = np.random.rand(64, 2).astype(np.float32)
-        result = reshape_stereo_to_square_image(stereo)
+        result = reshape_to_square_image(stereo)
         self.assertEqual(result.shape[-1], 3)
 
     def test_third_channel_is_all_zeros(self):
-        from robonet.brain.display_system import reshape_stereo_to_square_image
         stereo = np.random.rand(64, 2).astype(np.float32)
-        result = reshape_stereo_to_square_image(stereo)
+        result = reshape_to_square_image(stereo)
         np.testing.assert_array_equal(result[:, :, 2], np.zeros(result.shape[:2]))
 
     def test_left_and_right_land_in_the_correct_channels(self):
-        from robonet.brain.display_system import reshape_stereo_to_square_image
         left = np.arange(64, dtype=np.float32)
         right = np.arange(64, 128, dtype=np.float32)
         stereo = np.stack([left, right], axis=1)
 
-        result = reshape_stereo_to_square_image(stereo)
+        result = reshape_to_square_image(stereo)
 
         self.assertEqual(set(result[:, :, 0].flatten()), set(left))
         self.assertEqual(set(result[:, :, 1].flatten()), set(right))
 
     def test_all_three_channels_share_the_same_2d_shape(self):
-        from robonet.brain.display_system import reshape_stereo_to_square_image
         stereo = np.random.rand(100, 2).astype(np.float32)
-        result = reshape_stereo_to_square_image(stereo)
+        result = reshape_to_square_image(stereo)
         self.assertEqual(result.ndim, 3)
         rows, cols, ch = result.shape
         self.assertEqual(rows * cols, 100)
         self.assertEqual(ch, 3)
+
+    def test_pad_to_rgb_false_leaves_channel_count_unchanged(self):
+        stereo = np.random.rand(64, 2).astype(np.float32)
+        result = reshape_to_square_image(stereo, pad_to_rgb=False)
+        self.assertEqual(result.shape[-1], 2)
 
 
 class TestRunOnceDispatchesByAudioShape(unittest.TestCase):

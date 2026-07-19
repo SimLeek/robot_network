@@ -109,6 +109,27 @@ class AiPassthroughDemo(AISubSystem):
         # on this coroutine know the tone has actually had time to play.
         await asyncio.sleep(2.0 + seconds)
 
+    async def _stream_audio_demo(self, seconds: float = 5.0, freq_hz: float = 880.0,
+                                 chunk_dur: float = 0.2, sample_rate: int = 48000):
+        """Demonstrates GstSender.start_audio_stream()/push()/end() --
+        an octave above _play_sine_tone's 440Hz so the two are
+        distinguishable by ear."""
+        gst_sender = self._root.menu.gst_sender
+        handle = gst_sender.start_audio_stream(sample_rate=sample_rate)
+        if handle is None:
+            log.error('[ai-demo] could not start the audio stream')
+            return
+        t0 = 0.0
+        n_chunks = int(seconds / chunk_dur)
+        for _ in range(n_chunks):
+            t = t0 + np.arange(0, chunk_dur, 1.0 / sample_rate)
+            chunk = (0.5 * np.sin(2 * np.pi * freq_hz * t)).astype(np.float32)
+            handle.push(chunk)
+            t0 += chunk_dur
+            await asyncio.sleep(chunk_dur)
+        handle.end()
+        await asyncio.sleep(2.0)  # same settle reasoning as _play_sine_tone
+
     async def _diagnostic_loop(self, interval_s: float = 1.0, sample_rate: int = 48000):
         """Continually reports two cheap, human-checkable signals that
         the AI's video/audio really are live and changing: the hue of
@@ -150,6 +171,7 @@ class AiPassthroughDemo(AISubSystem):
             await self._tap_f11(desktop)
             await asyncio.sleep(0.5)
             await self._play_sine_tone()
+            await self._stream_audio_demo()
         finally:
             desktop.set_input_source('human')
         log.info('[ai-demo] demo complete -- handed control back to human input')

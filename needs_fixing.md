@@ -709,3 +709,35 @@ these fixes should be implemented but are either large tasks or are blocked.
   other test earlier in suite order is leaving the default event loop
   in a bad state for asyncio.ensure_future's implicit get_event_loop()
   call. Not investigated further this round; worth a dedicated look.
+
+- **Aligned with Simleek's own commit (88d5e5c) and fixed a bug it
+  introduced, then finished the three remaining asks.**
+  1. Found a real bug in Simleek's own rename: reshape_to_square_matrix
+     / reshape_stereo_to_square_image were unified into a single
+     reshape_to_square_image(arr, pad_to_rgb=True), a genuinely better
+     design (generalizes to any channel count; mono correctly stays
+     plain 2D since pad_to_rgb only triggers when a trailing channel
+     axis with <3 channels already exists) -- but run_once's call site
+     wasn't updated, still referencing both now-nonexistent old names.
+     Would have raised NameError the moment any real audio arrived.
+     Fixed: run_once now just calls reshape_to_square_image(aud)
+     unconditionally: the unified function already handles both cases.
+  2. Updated tests to match: the two renamed/unified test classes, the
+     diagnostic loop's new plural "peak audio frequencies" log label
+     (per-channel FFT via axis=0, better than my own earlier mixdown --
+     preserves per-channel info instead of discarding it). Removed
+     tests/test_desktop_endpoint_audio_stream_demo.py entirely -- its
+     target function no longer exists there, correctly, per point 4.
+  3. Desktop mix now defaults to stereo (music/video on the desktop is
+     typically stereo) with automatic fallback to mono if 2 channels
+     genuinely can't be negotiated (probe() failure) -- logged as an
+     error on fallback. Everything else (a specific mic device,
+     brain-side sending via play_array/start_audio_stream) stays mono
+     by default, unchanged.
+  4. Added _stream_audio_demo to AiPassthroughDemo (brain side) --
+     GstSender.start_audio_stream()/push()/end(), running after
+     _play_sine_tone completes, at 880Hz (an octave up, distinguishable
+     by ear from _play_sine_tone's 440Hz). This replaces the version I'd
+     put on the endpoint side, which Simleek correctly removed -- demo/
+     test functionality doesn't belong in a production-facing example
+     script; it belongs with the other AiPassthroughDemo demonstrations.

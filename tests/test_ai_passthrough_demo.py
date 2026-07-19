@@ -316,7 +316,7 @@ class TestDiagnosticLoop(unittest.TestCase):
             self._one_tick(demo)
 
         logged = ' '.join(str(c.args[0]) for c in mock_log.info.call_args_list)
-        self.assertIn('peak audio frequency', logged)
+        self.assertIn('peak audio frequencies', logged)
         self.assertIn('440.', logged)
 
     def test_no_image_or_audio_yet_does_not_crash(self):
@@ -370,3 +370,90 @@ class TestDiagnosticLoopStereoAudio(unittest.TestCase):
         demo.in_aud = np.random.uniform(-1, 1, (100, 2)).astype(np.float32)
 
         self._one_tick(demo)
+
+
+class TestStreamAudioDemo(unittest.TestCase):
+    """Demonstrates GstSender.start_audio_stream()/push()/end() on the
+    brain side -- a different frequency from _play_sine_tone so the
+    two are distinguishable by ear."""
+
+    def test_uses_a_different_frequency_from_play_sine_tone(self):
+        demo = AiPassthroughDemo()
+        demo._root = MagicMock()
+
+        _run(demo._stream_audio_demo(seconds=0.02, chunk_dur=0.01))
+
+        self.assertNotEqual(demo._stream_audio_demo.__defaults__, None)  # sanity: has defaults at all
+        # The actual distinguishability check: the default freq_hz
+        # differs from _play_sine_tone's.
+        import inspect
+        stream_default = inspect.signature(demo._stream_audio_demo).parameters['freq_hz'].default
+        tone_default = inspect.signature(demo._play_sine_tone).parameters['freq_hz'].default
+        self.assertNotEqual(stream_default, tone_default)
+
+    def test_pushes_the_expected_number_of_chunks(self):
+        demo = AiPassthroughDemo()
+        demo._root = MagicMock()
+        handle = MagicMock()
+        demo._root.menu.gst_sender.start_audio_stream.return_value = handle
+
+        _run(demo._stream_audio_demo(seconds=0.05, chunk_dur=0.01))
+
+        self.assertEqual(handle.push.call_count, 5)  # 0.05s / 0.01s chunks
+
+    def test_calls_end_after_all_chunks_pushed(self):
+        demo = AiPassthroughDemo()
+        demo._root = MagicMock()
+        handle = MagicMock()
+        demo._root.menu.gst_sender.start_audio_stream.return_value = handle
+
+        _run(demo._stream_audio_demo(seconds=0.02, chunk_dur=0.01))
+
+        handle.end.assert_called_once()
+
+    def test_pushed_chunks_are_a_continuous_tone_not_phase_resets(self):
+        demo = AiPassthroughDemo()
+        demo._root = MagicMock()
+        handle = MagicMock()
+        demo._root.menu.gst_sender.start_audio_stream.return_value = handle
+
+        _run(demo._stream_audio_demo(seconds=0.4, chunk_dur=0.2, freq_hz=880.0, sample_rate=48000))
+
+        chunk0 = handle.push.call_args_list[0].args[0]
+        chunk1 = handle.push.call_args_list[1].args[0]
+        stitched = np.concatenate([chunk0, chunk1])
+        spectrum = np.abs(np.fft.rfft(stitched))
+        freqs = np.fft.rfftfreq(len(stitched), d=1.0 / 48000)
+        peak = freqs[int(np.argmax(spectrum))]
+        self.assertAlmostEqual(peak, 880.0, delta=5.0)  # a phase jump would smear this badly
+
+    def test_returns_gracefully_if_stream_could_not_start(self):
+        demo = AiPassthroughDemo()
+        demo._root = MagicMock()
+        demo._root.menu.gst_sender.start_audio_stream.return_value = None
+
+        _run(demo._stream_audio_demo(seconds=0.02, chunk_dur=0.01))  # must not raise
+
+
+class TestRunIncludesStreamAudioDemo(unittest.TestCase):
+
+    def test_stream_audio_demo_runs_after_play_sine_tone(self):
+        demo = AiPassthroughDemo(period_s=0.0)
+        demo._root = MagicMock()
+        demo.has_video = True
+        demo.has_audio = True
+        from robonet.brain.desktop_system import DesktopSubSystem
+        desktop = MagicMock(spec=DesktopSubSystem)
+        desktop.af_ai = MagicMock()
+        demo._root.active_sub = desktop
+
+        call_order = []
+        demo._circle_mouse = AsyncMock(side_effect=lambda *a, **kw: call_order.append('circle'))
+        demo._right_click = AsyncMock(side_effect=lambda *a, **kw: call_order.append('click'))
+        demo._tap_f11 = AsyncMock(side_effect=lambda *a, **kw: call_order.append('f11'))
+        demo._play_sine_tone = AsyncMock(side_effect=lambda *a, **kw: call_order.append('play_array'))
+        demo._stream_audio_demo = AsyncMock(side_effect=lambda *a, **kw: call_order.append('stream'))
+
+        _run(demo._run())
+
+        self.assertEqual(call_order[-2:], ['play_array', 'stream'])

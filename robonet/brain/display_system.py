@@ -101,10 +101,7 @@ class DisplaySubSystem(SubSystem):
             # negative half of every waveform was wrapping around via
             # uint8 underflow instead of displaying. Remap -1..1 -> 0..1.
             aud = (aud / 2.0) + 0.5
-            if len(aud.shape) == 1:
-                aud = reshape_to_square_matrix(aud)
-            elif aud.shape[1] >= 2:
-                aud = reshape_stereo_to_square_image(aud)
+            aud = reshape_to_square_image(aud)
             self.displayer.update(aud, 'audio')
         elapsed = time.time() - t1
         await asyncio.sleep(max(0.0, self.frame_time - elapsed))
