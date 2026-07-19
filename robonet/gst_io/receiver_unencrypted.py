@@ -254,10 +254,9 @@ class _AudioRecvPipeline:
         self._audio_device = audio_device
         self._on_audio     = on_audio
         self._play_locally = play_locally
-        # Bypasses the wire protocol for now -- GstStreamInfo doesn't
-        # carry a channel count yet (mono has been the only option end
-        # to end until now), so this has to be told rather than
-        # negotiated. Full negotiation is a separate, larger task.
+        # Currently assuming both machines know the number of channels
+        # rather than needing to communicate it. Communicating it
+        # through something like GstStreamInfo is a later todo.
         self._channels      = channels
         self._pipeline:    Optional[Gst.Pipeline] = None
         self._first_packet = False

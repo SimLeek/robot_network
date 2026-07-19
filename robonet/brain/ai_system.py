@@ -11,11 +11,7 @@ class AISubSystem(SubSystem):
 
     It is still an abstract class and needs to be subclassed.
 
-    in_aud: mono (N,) or stereo (N, 2), float32 in [-1, 1] -- whatever
-    shape the receive pipeline was configured with (see
-    GstReceiver/_AudioRecvPipeline's channels param). Not reshaped or
-    transformed here; consumers that care about channel count (e.g. a
-    directional/stereo-aware AI) should check .ndim themselves.
+    in_aud: mono (N,) or stereo (N, 2), float32 in [-1, 1] audio
     """
     class OutMode(Enum):
         NEURON = 1

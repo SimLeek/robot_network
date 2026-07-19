@@ -33,12 +33,6 @@ _SPECIAL_KEY_TO_PYAUTOGUI = {
 
 _dynamic_map_cache: Dict[int, Dict[Any, str]] = {}
 
-# The direct, curated answer to "what keys can I actually press" --
-# exactly what keycode_to_pyautogui can produce, no more (no platform-
-# specific/multimedia pyautogui extras that aren't reachable through
-# this system) and no less. Printable ASCII (32-126) covers letters,
-# digits, and punctuation via the fallback branch; the rest come from
-# _SPECIAL_KEY_TO_PYAUTOGUI above. Sorted for a stable, readable order.
 AI_SUPPORTED_KEYS = sorted(set(_SPECIAL_KEY_TO_PYAUTOGUI.values())
                            | {(chr(c).lower() if chr(c).isalpha() else chr(c))
                               for c in range(32, 127)})

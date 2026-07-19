@@ -19,27 +19,25 @@ import typing
 if typing.TYPE_CHECKING:
     from robonet.brain.main_system import ServerSystem
 
-def reshape_to_square_matrix(arr):
-    n = arr.size
+import numpy as np
+
+
+def reshape_to_square_image(arr: np.ndarray, pad_to_rgb: bool = True) -> np.ndarray:
+    n = arr.shape[0]
     for i in range(int(np.sqrt(n)), 0, -1):
         if n % i == 0:
             rows = i
             cols = n // i
             break
-    
-    return arr.reshape(rows, cols)
 
+    reshaped = arr.reshape((rows, cols) + arr.shape[1:])
 
-def reshape_stereo_to_square_image(stereo: np.ndarray) -> np.ndarray:
-    """(N, 2) stereo PCM -> (rows, cols, 3) square-ish image: channel 0
-    = left, channel 1 = right, channel 2 = zeros. 2-channel images are
-    awkward to display (RGB/RGBA is the standard, not 2), so the
-    unused third channel is just zero-padded rather than inventing a
-    meaning for it. Only the first two channels are used if more than
-    2 are ever passed."""
-    left  = reshape_to_square_matrix(stereo[:, 0])
-    right = reshape_to_square_matrix(stereo[:, 1])
-    return np.stack([left, right, np.zeros_like(left)], axis=-1)
+    if pad_to_rgb and reshaped.ndim >= 3 > reshaped.shape[-1]:
+        pad_width = [(0, 0)] * reshaped.ndim
+        pad_width[-1] = (0, 3 - reshaped.shape[-1])
+        reshaped = np.pad(reshaped, pad_width, mode='constant', constant_values=0)
+
+    return reshaped
 
 class DisplaySubSystem(SubSystem):
 

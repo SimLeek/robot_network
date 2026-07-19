@@ -337,11 +337,7 @@ _ARRAY_CHUNK_SAMPLES = 960
 
 def _to_s16le(samples: np.ndarray) -> np.ndarray:
     """Accepts float in [-1, 1] (any float dtype) or already-int16;
-    returns int16 PCM, matching the S16LE standard used end to end.
-    Works on any shape -- mono (N,) or multi-channel (N, channels),
-    interleaved when flattened via .tobytes() (numpy's default C order
-    already interleaves the last axis, which is exactly what raw
-    interleaved PCM needs)."""
+    returns int16 PCM, matching the S16LE standard used end to end."""
     arr = np.asarray(samples)
     if arr.dtype == np.int16:
         return arr
