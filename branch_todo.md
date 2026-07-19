@@ -1,6 +1,6 @@
 only put [complete|todo] followed by short descriptions for every bullet point in this file
 
-- [todo] zmq shared-memory bridge between robot_network's brain and a separate AI process (AI crashing must not take robot_network down and vice versa)
+- [complete] shared-memory bridge (multiprocessing.shared_memory, not zmq -- zmq doesn't do shared memory) between robot_network's brain and a separate AI process (AI crashing must not take robot_network down and vice versa) -- seqlock-based channels (no torn reads, no mutex needed), multiprocessing.connection for handshake/control messages, examples/shmem_bridge_robonet.py + examples/shmem_bridge_ai.py demonstrate it end to end. Still todo: wiring real DesktopSubSystem/AISubSystem video/audio through it, and the status signals/lifecycle callbacks below.
 - [todo] AI process lifecycle handling: slow startup and safe shutdown, since spinning up/down can take a while
   - [todo] abstract base class the AI side must implement, with four required callbacks
   - [todo] on_robonet_start: fires when robonet itself starts
