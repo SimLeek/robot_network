@@ -10,6 +10,8 @@ class AISubSystem(SubSystem):
     This connects to an AI through zmq, has an AI, etc., reads its output, and feeds its context.
 
     It is still an abstract class and needs to be subclassed.
+
+    in_aud: mono (N,) or stereo (N, 2), float32 in [-1, 1] audio
     """
     class OutMode(Enum):
         NEURON = 1

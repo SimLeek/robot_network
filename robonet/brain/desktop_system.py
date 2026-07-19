@@ -25,6 +25,7 @@ if typing.TYPE_CHECKING:
 
 from robonet.desktop_control_spec import (
     keycode_to_pyautogui, DESKTOP_CONTROL_INTERFACE_SPEC, describe_control_interface,
+    AI_SUPPORTED_KEYS,
 )
 
 # AI passthrough: neuron/token indices an AI uses to drive mouse input
@@ -101,12 +102,11 @@ class DesktopSubSystem(SubSystem):
 
     def start(self):
         self._running = True
-        self._running = True
         self._bind_input()
+        self._log_action_space_size()
         log.info(describe_control_interface())
 
     def stop(self):
-        self._running = False
         self._running = False
         self._unbind_input()
 
@@ -142,6 +142,13 @@ class DesktopSubSystem(SubSystem):
         af_edit.bind_mouse_move(self._on_edit_mouse_move)
         af_edit.bind_mouse_scroll(self._on_edit_scroll)
         self._bound = True
+
+    def _log_action_space_size(self):
+        n_tokens = len(self.af_ai._token_to_handlers)
+        n_neurons = len(self.af_ai._neuron_to_handler_thresholds)
+        log.info(f'[desktop] AI action space: {n_tokens} discrete tokens, '
+                f'{n_neurons} continuous neurons, {len(AI_SUPPORTED_KEYS)} supported '
+                f'keys {AI_SUPPORTED_KEYS}')
 
     def _unbind_input(self):
         if not self._bound:

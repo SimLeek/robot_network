@@ -13,9 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import queue
 import subprocess
 import threading
-from typing import Optional, TYPE_CHECKING, Union
+import time
+from typing import Callable, Optional, TYPE_CHECKING, Union
+
+import numpy as np
 
 import gi
 gi.require_version('Gst',  '1.0')
@@ -310,7 +314,6 @@ class _VideoPipeline:
 
 
 AUDIO_SOURCE_DESKTOP_MIX = 'desktop-audio-mix'
-AUDIO_SOURCE_SINE_TEST = 'sine-test-tone'
 
 
 def _pactl_get_default(field: str) -> Optional[str]:
@@ -326,6 +329,21 @@ def _pactl_get_default(field: str) -> Optional[str]:
         return None
 
 
+# 20ms per chunk at any standard rate -- matches typical RTP/opus
+# framing elsewhere in this file, small enough for smooth real-time
+# pacing without excessive Python-thread wakeups.
+_ARRAY_CHUNK_SAMPLES = 960
+
+
+def _to_s16le(samples: np.ndarray) -> np.ndarray:
+    """Accepts float in [-1, 1] (any float dtype) or already-int16;
+    returns int16 PCM, matching the S16LE standard used end to end."""
+    arr = np.asarray(samples)
+    if arr.dtype == np.int16:
+        return arr
+    return (np.clip(arr, -1.0, 1.0) * 32767.0).astype(np.int16)
+
+
 class _AudioPipeline:
     """
     Plain-RTP audio encode+send pipeline (no encryption).
@@ -339,13 +357,40 @@ class _AudioPipeline:
     """
 
     def __init__(self, mic_device, enc_name, audio_codec,
-                server_ip, sample_rate):
+                server_ip, sample_rate, array_source: Optional[np.ndarray] = None,
+                on_array_complete: Optional[Callable[[], None]] = None,
+                streaming: bool = False, channels: int = 1):
         self._mic_device  = mic_device
         self._enc_name    = enc_name
         self._audio_codec = audio_codec
         self._server_ip   = server_ip
         self._sample_rate = sample_rate
         self._pipeline:   Optional[Gst.Pipeline] = None
+        # array_source: send this exact PCM data once instead of
+        # reading from a hardware/pulse device -- e.g. a synthesized
+        # sine wave, a notification sound, generated speech. Fed into
+        # an appsrc, real-time-paced by a background thread (a real
+        # sound card can't play "faster than realtime" either, and the
+        # receiver's low-latency queue isn't deep enough to absorb a
+        # whole clip arriving in a burst).
+        #
+        # streaming: like array_source but indefinite length -- chunks
+        # arrive over time via push_chunk() rather than one fixed array
+        # up front (can't send an infinitely long array). The SAME
+        # appsrc/encoder/RTP session stays alive across every pushed
+        # chunk -- no per-chunk pipeline rebuild, so no encoder-reset
+        # artifacts or gaps at chunk boundaries as long as the caller
+        # keeps the queue reasonably fed.
+        self._array_source     = array_source
+        self._on_array_complete = on_array_complete
+        self._streaming   = streaming
+        self._channels     = channels
+        self._stream_queue: queue.Queue = queue.Queue()
+        self._stream_ended = threading.Event()
+        self._appsrc:      Optional[Gst.Element] = None
+        self._feed_thread: Optional[threading.Thread] = None
+        self._feed_stop = threading.Event()
+        self._effective_rate = sample_rate
 
     def _build_desktop_mix_source(self, p: Gst.Pipeline) -> Optional[Gst.Element]:
         """Builds the audiomixer + pulsesrc branches, returns the mixer
@@ -392,7 +437,6 @@ class _AudioPipeline:
     def build(self) -> bool:
         p = Gst.Pipeline.new('audio-send')
         is_desktop_mix = (self._mic_device == AUDIO_SOURCE_DESKTOP_MIX)
-        is_sine_test = (self._mic_device == AUDIO_SOURCE_SINE_TEST)
 
         capsflt = Gst.ElementFactory.make('capsfilter', 'acaps')
         enc     = Gst.ElementFactory.make(self._enc_name, 'aenc')
@@ -413,7 +457,9 @@ class _AudioPipeline:
         # testing. Opus additionally requires 48kHz.
         target_rate = 48000 if self._audio_codec == 'opus' else self._sample_rate
 
-        caps_str = f'audio/x-raw,format=S16LE,layout=interleaved,rate={target_rate},channels=1'
+        self._effective_rate = target_rate
+        caps_str = (f'audio/x-raw,format=S16LE,layout=interleaved,'
+                   f'rate={target_rate},channels={self._channels}')
         capsflt.set_property('caps', Gst.Caps.from_string(caps_str))
         #capsflt.set_property('caps', Gst.Caps.from_string(
         #    f'audio/x-raw,format=F32LE,rate={self._sample_rate},channels=1'))
@@ -436,16 +482,19 @@ class _AudioPipeline:
             src_out = self._build_desktop_mix_source(p)
             if src_out is None:
                 return False
-        elif is_sine_test:
-            src = Gst.ElementFactory.make('audiotestsrc', 'asrc')
+        elif self._array_source is not None or self._streaming:
+            src = Gst.ElementFactory.make('appsrc', 'asrc')
             if src is None:
-                log.error('[gst] could not instantiate audiotestsrc')
+                log.error('[gst] could not instantiate appsrc')
                 return False
-            src.set_property('wave', 'sine')
-            src.set_property('freq', 440.0)
+            src.set_property('format', Gst.Format.TIME)
             src.set_property('is-live', True)
+            src.set_property('caps', Gst.Caps.from_string(
+                f'audio/x-raw,format=S16LE,layout=interleaved,'
+                f'rate={target_rate},channels={self._channels}'))
             p.add(src)
             src_out = src
+            self._appsrc = src
         else:
             src = Gst.ElementFactory.make('alsasrc', 'asrc')
             if src is None:
@@ -521,8 +570,84 @@ class _AudioPipeline:
                 log.error(f'[{self.__class__.__name__}] failed to reach PLAYING')
             else:
                 log.info(f'[{self.__class__.__name__}] successfully transitioned to PLAYING.')
+        if self._appsrc is not None and self._array_source is not None:
+            self._feed_stop.clear()
+            self._feed_thread = threading.Thread(
+                target=self._feed_array, daemon=True, name='gst-array-feed')
+            self._feed_thread.start()
+        elif self._appsrc is not None and self._streaming:
+            self._feed_stop.clear()
+            self._feed_thread = threading.Thread(
+                target=self._feed_stream, daemon=True, name='gst-stream-feed')
+            self._feed_thread.start()
+
+    def _feed_array(self):
+        """Runs on its own thread: pushes the array into appsrc as
+        S16LE, paced in real time via chunked sleeps (appsrc's
+        push-buffer is safe to call from any thread), then EOS."""
+        pcm = _to_s16le(self._array_source)
+        chunk_dur = _ARRAY_CHUNK_SAMPLES / self._effective_rate
+        i, n = 0, len(pcm)
+        try:
+            while i < n and not self._feed_stop.is_set():
+                chunk = pcm[i:i + _ARRAY_CHUNK_SAMPLES]
+                self._appsrc.emit('push-buffer', Gst.Buffer.new_wrapped(chunk.tobytes()))
+                i += _ARRAY_CHUNK_SAMPLES
+                time.sleep(chunk_dur)
+            if not self._feed_stop.is_set():
+                self._appsrc.emit('end-of-stream')
+        except Exception as e:
+            log.error(f'[gst] array feed error: {e}')
+        finally:
+            if self._on_array_complete is not None and not self._feed_stop.is_set():
+                self._on_array_complete()
+
+    def push_chunk(self, chunk: np.ndarray):
+        """Streaming mode only: enqueue more audio to play. Safe to
+        call from any thread. 0.1s-1s chunks work well -- the feeder
+        re-slices to its own fixed pacing granularity regardless of
+        what size is pushed, so chunk size doesn't affect smoothness,
+        only how far ahead the caller can plan."""
+        self._stream_queue.put(chunk)
+
+    def end_stream(self):
+        """Streaming mode only: no more chunks coming. The feeder
+        drains whatever's already queued, then sends EOS and (via
+        on_array_complete) hands playback back to normal mic audio."""
+        self._stream_ended.set()
+
+    def _feed_stream(self):
+        """Runs on its own thread: drains push_chunk()'s queue
+        indefinitely, paced in real time exactly like _feed_array, but
+        with no predetermined total length -- ends only when
+        end_stream() has been called AND the queue is empty."""
+        try:
+            while not self._feed_stop.is_set():
+                try:
+                    chunk = self._stream_queue.get(timeout=0.05)
+                except queue.Empty:
+                    if self._stream_ended.is_set():
+                        break  # no more data coming, and the queue is drained
+                    continue  # still streaming, nothing ready yet -- keep waiting
+                pcm = _to_s16le(chunk)
+                i, n = 0, len(pcm)
+                while i < n and not self._feed_stop.is_set():
+                    piece = pcm[i:i + _ARRAY_CHUNK_SAMPLES]
+                    self._appsrc.emit('push-buffer', Gst.Buffer.new_wrapped(piece.tobytes()))
+                    i += len(piece)
+                    time.sleep(len(piece) / self._effective_rate)
+            if not self._feed_stop.is_set():
+                self._appsrc.emit('end-of-stream')
+        except Exception as e:
+            log.error(f'[gst] stream feed error: {e}')
+        finally:
+            if self._on_array_complete is not None and not self._feed_stop.is_set():
+                self._on_array_complete()
 
     def stop(self):
+        self._feed_stop.set()
+        if self._feed_thread is not None and self._feed_thread.is_alive():
+            self._feed_thread.join(timeout=1.0)
         if self._pipeline:
             self._pipeline.set_state(Gst.State.NULL)
         self._pipeline = None
@@ -705,21 +830,127 @@ class GstSender:
                 log.error('[gst] set_mic_device: all audio encoders failed probe')
 
     def _start_audio_pipeline(self) -> Optional[_AudioPipeline]:
-        for enc_name, codec in self._audio_candidates:
-            log.info(f'[gst] trying audio encoder: {enc_name}')
-            pipe = _AudioPipeline(
-                self._mic_device, enc_name, codec,
-                self._receiver_ip, self._sample_rate)
-            if not pipe.build():
-                log.warning(f'[gst] {enc_name}: build failed, trying next')
-                continue
-            if not pipe.probe():
-                log.warning(f'[gst] {enc_name}: probe failed, trying next')
-                pipe.stop()
-                continue
-            log.info(f'[gst] audio encoder selected: {enc_name} ({codec})')
-            self._aenc_name   = enc_name
-            self._audio_codec = codec
-            pipe.play()
-            return pipe
+        # Desktop mix defaults to stereo (music/video playing on the
+        # desktop is typically stereo) with automatic fallback to mono
+        # if 2 channels genuinely can't be negotiated. Everything else
+        # (a specific mic device, brain-side sending) stays mono.
+        channel_candidates = [2, 1] if self._mic_device == AUDIO_SOURCE_DESKTOP_MIX else [1]
+        for channels in channel_candidates:
+            for enc_name, codec in self._audio_candidates:
+                log.info(f'[gst] trying audio encoder: {enc_name} ({channels}ch)')
+                pipe = _AudioPipeline(
+                    self._mic_device, enc_name, codec,
+                    self._receiver_ip, self._sample_rate, channels=channels)
+                if not pipe.build():
+                    log.warning(f'[gst] {enc_name}: build failed, trying next')
+                    continue
+                if not pipe.probe():
+                    log.warning(f'[gst] {enc_name}: probe failed, trying next')
+                    pipe.stop()
+                    continue
+                log.info(f'[gst] audio encoder selected: {enc_name} ({codec}, {channels}ch)')
+                self._aenc_name       = enc_name
+                self._audio_codec     = codec
+                self._active_channels = channels
+                pipe.play()
+                return pipe
+            if channels == 2:
+                log.error('[gst] could not negotiate 2-channel (stereo) desktop mix '
+                         'audio -- falling back to mono')
         return None
+
+    def _prepare_one_off_pipeline_args(self):
+        """Shared by play_array and start_audio_stream: resolve which
+        encoder to use (reusing whichever is already known-working
+        rather than re-probing, since by the time something wants a
+        one-off/stream the sender has normally already established one
+        via the regular mic pipeline) and stop whatever's currently
+        playing. Returns (enc_name, codec, resume_callback) or None if
+        not connected / no encoder available at all."""
+        if not self._receiver_ip:
+            log.error('[gst] not connected to a receiver yet')
+            return None
+        enc_name, codec = self._aenc_name, self._audio_codec
+        if enc_name is None:
+            if not self._audio_candidates:
+                log.error('[gst] no audio encoder available')
+                return None
+            enc_name, codec = self._audio_candidates[0]
+        if self._apipe:
+            self._apipe.stop()
+            self._apipe = None
+
+        def _resume_normal_audio():
+            if self._mic_device and self._receiver_ip and self._audio_candidates:
+                self._apipe = self._start_audio_pipeline()
+                if self._apipe is None:
+                    log.error('[gst] resuming normal audio failed '
+                             '(all encoders failed probe)')
+
+        return enc_name, codec, _resume_normal_audio
+
+    def play_array(self, samples: np.ndarray, sample_rate: int = 48000) -> bool:
+        """Sends an arbitrary numpy PCM array as the outbound audio,
+        once, in real time -- a generated sound, a synthesized alert,
+        anything. Self-contained: normal mic/desktop-mix audio resumes
+        automatically once the array finishes. Mono: shape (N,).
+        Multi-channel (e.g. stereo): shape (N, channels), interleaved
+        automatically -- channel count is read from the array's own
+        shape, not a separate parameter, so it can't disagree with what
+        was actually passed."""
+        prep = self._prepare_one_off_pipeline_args()
+        if prep is None:
+            return False
+        enc_name, codec, resume_cb = prep
+        channels = samples.shape[1] if samples.ndim == 2 else 1
+
+        pipe = _AudioPipeline(
+            self._mic_device, enc_name, codec, self._receiver_ip, sample_rate,
+            array_source=samples, on_array_complete=resume_cb, channels=channels)
+        if not pipe.build():
+            log.error(f'[gst] play_array: {enc_name} build failed')
+            return False
+        pipe.play()
+        self._apipe = pipe
+        return True
+
+    def start_audio_stream(self, sample_rate: int = 48000, channels: int = 1
+                           ) -> Optional['AudioStreamHandle']:
+        """For indefinite-length audio -- can't send an infinitely long
+        array to play_array. Returns a handle: push() any number of
+        chunks over time (0.1s-1s chunks work well), call end() when
+        done. The SAME encoder/RTP session stays alive across every
+        pushed chunk -- no per-chunk pipeline rebuild, so no
+        encoder-reset artifacts or gaps at chunk boundaries as long as
+        chunks keep arriving. Self-contained like play_array: normal
+        mic audio resumes automatically after end()."""
+        prep = self._prepare_one_off_pipeline_args()
+        if prep is None:
+            return None
+        enc_name, codec, resume_cb = prep
+
+        pipe = _AudioPipeline(
+            self._mic_device, enc_name, codec, self._receiver_ip, sample_rate,
+            on_array_complete=resume_cb, streaming=True, channels=channels)
+        if not pipe.build():
+            log.error(f'[gst] start_audio_stream: {enc_name} build failed')
+            return None
+        pipe.play()
+        self._apipe = pipe
+        return AudioStreamHandle(pipe)
+
+
+class AudioStreamHandle:
+    """Returned by GstSender.start_audio_stream(). See its docstring."""
+
+    def __init__(self, pipeline: '_AudioPipeline'):
+        self._pipeline = pipeline
+
+    def push(self, chunk: np.ndarray):
+        """Enqueue more audio to play. Safe to call from any thread."""
+        self._pipeline.push_chunk(chunk)
+
+    def end(self):
+        """No more chunks coming -- drains what's queued, then hands
+        playback back to normal mic audio."""
+        self._pipeline.end_stream()

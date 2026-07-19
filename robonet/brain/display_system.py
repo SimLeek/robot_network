@@ -19,15 +19,25 @@ import typing
 if typing.TYPE_CHECKING:
     from robonet.brain.main_system import ServerSystem
 
-def reshape_to_square_matrix(arr):
-    n = arr.size
+import numpy as np
+
+
+def reshape_to_square_image(arr: np.ndarray, pad_to_rgb: bool = True) -> np.ndarray:
+    n = arr.shape[0]
     for i in range(int(np.sqrt(n)), 0, -1):
         if n % i == 0:
             rows = i
             cols = n // i
             break
-    
-    return arr.reshape(rows, cols)
+
+    reshaped = arr.reshape((rows, cols) + arr.shape[1:])
+
+    if pad_to_rgb and reshaped.ndim >= 3 > reshaped.shape[-1]:
+        pad_width = [(0, 0)] * reshaped.ndim
+        pad_width[-1] = (0, 3 - reshaped.shape[-1])
+        reshaped = np.pad(reshaped, pad_width, mode='constant', constant_values=0)
+
+    return reshaped
 
 class DisplaySubSystem(SubSystem):
 
@@ -91,8 +101,7 @@ class DisplaySubSystem(SubSystem):
             # negative half of every waveform was wrapping around via
             # uint8 underflow instead of displaying. Remap -1..1 -> 0..1.
             aud = (aud / 2.0) + 0.5
-            if len(aud.shape)==1:
-                aud = reshape_to_square_matrix(aud)
+            aud = reshape_to_square_image(aud)
             self.displayer.update(aud, 'audio')
         elapsed = time.time() - t1
         await asyncio.sleep(max(0.0, self.frame_time - elapsed))

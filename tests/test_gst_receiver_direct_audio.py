@@ -31,6 +31,7 @@ class _FakeGstReceiver:
         self._audio_device = audio_device
         self._recv_audio_callback = recv_audio_callback
         self._play_locally = False
+        self._channels = 1
         self._apipe = None
 
     _build_audio_pipeline = GstReceiver._build_audio_pipeline
@@ -258,6 +259,7 @@ class TestPullChunkS16Conversion(unittest.TestCase):
         from robonet.gst_io.receiver_unencrypted import _AudioRecvPipeline
         received = []
         pipe = _AudioRecvPipeline.__new__(_AudioRecvPipeline)
+        pipe._channels = 1
         pipe._on_audio = received.append
 
         mapinfo = MagicMock()
@@ -280,3 +282,51 @@ class TestPullChunkS16Conversion(unittest.TestCase):
         chunk = self._pull([0, 16384, -16384, 32767])
         self.assertEqual(chunk.dtype, np.float32)
         np.testing.assert_allclose(chunk, [0.0, 0.5, -0.5, 32767 / 32768.0], atol=1e-6)
+
+
+class TestGstReceiverChannelsWiring(unittest.TestCase):
+    """The actual bug this is a regression test for: GstReceiver didn't
+    accept a channels parameter at all, so _AudioRecvPipeline always
+    got the class default (1) regardless of what the endpoint actually
+    sent -- silently downmixing real stereo audio to mono. Verified on
+    real hardware: the endpoint correctly sent 2-channel desktop mix,
+    but the brain received it as mono because this exact wiring was
+    missing end to end."""
+
+    def test_default_is_mono(self):
+        from robonet.gst_io.receiver_unencrypted import GstReceiver
+        gr = GstReceiver()
+        self.assertEqual(gr._channels, 1)
+
+    def test_explicit_channels_is_stored(self):
+        from robonet.gst_io.receiver_unencrypted import GstReceiver
+        gr = GstReceiver(channels=2)
+        self.assertEqual(gr._channels, 2)
+
+    def test_build_audio_pipeline_passes_channels_through(self):
+        from robonet.gst_io.receiver_unencrypted import GstReceiver
+        gr = GstReceiver(channels=2)
+        gr._info = _FakeInfo(audio_codec='opus')
+
+        with patch('robonet.gst_io.receiver_unencrypted._AudioRecvPipeline') as mock_pipeline_cls:
+            mock_pipeline_cls.return_value.build.return_value = True
+            mock_pipeline_cls.return_value.probe.return_value = True
+            gr._build_audio_pipeline()
+
+        self.assertEqual(mock_pipeline_cls.call_args.kwargs['channels'], 2)
+
+    def test_logs_the_actual_channel_count(self):
+        # There was previously no way to tell from the log what channel
+        # count the receive side was actually using at all.
+        from robonet.gst_io.receiver_unencrypted import GstReceiver
+        gr = GstReceiver(channels=2)
+        gr._info = _FakeInfo(audio_codec='opus')
+
+        with patch('robonet.gst_io.receiver_unencrypted._AudioRecvPipeline') as mock_pipeline_cls, \
+             patch('robonet.gst_io.receiver_unencrypted.log') as mock_log:
+            mock_pipeline_cls.return_value.build.return_value = True
+            mock_pipeline_cls.return_value.probe.return_value = True
+            gr._build_audio_pipeline()
+
+        logged = ' '.join(str(c.args[0]) for c in mock_log.info.call_args_list)
+        self.assertIn('2ch', logged)

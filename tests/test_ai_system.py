@@ -69,3 +69,25 @@ class TestAISubSystem(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestUpdateAudioAcceptsMonoOrStereo(unittest.TestCase):
+    """in_aud is documented as mono (N,) or stereo (N, 2) -- neither
+    shape gets transformed or rejected here."""
+
+    def test_mono_shape_stored_unchanged(self):
+        ai = _ConcreteAISubSystem()
+        mono = np.zeros(100, dtype=np.float32)
+        ai.update_audio(mono)
+        self.assertEqual(ai.in_aud.shape, (100,))
+
+    def test_stereo_shape_stored_unchanged(self):
+        ai = _ConcreteAISubSystem()
+        stereo = np.zeros((100, 2), dtype=np.float32)
+        ai.update_audio(stereo)
+        self.assertEqual(ai.in_aud.shape, (100, 2))
+
+    def test_stereo_still_sets_has_audio(self):
+        ai = _ConcreteAISubSystem()
+        ai.update_audio(np.zeros((100, 2), dtype=np.float32))
+        self.assertTrue(ai.has_audio)

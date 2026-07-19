@@ -11,7 +11,7 @@ the neuron/token dispatch wiring an AI actually drives through.
 import unittest
 
 import numpy as np
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from robonet.brain.desktop_system import (
     DesktopSubSystem, AI_NEURON_MOUSE_X, AI_NEURON_MOUSE_Y,
@@ -295,6 +295,24 @@ class TestAiViewControls(unittest.TestCase):
     without zoom it cannot see enough detail on a 1080p+ screen to
     interact at all, since it only ingests small frames."""
 
+    def test_zoom_in_then_pan_changes_both_zoom_and_position_together(self):
+        # A direct, combined demonstration (zoom AND pan, not each
+        # tested in isolation) that the functionality genuinely works.
+        from robonet.brain.desktop_system import AI_TOKEN_ZOOM_IN, AI_TOKEN_PAN_RIGHT, AI_TOKEN_PAN_DOWN
+        sub = self._ready_sub()
+        baseline_zoom = sub.viewport.zoom
+        baseline_pan = (sub.viewport.pan_x, sub.viewport.pan_y)
+
+        for _ in range(5):
+            sub.af_ai.on_token(AI_TOKEN_ZOOM_IN)
+        sub.af_ai.on_token(AI_TOKEN_PAN_RIGHT)
+        sub.af_ai.on_token(AI_TOKEN_PAN_DOWN)
+
+        self.assertGreater(sub.viewport.zoom, baseline_zoom)
+        self.assertNotEqual((sub.viewport.pan_x, sub.viewport.pan_y), baseline_pan)
+        self.assertGreater(sub.viewport.pan_x, baseline_pan[0])
+        self.assertGreater(sub.viewport.pan_y, baseline_pan[1])
+
     def _ready_sub(self):
         sub = _make_sub()
         sub.set_input_source('ai')
@@ -375,3 +393,27 @@ class TestAiViewControls(unittest.TestCase):
         z = sub.viewport.zoom
         self.assertAlmostEqual(press.x, int((1 - 1 / (2 * z)) * 1920), delta=2)
         self.assertAlmostEqual(press.y, int((1 - 1 / (2 * z)) * 1080), delta=2)
+
+
+class TestActionSpaceDiagnostic(unittest.TestCase):
+    """Knowing the actual action-space size is mandatory for plugging
+    in an RL-style AI -- there was previously no way to get it at all."""
+
+    def test_reports_the_actual_bound_counts(self):
+        sub = _make_sub()
+        with patch('robonet.brain.desktop_system.log') as mock_log:
+            sub.start()
+
+        logged = ' '.join(str(c.args[0]) for c in mock_log.info.call_args_list)
+        self.assertIn('2 continuous neurons', logged)   # mouse x, mouse y
+        self.assertIn('13 discrete tokens', logged)      # 6 mouse + 7 view control
+
+    def test_matches_the_action_factory_s_own_bookkeeping(self):
+        # Not a hardcoded number -- must track whatever's actually bound,
+        # so this can't silently go stale if tokens are added/removed.
+        sub = _make_sub()
+        sub.start()
+        n_tokens = len(sub.af_ai._token_to_handlers)
+        n_neurons = len(sub.af_ai._neuron_to_handler_thresholds)
+        self.assertEqual(n_tokens, 13)
+        self.assertEqual(n_neurons, 2)

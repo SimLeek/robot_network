@@ -21,8 +21,10 @@ plugins happen to be installed on whatever machine runs the tests.
 import unittest
 from unittest.mock import patch, MagicMock
 
+import numpy as np
+
 from robonet.gst_io.streamer_unencrypted import (
-    _VideoPipeline, _AudioPipeline, VIDEO_SOURCE_XIMAGESRC, AUDIO_SOURCE_DESKTOP_MIX, AUDIO_SOURCE_SINE_TEST,
+    _VideoPipeline, _AudioPipeline, VIDEO_SOURCE_XIMAGESRC, AUDIO_SOURCE_DESKTOP_MIX,
 )
 
 
@@ -153,19 +155,22 @@ class TestAudioPipelineDesktopMix(unittest.TestCase):
 
     @patch('robonet.gst_io.streamer_unencrypted.Gst.Pipeline.new', return_value=MagicMock())
     @patch('robonet.gst_io.streamer_unencrypted.Gst.ElementFactory.make')
-    def test_sine_test_tone_uses_audiotestsrc(self, mock_make, _pipeline_new):
+    def test_array_source_uses_appsrc(self, mock_make, _pipeline_new):
         make_fn, created = _make_factory_mock()
         mock_make.side_effect = make_fn
 
-        ok = self._make(AUDIO_SOURCE_SINE_TEST).build()
+        pipe = _AudioPipeline(mic_device='default', enc_name='opusenc', audio_codec='opus',
+                              server_ip='10.0.0.5', sample_rate=48000,
+                              array_source=np.zeros(100, dtype=np.float32))
+        ok = pipe.build()
 
         self.assertTrue(ok)
-        self.assertIn('audiotestsrc', created)
+        self.assertIn('appsrc', created)
         self.assertNotIn('alsasrc', created)
         self.assertNotIn('audiomixer', created)
-        _, sine_elem = created['audiotestsrc'][0]
-        sine_elem.set_property.assert_any_call('wave', 'sine')
-        sine_elem.set_property.assert_any_call('freq', 440.0)
+        self.assertNotIn('audiotestsrc', created)
+        _, src_elem = created['appsrc'][0]
+        src_elem.set_property.assert_any_call('is-live', True)
 
 
 class TestPactlGetDefault(unittest.TestCase):
@@ -184,3 +189,369 @@ class TestPactlGetDefault(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestToS16le(unittest.TestCase):
+
+    def test_float_in_range_converts_to_int16(self):
+        from robonet.gst_io.streamer_unencrypted import _to_s16le
+        out = _to_s16le(np.array([0.0, 0.5, -1.0, 1.0], dtype=np.float32))
+        self.assertEqual(out.dtype, np.int16)
+        np.testing.assert_array_equal(out, [0, 16383, -32767, 32767])
+
+    def test_out_of_range_float_is_clipped_not_wrapped(self):
+        from robonet.gst_io.streamer_unencrypted import _to_s16le
+        out = _to_s16le(np.array([2.0, -2.0], dtype=np.float32))
+        np.testing.assert_array_equal(out, [32767, -32767])
+
+    def test_int16_passes_through_unchanged(self):
+        from robonet.gst_io.streamer_unencrypted import _to_s16le
+        arr = np.array([1, -1, 12345], dtype=np.int16)
+        out = _to_s16le(arr)
+        self.assertIs(out, arr)
+
+
+class TestAudioPipelineArrayFeed(unittest.TestCase):
+    """_feed_array is what actually runs on the background thread in
+    production; called directly here (it's a plain synchronous method)
+    with a sub-one-chunk array so the test completes in one real
+    ~20ms sleep rather than mocking time.sleep."""
+
+    def _make_pipe(self, on_complete=None):
+        pipe = _AudioPipeline(mic_device='default', enc_name='opusenc', audio_codec='opus',
+                              server_ip='10.0.0.5', sample_rate=48000,
+                              array_source=np.zeros(100, dtype=np.float32),
+                              on_array_complete=on_complete)
+        pipe._appsrc = MagicMock()
+        pipe._effective_rate = 48000
+        return pipe
+
+    def test_pushes_a_buffer_and_signals_eos(self):
+        pipe = self._make_pipe()
+        pipe._feed_array()
+        emitted = [c.args[0] for c in pipe._appsrc.emit.call_args_list]
+        self.assertIn('push-buffer', emitted)
+        self.assertEqual(emitted[-1], 'end-of-stream')
+
+    def test_calls_on_complete_when_finished_normally(self):
+        on_complete = MagicMock()
+        pipe = self._make_pipe(on_complete=on_complete)
+        pipe._feed_array()
+        on_complete.assert_called_once()
+
+    def test_does_not_call_on_complete_if_stopped_early(self):
+        on_complete = MagicMock()
+        pipe = self._make_pipe(on_complete=on_complete)
+        pipe._feed_stop.set()  # simulate stop() having been called first
+        pipe._feed_array()
+        on_complete.assert_not_called()
+
+    def test_appsrc_error_does_not_raise_and_still_reports_complete(self):
+        # A poisoned appsrc must not crash the feeder thread silently --
+        # same guarantee as the receive-side callback hardening.
+        on_complete = MagicMock()
+        pipe = self._make_pipe(on_complete=on_complete)
+        pipe._appsrc.emit.side_effect = RuntimeError('boom')
+        pipe._feed_array()  # must not raise
+        on_complete.assert_called_once()
+
+
+class TestGstSenderPlayArray(unittest.TestCase):
+
+    def _make_sender(self, connected=True, known_encoder=('opusenc', 'opus')):
+        from robonet.gst_io.streamer_unencrypted import GstSender
+        s = GstSender.__new__(GstSender)
+        s._receiver_ip = '10.0.0.5' if connected else None
+        s._audio_candidates = [('opusenc', 'opus'), ('avenc_aac', 'aac')]
+        s._aenc_name, s._audio_codec = known_encoder if known_encoder else (None, None)
+        s._mic_device = 'default'
+        s._apipe = None
+        return s
+
+    def test_returns_false_when_not_connected(self):
+        s = self._make_sender(connected=False)
+        ok = s.play_array(np.zeros(10, dtype=np.float32))
+        self.assertFalse(ok)
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_reuses_the_already_known_encoder(self, mock_pipeline_cls):
+        s = self._make_sender(known_encoder=('opusenc', 'opus'))
+        mock_pipeline_cls.return_value.build.return_value = True
+
+        s.play_array(np.zeros(10, dtype=np.float32), sample_rate=48000)
+
+        _, kwargs = mock_pipeline_cls.call_args
+        args = mock_pipeline_cls.call_args[0]
+        self.assertEqual(args[1], 'opusenc')  # enc_name -- not re-probed from candidates[0]
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_falls_back_to_first_candidate_when_no_encoder_known_yet(self, mock_pipeline_cls):
+        s = self._make_sender(known_encoder=None)
+        mock_pipeline_cls.return_value.build.return_value = True
+
+        s.play_array(np.zeros(10, dtype=np.float32))
+
+        args = mock_pipeline_cls.call_args[0]
+        self.assertEqual(args[1], 'opusenc')  # first of _audio_candidates
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_stops_any_existing_pipeline_first(self, mock_pipeline_cls):
+        s = self._make_sender()
+        old_pipe = MagicMock()
+        s._apipe = old_pipe
+        mock_pipeline_cls.return_value.build.return_value = True
+
+        s.play_array(np.zeros(10, dtype=np.float32))
+
+        old_pipe.stop.assert_called_once()
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_build_failure_returns_false(self, mock_pipeline_cls):
+        s = self._make_sender()
+        mock_pipeline_cls.return_value.build.return_value = False
+
+        ok = s.play_array(np.zeros(10, dtype=np.float32))
+
+        self.assertFalse(ok)
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_on_success_the_new_pipeline_becomes_apipe_and_starts_playing(self, mock_pipeline_cls):
+        s = self._make_sender()
+        mock_pipeline_cls.return_value.build.return_value = True
+
+        ok = s.play_array(np.zeros(10, dtype=np.float32))
+
+        self.assertTrue(ok)
+        self.assertIs(s._apipe, mock_pipeline_cls.return_value)
+        mock_pipeline_cls.return_value.play.assert_called_once()
+
+
+class TestAudioStreamHandle(unittest.TestCase):
+    """Streaming mode: chunks arrive over time via push(), the SAME
+    appsrc/encoder/RTP session stays alive across all of them -- no
+    per-chunk pipeline rebuild, avoiding the encoder-reset artifacts a
+    naive "call play_array() once per chunk" approach would cause."""
+
+    def _make_pipe(self):
+        pipe = _AudioPipeline(mic_device='default', enc_name='opusenc', audio_codec='opus',
+                              server_ip='10.0.0.5', sample_rate=48000, streaming=True)
+        pipe._appsrc = MagicMock()
+        pipe._effective_rate = 48000
+        return pipe
+
+    def test_push_chunk_enqueues_without_blocking(self):
+        pipe = self._make_pipe()
+        pipe.push_chunk(np.zeros(100, dtype=np.float32))
+        self.assertEqual(pipe._stream_queue.qsize(), 1)
+
+    def test_feed_stream_pushes_every_queued_chunk_then_eos_after_end(self):
+        pipe = self._make_pipe()
+        pipe.push_chunk(np.zeros(100, dtype=np.float32))
+        pipe.push_chunk(np.zeros(100, dtype=np.float32))
+        pipe.end_stream()
+
+        pipe._feed_stream()
+
+        emitted = [c.args[0] for c in pipe._appsrc.emit.call_args_list]
+        self.assertGreaterEqual(emitted.count('push-buffer'), 2)  # at least one push per chunk
+        self.assertEqual(emitted[-1], 'end-of-stream')
+
+    def test_no_eos_while_still_streaming_with_no_data_yet(self):
+        # end_stream() not called -- must not give up just because the
+        # queue is momentarily empty (that's normal mid-stream).
+        pipe = self._make_pipe()
+        pipe._feed_stop = MagicMock()
+        # Trip the stop flag after a couple of empty-queue polls so the
+        # test doesn't spin forever waiting for data that never comes.
+        pipe._feed_stop.is_set.side_effect = [False, False, False, True]
+
+        pipe._feed_stream()
+
+        emitted = [c.args[0] for c in pipe._appsrc.emit.call_args_list]
+        self.assertNotIn('end-of-stream', emitted)  # never told to end
+
+    def test_on_complete_fires_after_a_clean_end(self):
+        on_complete = MagicMock()
+        pipe = self._make_pipe()
+        pipe._on_array_complete = on_complete
+        pipe.end_stream()
+
+        pipe._feed_stream()
+
+        on_complete.assert_called_once()
+
+    def test_stopped_early_does_not_call_on_complete(self):
+        on_complete = MagicMock()
+        pipe = self._make_pipe()
+        pipe._on_array_complete = on_complete
+        pipe._feed_stop.set()
+
+        pipe._feed_stream()
+
+        on_complete.assert_not_called()
+
+    def test_handle_push_and_end_delegate_to_the_pipeline(self):
+        from robonet.gst_io.streamer_unencrypted import AudioStreamHandle
+        pipe = MagicMock()
+        handle = AudioStreamHandle(pipe)
+        chunk = np.zeros(10, dtype=np.float32)
+
+        handle.push(chunk)
+        handle.end()
+
+        pipe.push_chunk.assert_called_once_with(chunk)
+        pipe.end_stream.assert_called_once()
+
+
+class TestGstSenderStartAudioStream(unittest.TestCase):
+
+    def _make_sender(self, connected=True):
+        from robonet.gst_io.streamer_unencrypted import GstSender
+        s = GstSender.__new__(GstSender)
+        s._receiver_ip = '10.0.0.5' if connected else None
+        s._audio_candidates = [('opusenc', 'opus')]
+        s._aenc_name, s._audio_codec = 'opusenc', 'opus'
+        s._mic_device = 'default'
+        s._apipe = None
+        return s
+
+    def test_returns_none_when_not_connected(self):
+        s = self._make_sender(connected=False)
+        self.assertIsNone(s.start_audio_stream())
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_returns_a_handle_on_success(self, mock_pipeline_cls):
+        from robonet.gst_io.streamer_unencrypted import AudioStreamHandle
+        s = self._make_sender()
+        mock_pipeline_cls.return_value.build.return_value = True
+
+        handle = s.start_audio_stream()
+
+        self.assertIsInstance(handle, AudioStreamHandle)
+        mock_pipeline_cls.return_value.play.assert_called_once()
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_passes_streaming_true_and_requested_channels(self, mock_pipeline_cls):
+        s = self._make_sender()
+        mock_pipeline_cls.return_value.build.return_value = True
+
+        s.start_audio_stream(channels=2)
+
+        _, kwargs = mock_pipeline_cls.call_args
+        self.assertTrue(kwargs['streaming'])
+        self.assertEqual(kwargs['channels'], 2)
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_build_failure_returns_none(self, mock_pipeline_cls):
+        s = self._make_sender()
+        mock_pipeline_cls.return_value.build.return_value = False
+        self.assertIsNone(s.start_audio_stream())
+
+
+class TestPlayArrayChannelInference(unittest.TestCase):
+    """channels is read from the array's own shape, not a separate
+    parameter -- can't disagree with what was actually passed."""
+
+    def _make_sender(self):
+        from robonet.gst_io.streamer_unencrypted import GstSender
+        s = GstSender.__new__(GstSender)
+        s._receiver_ip = '10.0.0.5'
+        s._audio_candidates = [('opusenc', 'opus')]
+        s._aenc_name, s._audio_codec = 'opusenc', 'opus'
+        s._mic_device = 'default'
+        s._apipe = None
+        return s
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_1d_array_infers_mono(self, mock_pipeline_cls):
+        s = self._make_sender()
+        mock_pipeline_cls.return_value.build.return_value = True
+        s.play_array(np.zeros(10, dtype=np.float32))
+        self.assertEqual(mock_pipeline_cls.call_args.kwargs['channels'], 1)
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_2d_array_infers_channel_count_from_shape(self, mock_pipeline_cls):
+        s = self._make_sender()
+        mock_pipeline_cls.return_value.build.return_value = True
+        s.play_array(np.zeros((10, 2), dtype=np.float32))
+        self.assertEqual(mock_pipeline_cls.call_args.kwargs['channels'], 2)
+
+
+class TestStartAudioPipelineChannelDefaults(unittest.TestCase):
+    """Desktop mix defaults to stereo (music/video on the desktop is
+    typically stereo) with automatic fallback to mono if 2 channels
+    can't be negotiated. Everything else stays mono."""
+
+    def _make_sender(self, mic_device):
+        from robonet.gst_io.streamer_unencrypted import GstSender
+        s = GstSender.__new__(GstSender)
+        s._mic_device = mic_device
+        s._receiver_ip = '10.0.0.5'
+        s._sample_rate = 48000
+        s._audio_candidates = [('opusenc', 'opus')]
+        return s
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_desktop_mix_tries_stereo_first(self, mock_pipeline_cls):
+        from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_DESKTOP_MIX
+        s = self._make_sender(AUDIO_SOURCE_DESKTOP_MIX)
+        mock_pipeline_cls.return_value.build.return_value = True
+        mock_pipeline_cls.return_value.probe.return_value = True
+
+        s._start_audio_pipeline()
+
+        self.assertEqual(mock_pipeline_cls.call_args.kwargs['channels'], 2)
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_desktop_mix_falls_back_to_mono_when_stereo_probe_fails(self, mock_pipeline_cls):
+        from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_DESKTOP_MIX
+        s = self._make_sender(AUDIO_SOURCE_DESKTOP_MIX)
+        stereo_pipe, mono_pipe = MagicMock(), MagicMock()
+        stereo_pipe.build.return_value = True
+        stereo_pipe.probe.return_value = False  # stereo negotiation fails
+        mono_pipe.build.return_value = True
+        mono_pipe.probe.return_value = True
+        mock_pipeline_cls.side_effect = [stereo_pipe, mono_pipe]
+
+        result = s._start_audio_pipeline()
+
+        self.assertIs(result, mono_pipe)
+        self.assertEqual(mock_pipeline_cls.call_args_list[1].kwargs['channels'], 1)
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_desktop_mix_logs_an_error_on_stereo_fallback(self, mock_pipeline_cls):
+        from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_DESKTOP_MIX
+        s = self._make_sender(AUDIO_SOURCE_DESKTOP_MIX)
+        stereo_pipe, mono_pipe = MagicMock(), MagicMock()
+        stereo_pipe.build.return_value = True
+        stereo_pipe.probe.return_value = False
+        mono_pipe.build.return_value = True
+        mono_pipe.probe.return_value = True
+        mock_pipeline_cls.side_effect = [stereo_pipe, mono_pipe]
+
+        with patch('robonet.gst_io.streamer_unencrypted.log') as mock_log:
+            s._start_audio_pipeline()
+
+        logged = ' '.join(str(c.args[0]) for c in mock_log.error.call_args_list)
+        self.assertIn('falling back to mono', logged)
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_regular_mic_device_stays_mono_only(self, mock_pipeline_cls):
+        s = self._make_sender('hw:1,0,0')  # a specific mic device, not the desktop mix
+        mock_pipeline_cls.return_value.build.return_value = True
+        mock_pipeline_cls.return_value.probe.return_value = True
+
+        s._start_audio_pipeline()
+
+        self.assertEqual(mock_pipeline_cls.call_count, 1)  # no stereo attempt at all
+        self.assertEqual(mock_pipeline_cls.call_args.kwargs['channels'], 1)
+
+    @patch('robonet.gst_io.streamer_unencrypted._AudioPipeline')
+    def test_returns_none_when_both_stereo_and_mono_fail(self, mock_pipeline_cls):
+        from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_DESKTOP_MIX
+        s = self._make_sender(AUDIO_SOURCE_DESKTOP_MIX)
+        mock_pipeline_cls.return_value.build.return_value = False
+
+        result = s._start_audio_pipeline()
+
+        self.assertIsNone(result)

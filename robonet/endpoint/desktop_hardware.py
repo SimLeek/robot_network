@@ -13,7 +13,7 @@ import time
 import numpy as np
 
 from robonet.buffers.buffer_objects import KeyEvent, MouseEvent, RobotCapabilities
-from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC
+from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC, AI_SUPPORTED_KEYS
 from robonet.endpoint.desktop_capture import DesktopCaptureError
 from robonet.endpoint.hardware_system import MultiAVRobotHardware
 from robonet.endpoint.radio_system import HOSTNAME
@@ -65,7 +65,9 @@ DESKTOP_AUDIO_IN_ID = 'desktop-audio'
 
 def build_desktop_capabilities() -> RobotCapabilities:
     axes = [
-        {'name': channel, 'description': info['hz'], 'keys': [], 'neuron': i}
+        {'name': channel, 'description': info['hz'],
+         'keys': AI_SUPPORTED_KEYS if channel in ('keys_press', 'keys_release') else [],
+         'neuron': i}
         for i, (channel, info) in enumerate(DESKTOP_CONTROL_INTERFACE_SPEC.items())
     ]
     screen = pyautogui.size()  # actual screen resolution -- NOT settings['cam_res'],

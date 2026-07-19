@@ -89,7 +89,8 @@ class MenuSubSystem(SubSystem):
                                      sample_rate=48000)
         self._gst_receiver = GstReceiver(recv_img_callback=self.on_img,
                                          recv_audio_callback=self.on_audio,
-                                         play_locally=settings["play_audio"])
+                                         play_locally=settings["play_audio"],
+                                         channels=settings["receive_channels"])
 
     def set_endpoints(self, eps):
         self._menu.set_endpoints(eps)

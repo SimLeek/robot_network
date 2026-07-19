@@ -10,6 +10,11 @@ log = setup_logging()
 _DEFAULT_SETTINGS: dict[str, Any] = {
     "jpeg_quality": 70,
     "play_audio": True,
+    # Matches the endpoint's own desktop-mix default (stereo, since
+    # music/video playing there is typically stereo). audioconvert
+    # upmixes transparently if an endpoint actually sends mono, so this
+    # is safe even for endpoints that don't support 2 channels.
+    "receive_channels": 2,
 }
 
 _DEFAULT_ADVANCED_SETTINGS: dict[str, Any] = {

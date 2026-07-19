@@ -18,6 +18,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+import numpy as np
+
 from robonet.endpoint.base import RobotNode
 from robonet.endpoint.desktop_capture import DesktopCaptureError
 from robonet.endpoint.desktop_hardware import DesktopHw
@@ -35,4 +37,5 @@ if __name__ == '__main__':
         sys.exit(1)
 
     main_node = RobotNode(radio, hw)
+
     asyncio.run(main_node.run())

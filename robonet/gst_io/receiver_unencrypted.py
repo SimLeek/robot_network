@@ -247,13 +247,17 @@ class _AudioRecvPipeline:
     def __init__(self, info: GstStreamInfo, dec_name: str,
                  direct_audio: bool, audio_device: str,
                  on_audio: Optional[Callable[[np.ndarray], None]] = None,
-                 play_locally: bool = False):
+                 play_locally: bool = False, channels: int = 1):
         self._info         = info
         self._dec_name     = dec_name
         self._direct_audio = direct_audio
         self._audio_device = audio_device
         self._on_audio     = on_audio
         self._play_locally = play_locally
+        # Currently assuming both machines know the number of channels
+        # rather than needing to communicate it. Communicating it
+        # through something like GstStreamInfo is a later todo.
+        self._channels      = channels
         self._pipeline:    Optional[Gst.Pipeline] = None
         self._first_packet = False
 
@@ -354,7 +358,8 @@ class _AudioRecvPipeline:
 
         # Output as S16LE (consistent with sender)
         caps = Gst.Caps.from_string(
-            f'audio/x-raw,format=S16LE,layout=interleaved,rate={self._info.sample_rate},channels=1'
+            f'audio/x-raw,format=S16LE,layout=interleaved,'
+            f'rate={self._info.sample_rate},channels={self._channels}'
         )
         outcaps.set_property('caps', caps)
         #outcaps.set_property('caps', Gst.Caps.from_string(
@@ -484,6 +489,11 @@ class _AudioRecvPipeline:
             # waveform, AI, playback queue) sees one consistent format.
             raw = np.frombuffer(mapinfo.data, dtype=np.int16)
             chunk = raw.astype(np.float32) / 32768.0
+            if self._channels > 1:
+                # (N, channels), interleaved -- matches the send
+                # side's convention. Stays flat 1D for mono (the
+                # default), so no existing consumer is affected.
+                chunk = chunk.reshape(-1, self._channels)
             if self._on_audio:
                 self._on_audio(chunk)
         except Exception as e:
@@ -526,12 +536,13 @@ class GstReceiver:
                  direct_audio:       bool                                   = False,
                  audio_output_device: str                                   = 'default',
                  recv_audio_callback: Optional[Callable[[np.ndarray], None]] = None,
-                 play_locally: bool = False):
+                 play_locally: bool = False, channels: int = 1):
         self._recv_image_callback = recv_img_callback
         self._direct_audio        = direct_audio
         self._audio_device        = audio_output_device
         self._recv_audio_callback = recv_audio_callback
         self._play_locally        = play_locally
+        self._channels            = channels
 
         self._info:    Optional[GstStreamInfo]      = None
         self._vpipe:   Optional[_VideoRecvPipeline] = None
@@ -614,10 +625,10 @@ class GstReceiver:
                     if not (self._direct_audio and self._recv_audio_callback is not None)
                     else None)
         for dec_name in _audio_decoder_candidates(self._info.audio_codec):
-            log.info(f'[gst-recv] trying audio decoder: {dec_name}')
+            log.info(f'[gst-recv] trying audio decoder: {dec_name} ({self._channels}ch)')
             pipe = _AudioRecvPipeline(
                 self._info, dec_name, self._direct_audio, self._audio_device, on_audio=on_audio,
-                play_locally=self._play_locally)
+                play_locally=self._play_locally, channels=self._channels)
             if not pipe.build():
                 log.warning(f'[gst-recv] {dec_name}: build failed, trying next')
                 continue
@@ -625,7 +636,8 @@ class GstReceiver:
                 log.warning(f'[gst-recv] {dec_name}: probe failed, trying next')
                 pipe.stop()
                 continue
-            log.info(f'[gst-recv] audio decoder selected: {dec_name} ({self._info.audio_codec})')
+            log.info(f'[gst-recv] audio decoder selected: {dec_name} '
+                    f'({self._info.audio_codec}, {self._channels}ch)')
             self._apipe = pipe
             pipe.play()
             return

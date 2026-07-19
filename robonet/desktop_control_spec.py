@@ -33,6 +33,10 @@ _SPECIAL_KEY_TO_PYAUTOGUI = {
 
 _dynamic_map_cache: Dict[int, Dict[Any, str]] = {}
 
+AI_SUPPORTED_KEYS = sorted(set(_SPECIAL_KEY_TO_PYAUTOGUI.values())
+                           | {(chr(c).lower() if chr(c).isalpha() else chr(c))
+                              for c in range(32, 127)})
+
 
 def _build_dynamic_key_map(keys) -> Dict[Any, str]:
     """keys -> {raw_value: pyautogui_name}, cached per keys object (its
@@ -70,11 +74,11 @@ def keycode_to_pyautogui(key: int, keys=None) -> Optional[str]:
 
 DESKTOP_CONTROL_INTERFACE_SPEC = {
     'keys_press': {
-        'count': len(_SPECIAL_KEY_TO_PYAUTOGUI) + 95,  # + printable ASCII (32-126)
+        'count': len(AI_SUPPORTED_KEYS),
         'hz': '~10/s',
     },
     'keys_release': {
-        'count': len(_SPECIAL_KEY_TO_PYAUTOGUI) + 95,
+        'count': len(AI_SUPPORTED_KEYS),
         'hz': '~10/s',
     },
     'mouse_move_x': {

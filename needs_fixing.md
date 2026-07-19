@@ -541,3 +541,251 @@ these fixes should be implemented but are either large tasks or are blocked.
   since the viewport is currently SHARED with the human display --
   a per-consumer (separate AI) viewport is the eventual right shape
   if the AI should look around during human-driven sessions.
+
+- **New branch (send_audio_array, off main) -- removed all test-only
+  code from streamer_unencrypted.py.** AUDIO_SOURCE_SINE_TEST and its
+  audiotestsrc branch had no business in a production file. Replaced
+  with a genuinely general-purpose GstSender.play_array(samples,
+  sample_rate) API: feeds an arbitrary numpy array into the send
+  pipeline via appsrc (real-time-paced by a background thread -- a
+  real speaker can't play faster than realtime either, and the
+  receiver's low-latency queue isn't deep enough to absorb a whole
+  clip arriving in a burst), reuses whichever encoder is already
+  known-working rather than re-probing, and is fully self-contained:
+  normal mic/desktop-mix audio resumes automatically once the array
+  finishes, no caller-side save/restore needed (the old sine-test
+  sentinel required exactly that dance). ai_passthrough_demo.py now
+  builds its own numpy sine array locally and sends it through this,
+  matching Simleek's exact ask -- "the numpy array itself should have
+  a sine wave built into it, and that numpy array itself should play."
+  Caught and fixed a real bug of my own while adding this: an earlier
+  str_replace had accidentally merged the tail of _bind_input's body
+  (the af_thru/af_edit human-input binding code) into the new
+  _log_action_space_size method, silently breaking human input binding
+  when _bind_input was called on its own. Found via the existing test
+  suite, not observation -- exactly why the suite runs before every
+  commit.
+
+- **AI action-space size is now knowable.** There was no way at all to
+  get the actual size of the AI's action space, which is mandatory for
+  wiring up a real RL/neural-net-style AI. _log_action_space_size (in
+  DesktopSubSystem.start()) now reports bound token count (13:
+  6 mouse + 7 view control) and bound neuron count (2: mouse x/y).
+  Keyboard keys are explicitly NOT included -- ai_key_press/release
+  take an open string, not a fixed token index, so they aren't part of
+  this enumerable space yet. Flagged rather than solved: a natural
+  future mapping is one token per key with a threshold-gated neuron
+  (0/1, -1/1, or a 0.5 crossing) instead of separate press/release
+  tokens per key, but that's a bigger design decision than this round.
+
+- **Continuous liveness diagnostics added to the demo** (not to the
+  core AISubSystem/DesktopSubSystem classes -- would be spammy for a
+  real production AI): _diagnostic_loop logs the HSV hue of in_img's
+  center pixel and the FFT peak frequency of in_aud, once per second,
+  for the demo's whole lifetime via async_loops. Cheap, human-checkable
+  confirmation that video/audio are actually live and changing.
+
+- **New: a real (non-mocked) GStreamer loopback integration test**
+  (tests/test_gstreamer_loopback_integration.py). Sends a numpy sine
+  array through the actual _AudioPipeline and receives it through the
+  actual _AudioRecvPipeline over real UDP loopback -- no
+  Gst.ElementFactory.make mocking, the genuine send/encode/RTP/decode/
+  receive chain. Empirically calibrated before being committed: a
+  1s/440Hz/amplitude-0.5 sine round-tripped with 99.7% of its spectral
+  energy still concentrated within 40Hz of the target frequency, zero
+  NaN, sample count within 1% of sent. Committed thresholds are
+  deliberately looser than that measurement (ratio 0.6-1.6, spectral
+  purity >0.85) to avoid flaking on a slower run while still
+  meaningfully catching a genuinely broken chain. Confirms audiotestsrc/
+  appsrc/appsink-based real GStreamer testing is fully viable in this
+  sandbox with no virtual devices or real hardware needed -- worth
+  extending to video if that becomes valuable.
+
+- **Continuous audio streaming, exact key enumeration, real chunking
+  validation, and initial stereo support -- all on send_audio_array.**
+  1. Streaming: play_array only ever sent one fixed, finite array --
+     can't send an infinitely long array for indefinite-length output
+     (TTS, live relay, etc). Added GstSender.start_audio_stream() ->
+     AudioStreamHandle: push() any number of chunks over time (0.1s-1s
+     chunks work well per Simleek's own framing), end() when done. The
+     SAME appsrc/encoder/RTP session stays alive across every pushed
+     chunk -- no per-chunk pipeline rebuild, avoiding exactly the
+     encoder-reset-artifact risk a naive "call play_array per chunk"
+     approach would have. Self-contained like play_array: normal mic
+     audio resumes automatically after end().
+     Empirically validated Simleek's own click hypothesis directly: 5
+     separately-pushed 200ms chunks of a 440Hz tone produced spectral
+     purity identical to a single-array send (0.9970 both ways) and
+     negligible energy above 2kHz (0.00004) -- clicks are broadband/
+     square-wave-like, so this is a direct measurement of exactly the
+     failure mode described. Committed as
+     TestChunkedStreamingRoundTrip in the real (non-mocked) loopback
+     integration file, with generously loosened thresholds from the
+     calibration numbers.
+  2. Key enumeration: added AI_SUPPORTED_KEYS to desktop_control_spec.py
+     -- the actual, curated list (not just a count) of every key name
+     keycode_to_pyautogui can produce: printable ASCII (32-126) plus
+     the special-key table's values, deduplicated (the previous count
+     formula double-counted punctuation overlapping both sets --
+     genuinely 100 keys, not 130). Populates the keys_press/
+     keys_release axes' previously-always-empty 'keys' field in
+     RobotCapabilities, so a connecting brain gets the exact list
+     automatically as part of the existing capabilities handshake --
+     visible in the menu's capabilities preview too. Also reported
+     directly in _log_action_space_size's startup log. Developers no
+     longer have to guess whether e.g. f11 is actually reachable.
+  3. Stereo/multi-channel: play_array/start_audio_stream now derive
+     channels from the array's own shape (N,)=mono, (N,channels)=multi
+     -- can't disagree with what was actually passed. Found and fixed a
+     real bug while testing this: the RECEIVE side's caps still
+     hardcoded channels=1 unconditionally, silently downmixing any
+     stereo audio sent to it (caught by an empirical test showing
+     received chunks came back as flat 1D instead of (N,2)).
+     _AudioRecvPipeline now takes a channels param too; _process_sample
+     reshapes to (N,channels) only when >1, so the mono default path
+     (every existing consumer -- waveform display, AI's FFT) is
+     completely unaffected. Empirically confirmed correct: two
+     different frequencies sent on left/right arrived on the correct
+     channel each, no swap, no bleed (TestStereoRoundTrip). This
+     answers Simleek's own stated uncertainty ("hard to tell what
+     gstreamer will actually support") -- it works, at the raw
+     GStreamer pipeline level, in this sandbox.
+     NOTE: channels is passed directly to _AudioRecvPipeline's
+     constructor, bypassing the wire protocol entirely -- GstStreamInfo
+     doesn't carry a channel count yet (mono was the only option end to
+     end until now), so a receiving GstReceiver can't currently learn
+     the sender's channel count automatically. Full negotiation (adding
+     a channels field to GstStreamInfo's wire format) is a separate,
+     larger task, not attempted this round. Also out of scope this
+     round: brain-side consumption of multi-channel audio beyond the
+     raw pipeline (AISubSystem/DisplaySubSystem's update_audio, the
+     waveform display, and the diagnostic FFT print all still assume
+     1D mono -- reshaping only kicks in when channels>1 is explicitly
+     requested at the pipeline level, so nothing existing broke, but
+     nothing upstream of the pipeline understands stereo yet either).
+
+- **Brain-side stereo consumption (display + AI), and the streaming
+  API demoed on the endpoint side.**
+  1. DisplaySubSystem's waveform square: mono stays exactly as before
+     (2D grayscale). Stereo (N,2) now builds a genuine (rows,cols,3)
+     image -- channel 0=left, 1=right, 2=zeros, since 2-channel images
+     are awkward to display (RGB/RGBA is the standard, not 2) and the
+     unused third channel doesn't need an invented meaning.
+  2. AISubSystem.in_aud is now explicitly documented as mono (N,) or
+     stereo (N,2) -- it already passed either through unchanged, the
+     gap was purely that this wasn't discoverable without reading the
+     pipeline code.
+  3. Found and fixed a latent bug while touching this: the demo's
+     _diagnostic_loop ran rfft directly on in_aud, which for a 2D
+     stereo array operates along the wrong axis (channels, not time) --
+     silently meaningless output rather than an error. Now mixes down
+     to mono first.
+  4. examples/desktop/desktop_endpoint.py: added audio_stream_demo,
+     using GstSender.start_audio_stream()/push()/end() from the
+     endpoint side -- waits for a brain connection, streams a test tone
+     in chunks once, so Simleek can verify the streaming API on real
+     hardware directly, not just the sandboxed loopback tests.
+
+- **Real mistake this round: an accidental `cp -a` in the wrong
+  direction (pristine -> working copy) during a diagnostic A/B test
+  overwrote several files' uncommitted changes from this same round**
+  (display_system.py, ai_system.py, ai_passthrough_demo.py,
+  desktop_endpoint.py, plus test additions to three existing files).
+  Caught immediately by checking known markers post-overwrite; all
+  lost work was still fresh in context and got re-applied verbatim,
+  confirmed via test count matching (506) and a second clean run. Only
+  a genuinely new file (test_desktop_endpoint_audio_stream_demo.py)
+  survived on its own, since cp -a doesn't delete files absent from
+  the source -- it only overwrites/adds shared filenames. Lesson: never
+  sync pristine -> working copy mid-round; only sync working copy ->
+  pristine, and only right before committing.
+
+- **Confirmed pre-existing, unrelated to this round: a test-isolation
+  failure** (test_menu_shutdown_and_ui.TestSelectionMenuLocalhostGating
+  .test_enter_on_enabled_local_calls_switch_mode) that passes cleanly
+  alone but fails when run as part of the full suite ("no current
+  event loop in thread MainThread") -- reproduced identically on the
+  pre-this-round commit too (491 tests, same single failure), so some
+  other test earlier in suite order is leaving the default event loop
+  in a bad state for asyncio.ensure_future's implicit get_event_loop()
+  call. Not investigated further this round; worth a dedicated look.
+
+- **Aligned with Simleek's own commit (88d5e5c) and fixed a bug it
+  introduced, then finished the three remaining asks.**
+  1. Found a real bug in Simleek's own rename: reshape_to_square_matrix
+     / reshape_stereo_to_square_image were unified into a single
+     reshape_to_square_image(arr, pad_to_rgb=True), a genuinely better
+     design (generalizes to any channel count; mono correctly stays
+     plain 2D since pad_to_rgb only triggers when a trailing channel
+     axis with <3 channels already exists) -- but run_once's call site
+     wasn't updated, still referencing both now-nonexistent old names.
+     Would have raised NameError the moment any real audio arrived.
+     Fixed: run_once now just calls reshape_to_square_image(aud)
+     unconditionally: the unified function already handles both cases.
+  2. Updated tests to match: the two renamed/unified test classes, the
+     diagnostic loop's new plural "peak audio frequencies" log label
+     (per-channel FFT via axis=0, better than my own earlier mixdown --
+     preserves per-channel info instead of discarding it). Removed
+     tests/test_desktop_endpoint_audio_stream_demo.py entirely -- its
+     target function no longer exists there, correctly, per point 4.
+  3. Desktop mix now defaults to stereo (music/video on the desktop is
+     typically stereo) with automatic fallback to mono if 2 channels
+     genuinely can't be negotiated (probe() failure) -- logged as an
+     error on fallback. Everything else (a specific mic device,
+     brain-side sending via play_array/start_audio_stream) stays mono
+     by default, unchanged.
+  4. Added _stream_audio_demo to AiPassthroughDemo (brain side) --
+     GstSender.start_audio_stream()/push()/end(), running after
+     _play_sine_tone completes, at 880Hz (an octave up, distinguishable
+     by ear from _play_sine_tone's 440Hz). This replaces the version I'd
+     put on the endpoint side, which Simleek correctly removed -- demo/
+     test functionality doesn't belong in a production-facing example
+     script; it belongs with the other AiPassthroughDemo demonstrations.
+
+- **Answered empirically rather than by reasoning about GStreamer
+  negotiation abstractly: does a mono mic actually combine into a
+  stereo desktop mix, or get dropped/force it down to mono?** Built a
+  real GStreamer pipeline matching _build_desktop_mix_source's exact
+  branch structure (mono source + stereo source, each through their own
+  audioconvert/audioresample/queue, both into one audiomixer, forced to
+  channels=2 downstream) with audiotestsrc standing in for pulsesrc
+  (which is too tightly coupled to a real 'device' property to
+  substitute directly). Result: audiomixer correctly upmixes the mono
+  source to match the negotiated stereo output -- its tone showed up
+  with strong energy on BOTH channels, while the stereo source's own
+  panning survived the mix intact (dominant on the channel it was
+  panned to). So the existing _build_desktop_mix_source code should
+  already handle mono-mic + stereo-desktop correctly as-is, now that
+  desktop mix defaults to requesting channels=2 downstream (the thing
+  that drives audiomixer's negotiation toward stereo in the first
+  place) -- no code change needed there, just confirmed with a real,
+  committed test (TestMonoMicCombinesIntoStereoDesktopMix) rather than
+  left as an assumption.
+
+- **Found and fixed the actual bug Simleek verified on real hardware:
+  endpoint correctly sent 2-channel desktop mix, but the brain received
+  it as mono.** Root cause was exactly what Simleek called out:
+  channels was added to _AudioRecvPipeline directly and tested there in
+  isolation, but never threaded through GstReceiver (which didn't
+  accept a channels parameter at all) or into MenuSubSystem's
+  construction of it -- so AiPassthroughDemo and robonet.brain.main
+  (both go through a bare MenuSubSystem()) always got
+  _AudioRecvPipeline's raw class default (1) regardless of what
+  actually arrived over the wire. The low-level mechanism was correct;
+  the wiring to reach it in production was simply never built.
+  Fixed the full chain: new receive_channels setting (default 2,
+  matching the endpoint's own desktop-mix default) -> MenuSubSystem
+  passes it to GstReceiver(channels=...) -> GstReceiver threads it into
+  _build_audio_pipeline's _AudioRecvPipeline(channels=...) call. Also
+  added the channel-count logging Simleek specifically noted was
+  missing on the receive side ("(2ch)" now printed alongside both
+  "trying audio decoder" and "audio decoder selected", matching the
+  send side's existing pattern).
+  Several test fixtures (fake settings dicts, a fake GstReceiver stand-
+  in) needed the new key/attribute added -- same class of gap as every
+  previous settings addition this session. Added
+  TestGstReceiverChannelsWiring and two MenuSubSystem-level tests
+  specifically covering the layer that was actually missing (settings
+  default reaching the real GstReceiver instance), not just the
+  low-level pipeline mechanism already covered by last round's
+  loopback tests.
