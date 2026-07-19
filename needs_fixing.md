@@ -761,3 +761,31 @@ these fixes should be implemented but are either large tasks or are blocked.
   place) -- no code change needed there, just confirmed with a real,
   committed test (TestMonoMicCombinesIntoStereoDesktopMix) rather than
   left as an assumption.
+
+- **Found and fixed the actual bug Simleek verified on real hardware:
+  endpoint correctly sent 2-channel desktop mix, but the brain received
+  it as mono.** Root cause was exactly what Simleek called out:
+  channels was added to _AudioRecvPipeline directly and tested there in
+  isolation, but never threaded through GstReceiver (which didn't
+  accept a channels parameter at all) or into MenuSubSystem's
+  construction of it -- so AiPassthroughDemo and robonet.brain.main
+  (both go through a bare MenuSubSystem()) always got
+  _AudioRecvPipeline's raw class default (1) regardless of what
+  actually arrived over the wire. The low-level mechanism was correct;
+  the wiring to reach it in production was simply never built.
+  Fixed the full chain: new receive_channels setting (default 2,
+  matching the endpoint's own desktop-mix default) -> MenuSubSystem
+  passes it to GstReceiver(channels=...) -> GstReceiver threads it into
+  _build_audio_pipeline's _AudioRecvPipeline(channels=...) call. Also
+  added the channel-count logging Simleek specifically noted was
+  missing on the receive side ("(2ch)" now printed alongside both
+  "trying audio decoder" and "audio decoder selected", matching the
+  send side's existing pattern).
+  Several test fixtures (fake settings dicts, a fake GstReceiver stand-
+  in) needed the new key/attribute added -- same class of gap as every
+  previous settings addition this session. Added
+  TestGstReceiverChannelsWiring and two MenuSubSystem-level tests
+  specifically covering the layer that was actually missing (settings
+  default reaching the real GstReceiver instance), not just the
+  low-level pipeline mechanism already covered by last round's
+  loopback tests.

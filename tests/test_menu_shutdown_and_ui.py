@@ -373,6 +373,7 @@ class TestMenuSubSystemConstruction(unittest.TestCase):
         vals = {
             'psk_file': self.psk_path, 'server_psk_file': self.server_psk_path,
             'ai_res': [640, 480], 'ai_fps': 30, 'play_audio': False,
+            'receive_channels': 2,
             'auto_shutdown_enabled': False,
             'auto_shutdown_no_endpoints_timeout': 30.0,
             'auto_shutdown_idle_timeout': 600.0,
@@ -439,6 +440,20 @@ class TestMenuSubSystemConstruction(unittest.TestCase):
     def test_gst_receiver_property_exposes_the_real_instance(self):
         menu = self._construct()
         self.assertIs(menu.gst_receiver, menu._gst_receiver)
+
+    def test_receive_channels_setting_reaches_the_real_gst_receiver(self):
+        # The actual bug this is a regression test for: neither
+        # AiPassthroughDemo nor robonet.brain.main (both construct a
+        # bare MenuSubSystem()) ever specified a channel count, so the
+        # receive side always used _AudioRecvPipeline's class default
+        # (mono) regardless of what the endpoint actually sent.
+        menu = self._construct(receive_channels=2)
+        self.assertEqual(menu._gst_receiver._channels, 2)
+
+    def test_default_settings_give_stereo_receive(self):
+        # Matches the endpoint's own desktop-mix default.
+        menu = self._construct()  # receive_channels defaults to 2 in _make_settings
+        self.assertEqual(menu._gst_receiver._channels, 2)
 
 
 class TestSubSystemRegistryForConnect(unittest.TestCase):
