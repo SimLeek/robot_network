@@ -228,3 +228,78 @@ class TestStereoRoundTrip(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestMonoMicCombinesIntoStereoDesktopMix(unittest.TestCase):
+    """Answers Simleek's exact question empirically rather than by
+    reasoning about GStreamer negotiation abstractly: if the desktop
+    mix has a stereo monitor source and a mono mic source (a very
+    common real setup), does the mono mic actually get combined into
+    the stereo mix rather than being dropped or forcing the whole
+    thing down to mono?
+
+    Doesn't call _build_desktop_mix_source directly -- it's tightly
+    coupled to pulsesrc's 'device' property, which a substitute source
+    doesn't have. Instead this builds the same structural pattern
+    (mono source + stereo source, each through audioconvert/
+    audioresample/queue, both into one audiomixer, forced to
+    channels=2 downstream) with audiotestsrc standing in for pulsesrc,
+    and verifies the actual GStreamer mixing behavior directly."""
+
+    def test_mono_mic_tone_appears_in_both_output_channels(self):
+        pipeline_str = '''
+            audiotestsrc wave=sine freq=440 num-buffers=100 !
+              audio/x-raw,channels=1,rate=48000 !
+              audioconvert ! audioresample ! queue ! mix.
+            audiotestsrc wave=sine freq=300 num-buffers=100 !
+              audio/x-raw,channels=2,rate=48000 !
+              audiopanorama panorama=-1.0 !
+              audioconvert ! audioresample ! queue ! mix.
+            audiomixer name=mix !
+              audio/x-raw,format=S16LE,layout=interleaved,rate=48000,channels=2 !
+              appsink name=s sync=false
+        '''
+        import gi
+        gi.require_version('Gst', '1.0')
+        from gi.repository import Gst
+        Gst.init(None)
+
+        p = Gst.parse_launch(pipeline_str)
+        self.assertIsNotNone(p, 'pipeline failed to build')
+        s = p.get_by_name('s')
+        p.set_state(Gst.State.PLAYING)
+
+        chunks = []
+        try:
+            while True:
+                sample = s.emit('pull-sample')
+                if sample is None:
+                    break
+                buf = sample.get_buffer()
+                ok, mi = buf.map(Gst.MapFlags.READ)
+                chunks.append(np.frombuffer(mi.data, dtype=np.int16).astype(np.float32) / 32768.0)
+                buf.unmap(mi)
+        finally:
+            p.set_state(Gst.State.NULL)
+
+        self.assertTrue(chunks, 'no audio was produced at all')
+        aud = np.concatenate(chunks).reshape(-1, 2)
+
+        def energy_near(sig, target_hz, sample_rate=48000, width_hz=20):
+            spec = np.abs(np.fft.rfft(sig))
+            freqs = np.fft.rfftfreq(len(sig), d=1.0 / sample_rate)
+            band = (freqs > target_hz - width_hz) & (freqs < target_hz + width_hz)
+            return float(spec[band].max()) if band.any() else 0.0
+
+        left, right = aud[:, 0], aud[:, 1]
+        # The mono mic's 440Hz must show up in BOTH channels (upmixed,
+        # not dropped) -- the direct answer to whether a mono mic
+        # combines into the stereo mix.
+        self.assertGreater(energy_near(left, 440.0), 1000.0,
+                          "mono mic tone missing from left channel -- not combined into the mix")
+        self.assertGreater(energy_near(right, 440.0), 1000.0,
+                          "mono mic tone missing from right channel -- not combined into the mix")
+        # The stereo source's own panning must survive the mix too --
+        # panned fully left, so it should dominate over 440Hz there.
+        self.assertGreater(energy_near(left, 300.0), energy_near(left, 440.0),
+                          "panned stereo source got overwhelmed by the mono mic, not just mixed with it")

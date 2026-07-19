@@ -741,3 +741,23 @@ these fixes should be implemented but are either large tasks or are blocked.
      put on the endpoint side, which Simleek correctly removed -- demo/
      test functionality doesn't belong in a production-facing example
      script; it belongs with the other AiPassthroughDemo demonstrations.
+
+- **Answered empirically rather than by reasoning about GStreamer
+  negotiation abstractly: does a mono mic actually combine into a
+  stereo desktop mix, or get dropped/force it down to mono?** Built a
+  real GStreamer pipeline matching _build_desktop_mix_source's exact
+  branch structure (mono source + stereo source, each through their own
+  audioconvert/audioresample/queue, both into one audiomixer, forced to
+  channels=2 downstream) with audiotestsrc standing in for pulsesrc
+  (which is too tightly coupled to a real 'device' property to
+  substitute directly). Result: audiomixer correctly upmixes the mono
+  source to match the negotiated stereo output -- its tone showed up
+  with strong energy on BOTH channels, while the stereo source's own
+  panning survived the mix intact (dominant on the channel it was
+  panned to). So the existing _build_desktop_mix_source code should
+  already handle mono-mic + stereo-desktop correctly as-is, now that
+  desktop mix defaults to requesting channels=2 downstream (the thing
+  that drives audiomixer's negotiation toward stereo in the first
+  place) -- no code change needed there, just confirmed with a real,
+  committed test (TestMonoMicCombinesIntoStereoDesktopMix) rather than
+  left as an assumption.
