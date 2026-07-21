@@ -182,3 +182,56 @@ class TestShmemChannelConcurrency(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestWriteTrackingForHealth(unittest.TestCase):
+    """write_count/seconds_since_write are the basis for "is this
+    channel actually running as expected" -- staleness and rate."""
+
+    def test_write_count_starts_at_zero(self):
+        name = _unique_name('count0')
+        ch = ShmemChannel(name, capacity_bytes=64, create=True)
+        try:
+            self.assertEqual(ch.write_count(), 0)
+        finally:
+            ch.close(); ch.unlink()
+
+    def test_write_count_increments_once_per_write(self):
+        name = _unique_name('count_inc')
+        ch = ShmemChannel(name, capacity_bytes=64, create=True)
+        try:
+            ch.write(b'a')
+            ch.write(b'b')
+            ch.write(b'c')
+            self.assertEqual(ch.write_count(), 3)
+        finally:
+            ch.close(); ch.unlink()
+
+    def test_seconds_since_write_is_none_before_any_write(self):
+        name = _unique_name('never_written')
+        ch = ShmemChannel(name, capacity_bytes=64, create=True)
+        try:
+            self.assertIsNone(ch.seconds_since_write())
+        finally:
+            ch.close(); ch.unlink()
+
+    def test_seconds_since_write_is_small_right_after_a_write(self):
+        name = _unique_name('just_written')
+        ch = ShmemChannel(name, capacity_bytes=64, create=True)
+        try:
+            ch.write(b'data')
+            self.assertLess(ch.seconds_since_write(), 1.0)
+            self.assertGreaterEqual(ch.seconds_since_write(), 0.0)
+        finally:
+            ch.close(); ch.unlink()
+
+    def test_a_second_attachment_sees_the_same_write_tracking(self):
+        name = _unique_name('shared_tracking')
+        writer = ShmemChannel(name, capacity_bytes=64, create=True)
+        writer.write(b'data')
+        reader = ShmemChannel(name, capacity_bytes=64, create=False)
+        try:
+            self.assertEqual(reader.write_count(), 1)
+            self.assertLess(reader.seconds_since_write(), 1.0)
+        finally:
+            reader.close(); writer.close(); writer.unlink()

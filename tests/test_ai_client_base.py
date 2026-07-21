@@ -195,3 +195,80 @@ class TestFullLifecycleRealProcesses(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestHealthDispatch(unittest.TestCase):
+
+    def test_health_event_calls_on_robonet_health_and_updates_brain_health(self):
+        class HealthClient(_RecordingClient):
+            def on_robonet_health(self, health):
+                self.calls.append(('health', health))
+
+        client = HealthClient()
+        client._dispatch({'event': 'health', 'channels': {'video': {'framerate': 30.0}}})
+        self.assertEqual(client.calls, [('health', {'video': {'framerate': 30.0}})])
+        self.assertEqual(client.brain_health, {'video': {'framerate': 30.0}})
+
+    def test_on_robonet_health_default_is_a_harmless_noop(self):
+        client = _RecordingClient()
+        client.on_robonet_health({'video': {}})  # must not raise
+
+
+class TestSetWantControl(unittest.TestCase):
+
+    def test_sends_the_want_control_event(self):
+        from unittest.mock import MagicMock
+        client = _RecordingClient()
+        client.bridge.send = MagicMock(return_value=True)
+        result = client.set_want_control('ai')
+        client.bridge.send.assert_called_once_with({'event': 'want_control', 'value': 'ai'})
+        self.assertTrue(result)
+
+
+class TestAutomaticHeartbeat(unittest.TestCase):
+
+    def test_run_sends_a_heartbeat_within_the_configured_interval(self):
+        from unittest.mock import MagicMock
+
+        class StopAfterTicks(_RecordingClient):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self._ticks = 0
+
+            def on_tick(self):
+                self._ticks += 1
+                if self._ticks >= 5:
+                    self.stop()
+
+        client = StopAfterTicks(heartbeat_interval_s=0.0)  # every iteration, for a fast/deterministic test
+        client.bridge.recv = MagicMock(return_value=None)
+        client.bridge.channels = {}
+        client.bridge.send = MagicMock(return_value=True)
+
+        client.run(poll_interval_s=0.0)
+
+        sent_events = [c.args[0].get('event') for c in client.bridge.send.call_args_list]
+        self.assertIn('heartbeat', sent_events)
+
+    def test_heartbeat_not_sent_faster_than_the_configured_interval(self):
+        from unittest.mock import MagicMock
+
+        class StopAfterTicks(_RecordingClient):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self._ticks = 0
+
+            def on_tick(self):
+                self._ticks += 1
+                if self._ticks >= 20:
+                    self.stop()
+
+        client = StopAfterTicks(heartbeat_interval_s=999.0)  # effectively never again after the first
+        client.bridge.recv = MagicMock(return_value=None)
+        client.bridge.channels = {}
+        client.bridge.send = MagicMock(return_value=True)
+
+        client.run(poll_interval_s=0.0)
+
+        sent_events = [c.args[0].get('event') for c in client.bridge.send.call_args_list]
+        self.assertEqual(sent_events.count('heartbeat'), 1)  # only the first tick's heartbeat

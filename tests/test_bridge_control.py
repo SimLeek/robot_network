@@ -324,3 +324,172 @@ class TestLifecycleEvents(unittest.TestCase):
             self.assertFalse(server.notify_connect('desk1'))
         finally:
             server.stop()
+
+
+class TestConnectedEndpointReplay(unittest.TestCase):
+    """A late-joining AI must learn about an already-connected
+    endpoint immediately, not just react to future transitions."""
+
+    def test_late_joining_ai_learns_the_current_endpoint(self):
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            server.notify_connect('desk1')  # no AI connected yet -- returns False, that's fine
+
+            client = BridgeClient(address=address)
+            client.connect(timeout_s=10.0)
+            start_msg = client.recv(timeout_s=5.0)
+            self.assertEqual(start_msg, {'event': 'start'})
+            connect_msg = client.recv(timeout_s=5.0)
+            self.assertEqual(connect_msg, {'event': 'connect', 'endpoint': 'desk1'})
+            client.close()
+        finally:
+            server.stop()
+
+    def test_no_replay_when_nothing_is_connected(self):
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            client = BridgeClient(address=address)
+            client.connect(timeout_s=10.0)
+            start_msg = client.recv(timeout_s=5.0)
+            self.assertEqual(start_msg, {'event': 'start'})
+            # Nothing else queued -- no phantom connect event.
+            self.assertIsNone(client.recv(timeout_s=0.3))
+            client.close()
+        finally:
+            server.stop()
+
+    def test_disconnect_clears_the_state_for_future_joiners(self):
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            server.notify_connect('desk1')
+            server.notify_disconnect()
+
+            client = BridgeClient(address=address)
+            client.connect(timeout_s=10.0)
+            client.recv(timeout_s=5.0)  # start
+            self.assertIsNone(client.recv(timeout_s=0.3))  # no stale replay
+            client.close()
+        finally:
+            server.stop()
+
+
+class TestAIStatusTracking(unittest.TestCase):
+    """Heartbeat and want_control -- observed in passing, not
+    consumed, so recv() still sees them too."""
+
+    def test_ai_is_alive_false_before_any_heartbeat(self):
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            self.assertFalse(server.ai_is_alive())
+        finally:
+            server.stop()
+
+    def test_ai_is_alive_true_after_a_heartbeat(self):
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            client = BridgeClient(address=address)
+            client.connect(timeout_s=10.0)
+            client.send({'event': 'heartbeat'})
+            self.assertTrue(_wait_for(lambda: server.ai_is_alive()))
+            client.close()
+        finally:
+            server.stop()
+
+    def test_heartbeat_still_arrives_via_recv_too(self):
+        # Observed in passing must not mean consumed.
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            client = BridgeClient(address=address)
+            client.connect(timeout_s=10.0)
+            client.send({'event': 'heartbeat'})
+            msg = None
+            t_end = time.time() + 5
+            while msg is None and time.time() < t_end:
+                msg = server.recv(timeout_s=0.1)
+            self.assertEqual(msg, {'event': 'heartbeat'})
+            client.close()
+        finally:
+            server.stop()
+
+    def test_ai_wants_control_tracks_the_latest_value(self):
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            client = BridgeClient(address=address)
+            client.connect(timeout_s=10.0)
+            client.send({'event': 'want_control', 'value': 'ai'})
+            self.assertTrue(_wait_for(lambda: server.ai_wants_control == 'ai'))
+            client.send({'event': 'want_control', 'value': 'human'})
+            self.assertTrue(_wait_for(lambda: server.ai_wants_control == 'human'))
+            client.close()
+        finally:
+            server.stop()
+
+
+class TestHealthReporting(unittest.TestCase):
+
+    def test_compute_and_send_health_reaches_the_client(self):
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            client = BridgeClient(address=address)
+            client.connect(timeout_s=10.0)
+            client.recv(timeout_s=5.0)  # drain start
+            self.assertTrue(_wait_for(lambda: server.connected))
+
+            server.channels['video_ch'].write(b'frame')
+            server.compute_and_send_health()
+
+            msg = client.recv(timeout_s=5.0)
+            self.assertEqual(msg['event'], 'health')
+            self.assertIn('video', msg['channels'])
+            self.assertIsNotNone(msg['channels']['video']['seconds_since_write'])
+            client.close()
+        finally:
+            server.stop()
+
+    def test_health_shows_none_staleness_for_a_never_written_channel(self):
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            client = BridgeClient(address=address)
+            client.connect(timeout_s=10.0)
+            client.recv(timeout_s=5.0)  # drain start
+            self.assertTrue(_wait_for(lambda: server.connected))
+
+            server.compute_and_send_health()  # video_ch never written to
+
+            msg = client.recv(timeout_s=5.0)
+            self.assertIsNone(msg['channels']['video']['seconds_since_write'])
+            client.close()
+        finally:
+            server.stop()
+
+    def test_framerate_reflects_writes_between_two_health_calls(self):
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            client = BridgeClient(address=address)
+            client.connect(timeout_s=10.0)
+            client.recv(timeout_s=5.0)  # drain start
+            self.assertTrue(_wait_for(lambda: server.connected))
+
+            server.compute_and_send_health()  # establishes the baseline
+            client.recv(timeout_s=5.0)
+
+            for _ in range(10):
+                server.channels['video_ch'].write(b'frame')
+            time.sleep(0.2)
+            server.compute_and_send_health()
+
+            msg = client.recv(timeout_s=5.0)
+            self.assertGreater(msg['channels']['video']['framerate'], 0)
+            client.close()
+        finally:
+            server.stop()

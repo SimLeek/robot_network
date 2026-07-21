@@ -47,9 +47,13 @@ class DemoAIClient(RobonetAIClient):
 
     def on_robonet_connect(self, endpoint_name) -> None:
         log.info(f'[ai] robonet connected to endpoint: {endpoint_name}')
+        self.set_want_control('human')  # this demo just watches -- a real AI would decide for itself
 
     def on_robonet_disconnect(self) -> None:
         log.info('[ai] robonet disconnected from its endpoint')
+
+    def on_robonet_health(self, health) -> None:
+        log.info(f'[ai] robonet health: {health}')
 
     def on_channel_data(self, label: str, data: bytes) -> None:
         if label == 'video':

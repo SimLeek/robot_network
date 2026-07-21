@@ -38,15 +38,20 @@ log = logging.getLogger(__name__)
 
 # generation: bumped odd->even around each write. length: how many of
 # the payload bytes are actually valid (a channel's declared capacity
-# is a maximum, not every write need fill it).
-_HEADER_DTYPE = np.dtype([('generation', np.int64), ('length', np.int64)])
-_HEADER_SIZE = _HEADER_DTYPE.itemsize  # 16 bytes, aligned -- int64 writes are
+# is a maximum, not every write need fill it). last_write_time: wall-
+# clock seconds at the last completed write -- the direct basis for
+# "is this channel actually still being updated" (a reader compares it
+# to time.time() itself; framerate is a rate of change of this, tracked
+# by whoever wants it, not stored here).
+_HEADER_DTYPE = np.dtype([('generation', np.int64), ('length', np.int64),
+                          ('last_write_time', np.float64)])
+_HEADER_SIZE = _HEADER_DTYPE.itemsize  # 24 bytes, aligned -- int64/float64 writes are
                                        # single CPU instructions on any
                                        # platform this actually runs on, so
                                        # each field update is atomic on its
                                        # own; the seqlock is what makes the
-                                       # pair of them (length + payload)
-                                       # consistent together.
+                                       # whole group (length + timestamp +
+                                       # payload) consistent together.
 
 
 class ShmemChannel:
@@ -76,6 +81,7 @@ class ShmemChannel:
         if create:
             self._header['generation'][0] = 0
             self._header['length'][0] = 0
+            self._header['last_write_time'][0] = 0.0
 
     def write(self, data: bytes) -> None:
         """Never blocks. Raises ValueError if data exceeds capacity --
@@ -88,7 +94,23 @@ class ShmemChannel:
         self._header['generation'][0] = gen + 1  # odd -- readers now know a write is in progress
         self._payload[:len(data)] = data
         self._header['length'][0] = len(data)
+        self._header['last_write_time'][0] = time.time()
         self._header['generation'][0] = gen + 2  # even again -- write complete, consistent
+
+    def write_count(self) -> int:
+        """How many completed writes so far (the generation counter
+        increments by 2 per write -- odd during, even after)."""
+        return int(self._header['generation'][0]) // 2
+
+    def seconds_since_write(self) -> Optional[float]:
+        """None if nothing has ever been written. The direct basis for
+        "is this channel actually still being updated" -- a large
+        value means it's gone stale, regardless of whatever the
+        writer's intended rate was."""
+        last = float(self._header['last_write_time'][0])
+        if last == 0.0:
+            return None
+        return time.time() - last
 
     def read(self, max_retries: int = 50, retry_sleep_s: float = 0.0005) -> Optional[bytes]:
         """Returns the most recent complete write, or None if nothing

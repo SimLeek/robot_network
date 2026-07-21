@@ -36,9 +36,13 @@ class RobonetAIClient(ABC):
     BridgeClient -- self.bridge.channels is available directly if a
     subclass wants more control than on_channel_data gives it."""
 
-    def __init__(self, address=DEFAULT_ADDRESS, authkey: bytes = DEFAULT_AUTHKEY):
+    def __init__(self, address=DEFAULT_ADDRESS, authkey: bytes = DEFAULT_AUTHKEY,
+                heartbeat_interval_s: float = 1.0):
         self.bridge = BridgeClient(address=address, authkey=authkey)
         self._running = False
+        self._heartbeat_interval_s = heartbeat_interval_s
+        self._last_heartbeat_sent: float = 0.0
+        self.brain_health: Optional[dict] = None  # last {'channels': {...}} received via on_robonet_health
 
     # -- required: every AI implementation must decide what these mean to it --
 
@@ -76,6 +80,13 @@ class RobonetAIClient(ABC):
         hardcoded here). Default: no-op."""
         pass
 
+    def on_robonet_health(self, health: dict) -> None:
+        """Robonet's own framerate/staleness per channel -- is it
+        actually running as expected, not just connected. The same
+        info is kept on self.brain_health if a subclass would rather
+        poll it than override this. Default: no-op."""
+        pass
+
     def on_tick(self) -> None:
         """Called once per run() iteration regardless of whether
         anything happened, for a subclass's own periodic work without
@@ -91,8 +102,10 @@ class RobonetAIClient(ABC):
         """Drains control events (dispatching to the four required
         callbacks) and every shared memory channel (dispatching to
         on_channel_data) once per iteration, plus on_tick() every
-        iteration regardless. Returns when stop() is called or an
-        on_robonet_shutdown event arrives."""
+        iteration regardless. Sends a heartbeat every
+        heartbeat_interval_s so the brain side can tell this process
+        is genuinely alive, not just still connected. Returns when
+        stop() is called or an on_robonet_shutdown event arrives."""
         self._running = True
         while self._running:
             msg = self.bridge.recv(timeout_s=0.0)
@@ -106,8 +119,19 @@ class RobonetAIClient(ABC):
                 if data is not None:
                     self.on_channel_data(label, data)
 
+            now = time.time()
+            if now - self._last_heartbeat_sent >= self._heartbeat_interval_s:
+                self.bridge.send({'event': 'heartbeat'})
+                self._last_heartbeat_sent = now
+
             self.on_tick()
             time.sleep(poll_interval_s)
+
+    def set_want_control(self, value: str) -> bool:
+        """Tells robonet whether this AI wants control or wants the
+        human to have it. Doesn't force anything on its own -- purely
+        a signal robonet can act on (or not)."""
+        return self.bridge.send({'event': 'want_control', 'value': value})
 
     def _dispatch(self, msg) -> None:
         event = msg.get('event') if isinstance(msg, dict) else None
@@ -120,6 +144,9 @@ class RobonetAIClient(ABC):
             self.on_robonet_connect(msg.get('endpoint'))
         elif event == 'disconnect':
             self.on_robonet_disconnect()
+        elif event == 'health':
+            self.brain_health = msg.get('channels')
+            self.on_robonet_health(msg.get('channels'))
         elif event is not None:
             log.warning(f'[ai-client] unrecognized event {event!r} -- ignoring')
 

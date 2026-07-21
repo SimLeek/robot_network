@@ -64,6 +64,7 @@ def main():
 
     t0 = time.time()
     last_status_log = 0.0
+    endpoint_notified = False
     try:
         while True:
             t = time.time() - t0
@@ -74,9 +75,18 @@ def main():
             if msg is not None:
                 log.info(f'[robonet] received from AI: {msg}')
 
+            # Simulate connecting to a remote endpoint once, a few
+            # seconds in -- a real robonet would call this from
+            # wherever DesktopSubSystem actually connects/disconnects.
+            if not endpoint_notified and t > 1.0:
+                server.notify_connect('demo-endpoint')
+                endpoint_notified = True
+
             if t - last_status_log > 2.0:
-                log.info(f'[robonet] AI connected: {server.connected}')
-                server.send({'brain_healthy': True, 'connected_endpoint': None})
+                log.info(f'[robonet] AI connected: {server.connected}  '
+                        f'AI alive: {server.ai_is_alive()}  '
+                        f'AI wants control: {server.ai_wants_control}')
+                server.compute_and_send_health()
                 last_status_log = t
 
             time.sleep(1.0 / 30)  # ~30fps

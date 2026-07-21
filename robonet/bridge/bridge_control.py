@@ -71,6 +71,11 @@ class BridgeServer:
         self._stop_event = threading.Event()
         self._inbox: queue.Queue = queue.Queue()
         self.channels: Dict[str, ShmemChannel] = {}
+        self._connected_endpoint: Optional[str] = None  # robonet's own remote-endpoint state, not the AI<->bridge connection
+        self._health_last_counts: Dict[str, int] = {}
+        self._health_last_time: Optional[float] = None
+        self.ai_alive_at: Optional[float] = None    # last heartbeat received from the AI side
+        self.ai_wants_control: Optional[str] = None  # last 'ai'/'human' preference reported by the AI side
 
     def create_channel(self, name: str, capacity_bytes: int, label: str) -> ShmemChannel:
         """Creates (or recreates) a named shared memory channel this
@@ -115,6 +120,12 @@ class BridgeServer:
                 # actually started 5 seconds or 5 hours before this
                 # particular connection landed.
                 conn.send({'event': 'start'})
+                if self._connected_endpoint is not None:
+                    # A late-joining AI would otherwise never learn
+                    # about a connection that happened before it
+                    # attached -- replay it as a normal connect event,
+                    # reusing the exact same callback path.
+                    conn.send({'event': 'connect', 'endpoint': self._connected_endpoint})
             except (OSError, EOFError):
                 with self._conn_lock:
                     self._conn = None
@@ -141,7 +152,20 @@ class BridgeServer:
                 msg = conn.recv()
             except (OSError, EOFError):
                 return
+            self._observe_ai_status(msg)
             self._inbox.put(msg)
+
+    def _observe_ai_status(self, msg: Any) -> None:
+        """Recognizes the AI side's own status messages and updates
+        tracked state -- doesn't consume the message, just observes it
+        in passing; it's still forwarded to the inbox for recv()."""
+        if not isinstance(msg, dict):
+            return
+        event = msg.get('event')
+        if event == 'heartbeat':
+            self.ai_alive_at = time.time()
+        elif event == 'want_control':
+            self.ai_wants_control = msg.get('value')
 
     def send(self, message: Any) -> bool:
         """Best-effort: returns False (never raises) if there's no
@@ -171,10 +195,41 @@ class BridgeServer:
     def notify_connect(self, endpoint_name: str) -> bool:
         """Robonet connected to a remote endpoint (not the AI bridge
         connection itself -- that's connected/handshake above)."""
+        self._connected_endpoint = endpoint_name
         return self.send({'event': 'connect', 'endpoint': endpoint_name})
 
     def notify_disconnect(self) -> bool:
+        self._connected_endpoint = None
         return self.send({'event': 'disconnect'})
+
+    def ai_is_alive(self, timeout_s: float = 5.0) -> bool:
+        """Whether a heartbeat arrived from the AI side within the
+        last timeout_s -- catches a subtler failure than a dropped
+        connection: the AI process itself hung (deadlocked, stuck
+        processing something) while the connection still looks fine."""
+        if self.ai_alive_at is None:
+            return False
+        return (time.time() - self.ai_alive_at) < timeout_s
+
+    def compute_and_send_health(self) -> bool:
+        """Call periodically (the caller decides the interval -- this
+        does no timing of its own): computes each channel's write rate
+        since the last call and how stale it currently is, and sends
+        it to the AI side. Best-effort like send() itself."""
+        now = time.time()
+        channels_health = {}
+        for name, ch in self.channels.items():
+            count = ch.write_count()
+            last_count = self._health_last_counts.get(name, count)
+            elapsed = now - self._health_last_time if self._health_last_time else None
+            rate = ((count - last_count) / elapsed) if elapsed and elapsed > 0 else 0.0
+            channels_health[ch.label or name] = {
+                'framerate': rate,
+                'seconds_since_write': ch.seconds_since_write(),
+            }
+            self._health_last_counts[name] = count
+        self._health_last_time = now
+        return self.send({'event': 'health', 'channels': channels_health})
 
     def stop(self) -> None:
         self.send({'event': 'shutdown'})  # best-effort -- send() already no-ops safely if nothing's connected
