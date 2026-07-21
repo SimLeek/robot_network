@@ -37,7 +37,7 @@ _stub_out_missing_displayarray_font_submodule()
 from robonet.brain.main_system import ServerSystem
 
 
-def _make_server(with_displayer=True, with_ai=False):
+def _make_server(with_displayer=True, with_ai=False, with_bridge=False):
     radio = MagicMock()
     radio.async_loops.return_value = ['radio-loop']
     menu = MagicMock()
@@ -47,7 +47,8 @@ def _make_server(with_displayer=True, with_ai=False):
         displayer = MagicMock()
         displayer.run.return_value = 'displayer-loop'
     ai = MagicMock() if with_ai else None
-    return ServerSystem(radio, menu, displayer=displayer, ai=ai)
+    bridge = MagicMock() if with_bridge else None
+    return ServerSystem(radio, menu, displayer=displayer, ai=ai, bridge=bridge)
 
 
 class TestAsyncLoopsHeadless(unittest.TestCase):

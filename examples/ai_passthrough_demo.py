@@ -34,6 +34,7 @@ from robonet.brain.display_system import DisplaySubSystem
 from robonet.brain.main_system import ServerSystem
 from robonet.brain.menu_system import MenuSubSystem
 from robonet.brain.radio_system import RadioSubSystem
+from robonet.bridge.bridge_control import BridgeServer
 from robonet.logging_setup import setup_logging
 
 log = setup_logging()
@@ -130,6 +131,17 @@ class AiPassthroughDemo(AISubSystem):
         handle.end()
         await asyncio.sleep(2.0)  # same settle reasoning as _play_sine_tone
 
+    async def _read_selection_demo(self, desktop: 'DesktopSubSystem'):
+        """Demonstrates DesktopSubSystem.ai_read_selection() -- the
+        result isn't a return value here, it arrives asynchronously as
+        a SelectionText through RadioSubSystem._selection_text_handler
+        (which logs it, and forwards it to an attached AI bridge if
+        there is one). This just triggers the request and gives the
+        reply time to land and log."""
+        log.info('[ai-demo] requesting the endpoint\'s highlighted text...')
+        desktop.ai_read_selection()
+        await asyncio.sleep(2.0)
+
     async def _diagnostic_loop(self, interval_s: float = 1.0, sample_rate: int = 48000):
         """Continually reports two cheap, human-checkable signals that
         the AI's video/audio really are live and changing: the hue of
@@ -172,6 +184,7 @@ class AiPassthroughDemo(AISubSystem):
             await asyncio.sleep(0.5)
             await self._play_sine_tone()
             await self._stream_audio_demo()
+            await self._read_selection_demo(desktop)
         finally:
             desktop.set_input_source('human')
         log.info('[ai-demo] demo complete -- handed control back to human input')
@@ -182,7 +195,8 @@ async def main(headless: bool):
     menu = MenuSubSystem()
     demo = AiPassthroughDemo()
     disp = None if headless else DisplaySubSystem()
-    serv = ServerSystem(radio, menu, displayer=disp, ai=demo)
+    bridge = BridgeServer()  # optional: lets a separate real AI process (e.g. examples/shmem_bridge_ai.py) also attach
+    serv = ServerSystem(radio, menu, displayer=disp, ai=demo, bridge=bridge)
     serv.start()
 
     loops = serv.async_loops()

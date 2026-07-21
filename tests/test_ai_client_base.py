@@ -272,3 +272,19 @@ class TestAutomaticHeartbeat(unittest.TestCase):
 
         sent_events = [c.args[0].get('event') for c in client.bridge.send.call_args_list]
         self.assertEqual(sent_events.count('heartbeat'), 1)  # only the first tick's heartbeat
+
+
+class TestSelectionTextDispatch(unittest.TestCase):
+
+    def test_selection_text_event_calls_on_selection_text(self):
+        class SelectionClient(_RecordingClient):
+            def on_selection_text(self, text):
+                self.calls.append(('selection_text', text))
+
+        client = SelectionClient()
+        client._dispatch({'event': 'selection_text', 'text': 'hello from xsel'})
+        self.assertEqual(client.calls, [('selection_text', 'hello from xsel')])
+
+    def test_on_selection_text_default_is_a_harmless_noop(self):
+        client = _RecordingClient()
+        client.on_selection_text('some text')  # must not raise

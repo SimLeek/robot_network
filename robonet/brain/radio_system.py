@@ -15,7 +15,9 @@ from robonet.brain.util.network_scanner import NetworkScanner, Endpoint
 from robonet.brain.util.system_base import SubSystem
 
 from robonet.buffers.buffer_handling import pack_obj, unpack_obj
-from robonet.buffers.buffer_objects import WhoAreYou, RobotCapabilities, WhoAreYouAck, RobotCapabilitiesAck
+from robonet.buffers.buffer_objects import (
+    WhoAreYou, RobotCapabilities, WhoAreYouAck, RobotCapabilitiesAck, SelectionText,
+)
 from robonet.receive_callbacks import receive_objs_encrypted
 from robonet.util import SecureRadioEngine
 import robonet.brain.settings as settings_
@@ -142,6 +144,7 @@ class RadioSubSystem(SubSystem):
         self.handlers = {
             'WhoAreYou': self._who_are_you_handler(sm),
             'RobotCapabilities': self._robot_capabilities_handler(sm),
+            'SelectionText': self._selection_text_handler(sm),
         }
 
     def start(self):
@@ -395,6 +398,13 @@ class RadioSubSystem(SubSystem):
             self.root.menu.set_endpoints(all_endpoints)
             self.burst(RobotCapabilitiesAck(hostname=obj.hostname, endpoint_type=obj.endpoint_type))
             self._maybe_auto_connect(ep)
+        return handler
+
+    def _selection_text_handler(self, sm: 'ServerSystem'):
+        def handler(hostname: str, obj: SelectionText):
+            log.info(f'[selection] {hostname}: {obj.text}')
+            if getattr(sm, 'bridge', None) is not None:
+                sm.bridge.send({'event': 'selection_text', 'text': obj.text})
         return handler
 
     def _maybe_auto_connect(self, ep: Endpoint):

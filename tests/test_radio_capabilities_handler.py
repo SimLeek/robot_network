@@ -122,3 +122,48 @@ class TestRobotCapabilitiesHandlerFirstReceipt(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestSelectionTextHandler(unittest.TestCase):
+    """The brain side of the text-selection feature: always log for a
+    human to see, and forward through the AI bridge (not the endpoint
+    connection -- that's a different, network-facing connection
+    entirely) if one happens to be attached."""
+
+    def _make_radio_for_selection(self):
+        radio = RadioSubSystem.__new__(RadioSubSystem)
+        return radio
+
+    def test_forwards_to_the_bridge_when_one_is_attached(self):
+        radio = self._make_radio_for_selection()
+        sm = MagicMock()
+        sm.bridge = MagicMock()
+        from robonet.buffers.buffer_objects import SelectionText
+
+        handler = radio._selection_text_handler(sm)
+        handler('endpoint-host', SelectionText(text='hello from xsel'))
+
+        sm.bridge.send.assert_called_once_with({'event': 'selection_text', 'text': 'hello from xsel'})
+
+    def test_does_not_raise_when_no_bridge_is_attached(self):
+        radio = self._make_radio_for_selection()
+        sm = MagicMock()
+        sm.bridge = None
+        from robonet.buffers.buffer_objects import SelectionText
+
+        handler = radio._selection_text_handler(sm)
+        handler('endpoint-host', SelectionText(text='hello'))  # must not raise
+
+    def test_does_not_raise_when_server_system_has_no_bridge_attribute_at_all(self):
+        # Defensive getattr fallback -- a ServerSystem-like stand-in
+        # that predates the bridge parameter shouldn't crash this.
+        radio = self._make_radio_for_selection()
+
+        class NoBridgeAttr:
+            pass
+
+        sm = NoBridgeAttr()
+        from robonet.buffers.buffer_objects import SelectionText
+
+        handler = radio._selection_text_handler(sm)
+        handler('endpoint-host', SelectionText(text='hello'))  # must not raise

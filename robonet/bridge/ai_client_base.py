@@ -87,6 +87,14 @@ class RobonetAIClient(ABC):
         poll it than override this. Default: no-op."""
         pass
 
+    def on_selection_text(self, text: str) -> None:
+        """Text read from the endpoint's highlighted (X11 PRIMARY)
+        selection, in response to whatever triggered the read (e.g.
+        DesktopSubSystem.ai_read_selection() on the robonet side).
+        Always a non-empty string -- 'no text highlighted' if nothing
+        was selected. Default: no-op."""
+        pass
+
     def on_tick(self) -> None:
         """Called once per run() iteration regardless of whether
         anything happened, for a subclass's own periodic work without
@@ -147,6 +155,8 @@ class RobonetAIClient(ABC):
         elif event == 'health':
             self.brain_health = msg.get('channels')
             self.on_robonet_health(msg.get('channels'))
+        elif event == 'selection_text':
+            self.on_selection_text(msg.get('text'))
         elif event is not None:
             log.warning(f'[ai-client] unrecognized event {event!r} -- ignoring')
 
