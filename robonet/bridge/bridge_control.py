@@ -110,6 +110,11 @@ class BridgeServer:
             try:
                 conn.send({'channels': [ChannelSpec(ch.name, ch.capacity_bytes, ch.label)
                                         for ch in self.channels.values()]})
+                # The earliest point a freshly-connecting AI can learn
+                # robonet is running -- regardless of whether robonet
+                # actually started 5 seconds or 5 hours before this
+                # particular connection landed.
+                conn.send({'event': 'start'})
             except (OSError, EOFError):
                 with self._conn_lock:
                     self._conn = None
@@ -163,7 +168,16 @@ class BridgeServer:
         except queue.Empty:
             return None
 
+    def notify_connect(self, endpoint_name: str) -> bool:
+        """Robonet connected to a remote endpoint (not the AI bridge
+        connection itself -- that's connected/handshake above)."""
+        return self.send({'event': 'connect', 'endpoint': endpoint_name})
+
+    def notify_disconnect(self) -> bool:
+        return self.send({'event': 'disconnect'})
+
     def stop(self) -> None:
+        self.send({'event': 'shutdown'})  # best-effort -- send() already no-ops safely if nothing's connected
         self._stop_event.set()
         with self._conn_lock:
             conn, self._conn = self._conn, None

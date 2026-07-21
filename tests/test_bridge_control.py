@@ -125,6 +125,7 @@ class TestBidirectionalMessaging(unittest.TestCase):
         try:
             client = BridgeClient(address=address)
             client.connect(timeout_s=10.0)
+            client.recv(timeout_s=5.0)  # drain the automatic start event first
             self.assertTrue(_wait_for(lambda: server.connected))
 
             server.send({'brain_healthy': True, 'connected_endpoint': 'desk1'})
@@ -226,9 +227,11 @@ class TestFaultIsolation(unittest.TestCase):
         server = _make_server(address)
         client = BridgeClient(address=address)
         client.connect(timeout_s=10.0)
+        client.recv(timeout_s=5.0)  # drain the automatic start event first
         server.stop()
+        client.recv(timeout_s=5.0)  # drain the automatic shutdown event too
         time.sleep(0.3)
-        result = client.recv(timeout_s=1.0)  # must not raise
+        result = client.recv(timeout_s=1.0)  # now truly nothing left -- must not raise
         self.assertIsNone(result)
         client.close()
 
@@ -251,3 +254,73 @@ class TestFaultIsolation(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestLifecycleEvents(unittest.TestCase):
+    """notify_connect/notify_disconnect, and that a fresh connection
+    automatically receives a start event right after the handshake."""
+
+    def test_new_connection_receives_a_start_event(self):
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            client = BridgeClient(address=address)
+            client.connect(timeout_s=10.0)
+            msg = client.recv(timeout_s=5.0)
+            self.assertEqual(msg, {'event': 'start'})
+            client.close()
+        finally:
+            server.stop()
+
+    def test_notify_connect_reaches_the_client(self):
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            client = BridgeClient(address=address)
+            client.connect(timeout_s=10.0)
+            client.recv(timeout_s=5.0)  # drain the start event first
+            self.assertTrue(_wait_for(lambda: server.connected))
+
+            server.notify_connect('desk1')
+            msg = client.recv(timeout_s=5.0)
+            self.assertEqual(msg, {'event': 'connect', 'endpoint': 'desk1'})
+            client.close()
+        finally:
+            server.stop()
+
+    def test_notify_disconnect_reaches_the_client(self):
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            client = BridgeClient(address=address)
+            client.connect(timeout_s=10.0)
+            client.recv(timeout_s=5.0)  # drain the start event first
+            self.assertTrue(_wait_for(lambda: server.connected))
+
+            server.notify_disconnect()
+            msg = client.recv(timeout_s=5.0)
+            self.assertEqual(msg, {'event': 'disconnect'})
+            client.close()
+        finally:
+            server.stop()
+
+    def test_stop_sends_a_shutdown_event_before_tearing_down(self):
+        address = _unique_address()
+        server = _make_server(address)
+        client = BridgeClient(address=address)
+        client.connect(timeout_s=10.0)
+        client.recv(timeout_s=5.0)  # drain the start event first
+        self.assertTrue(_wait_for(lambda: server.connected))
+
+        server.stop()
+        msg = client.recv(timeout_s=5.0)
+        self.assertEqual(msg, {'event': 'shutdown'})
+        client.close()
+
+    def test_notify_connect_with_no_client_returns_false_not_raise(self):
+        address = _unique_address()
+        server = _make_server(address)
+        try:
+            self.assertFalse(server.notify_connect('desk1'))
+        finally:
+            server.stop()
