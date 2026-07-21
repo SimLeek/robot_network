@@ -103,6 +103,30 @@ class TestAiSubsystemLifecycle(unittest.TestCase):
         server.stop()  # must not raise
 
 
+class TestBridgeLifecycle(unittest.TestCase):
+    """Same shape as TestAiSubsystemLifecycle -- an attached bridge
+    needs to actually get started/stopped, and a bridge-less
+    ServerSystem must keep working exactly as before."""
+
+    def test_start_calls_bridge_start(self):
+        server = _make_server(with_displayer=False, with_ai=True, with_bridge=True)
+        with patch('asyncio.get_running_loop'):
+            server.start()
+        server.bridge.start.assert_called_once()
+
+    def test_stop_calls_bridge_stop(self):
+        server = _make_server(with_displayer=False, with_ai=True, with_bridge=True)
+        server.stop()
+        server.bridge.stop.assert_called_once()
+
+    def test_no_bridge_does_not_crash_start_stop_or_async_loops(self):
+        server = _make_server(with_displayer=True, with_ai=False, with_bridge=False)
+        with patch('asyncio.get_running_loop'):
+            server.start()  # must not raise
+        server.async_loops()  # must not raise
+        server.stop()  # must not raise
+
+
 class TestAsyncLoopsWithDisplayer(unittest.TestCase):
 
     def test_includes_the_displayer_loop(self):

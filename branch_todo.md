@@ -11,5 +11,5 @@ only put [complete|todo] followed by short descriptions for every bullet point i
 - [complete] brain->AI signal: is the brain connected to an endpoint, and which one
 - [complete] AI->brain signal: is the AI running (liveness)
 - [complete] AI->brain signal: does the AI want AI control or human control
-- [todo] endpoint side: highlight text, run xsel, send the selected text over the wire
-- [todo] brain side: receive selected text, print to console for a human, and forward it to the AI
+- [complete] endpoint side: highlight text, run xsel, send the selected text over the wire
+- [complete] brain side: receive selected text, print to console for a human, and forward it to the AI

@@ -55,6 +55,9 @@ class DemoAIClient(RobonetAIClient):
     def on_robonet_health(self, health) -> None:
         log.info(f'[ai] robonet health: {health}')
 
+    def on_selection_text(self, text: str) -> None:
+        log.info(f'[ai] selection text received: {text!r}')
+
     def on_channel_data(self, label: str, data: bytes) -> None:
         if label == 'video':
             frame = np.frombuffer(data, dtype=np.uint8).reshape(VIDEO_HEIGHT, VIDEO_WIDTH, 3)
