@@ -20,7 +20,7 @@ lookup with an extra, incorrect condition instead of using it.
 """
 
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from robonet.brain.radio_system import RadioSubSystem
 from robonet.brain.util.network_scanner import Endpoint
@@ -122,3 +122,47 @@ class TestRobotCapabilitiesHandlerFirstReceipt(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestSelectionTextHandler(unittest.TestCase):
+    """The brain side of the text-selection feature: always log for a
+    human to see, and route through sm.ai (which handles its own
+    optional bridge internally) -- the same pattern MenuSubSystem
+    already uses to fan video/audio out to both displayer and ai,
+    rather than reaching past AISubSystem into a separate sibling."""
+
+    def _make_radio_for_selection(self):
+        radio = RadioSubSystem.__new__(RadioSubSystem)
+        return radio
+
+    def test_forwards_to_ai_when_one_is_attached(self):
+        radio = self._make_radio_for_selection()
+        sm = MagicMock()
+        from robonet.buffers.buffer_objects import SelectionText
+
+        handler = radio._selection_text_handler(sm)
+        handler('endpoint-host', SelectionText(text='hello from xsel'))
+
+        sm.ai.update_selection_text.assert_called_once_with('hello from xsel')
+
+    def test_does_not_raise_when_no_ai_is_attached(self):
+        radio = self._make_radio_for_selection()
+        sm = MagicMock()
+        sm.ai = None
+        from robonet.buffers.buffer_objects import SelectionText
+
+        handler = radio._selection_text_handler(sm)
+        handler('endpoint-host', SelectionText(text='hello'))  # must not raise
+
+    def test_logs_for_a_human_regardless_of_whether_ai_is_attached(self):
+        radio = self._make_radio_for_selection()
+        sm = MagicMock()
+        sm.ai = None
+        from robonet.buffers.buffer_objects import SelectionText
+
+        with patch('robonet.brain.radio_system.log') as mock_log:
+            handler = radio._selection_text_handler(sm)
+            handler('endpoint-host', SelectionText(text='some text'))
+
+        logged = ' '.join(str(c.args[0]) for c in mock_log.info.call_args_list)
+        self.assertIn('some text', logged)

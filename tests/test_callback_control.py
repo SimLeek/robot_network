@@ -652,3 +652,140 @@ class TestDesktopSubSystemMouseForwarding(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class _FakeDesktopHwWithRoot:
+    """Minimal DesktopHw stand-in for _on_read_selection_request --
+    just root.radio.burst, which is all it actually touches."""
+    def __init__(self):
+        self.root = MagicMock()
+
+
+class TestReadSelectionRequestHandler(unittest.TestCase):
+    """The endpoint side of the text-selection feature: run xsel, and
+    always send back a non-empty, size-capped result -- an action
+    producing no observable result doesn't work well for actor-critic-
+    style consumers, and a huge selection shouldn't be able to blow up
+    context windows or the network."""
+
+    @patch('robonet.endpoint.desktop_hardware.subprocess.run')
+    def test_selected_text_is_sent_back(self, mock_run):
+        from robonet.endpoint.desktop_hardware import DesktopHw
+        from robonet.buffers.buffer_objects import ReadSelectionRequest, SelectionText
+
+        mock_run.return_value = MagicMock(returncode=0, stdout='hello world')
+        hw = _FakeDesktopHwWithRoot()
+
+        DesktopHw._on_read_selection_request(hw, 'brain-host', ReadSelectionRequest())
+
+        sent = hw.root.radio.burst.call_args.args[0]
+        self.assertIsInstance(sent, SelectionText)
+        self.assertEqual(sent.text, 'hello world')
+
+    @patch('robonet.endpoint.desktop_hardware.subprocess.run')
+    def test_calls_xsel_with_primary_flag(self, mock_run):
+        from robonet.endpoint.desktop_hardware import DesktopHw
+        from robonet.buffers.buffer_objects import ReadSelectionRequest
+
+        mock_run.return_value = MagicMock(returncode=0, stdout='text')
+        hw = _FakeDesktopHwWithRoot()
+
+        DesktopHw._on_read_selection_request(hw, 'brain-host', ReadSelectionRequest())
+
+        args = mock_run.call_args.args[0]
+        self.assertIn('xsel', args)
+        self.assertIn('--primary', args)
+
+    @patch('robonet.endpoint.desktop_hardware.subprocess.run')
+    def test_nothing_selected_returns_the_placeholder(self, mock_run):
+        from robonet.endpoint.desktop_hardware import DesktopHw
+        from robonet.buffers.buffer_objects import ReadSelectionRequest
+
+        # xsel's real behavior: non-zero exit, empty stdout, when
+        # nothing is currently selected.
+        mock_run.return_value = MagicMock(returncode=1, stdout='')
+        hw = _FakeDesktopHwWithRoot()
+
+        DesktopHw._on_read_selection_request(hw, 'brain-host', ReadSelectionRequest())
+
+        sent = hw.root.radio.burst.call_args.args[0]
+        self.assertEqual(sent.text, 'no text highlighted')
+
+    @patch('robonet.endpoint.desktop_hardware.subprocess.run')
+    def test_xsel_not_installed_returns_the_placeholder_not_a_crash(self, mock_run):
+        from robonet.endpoint.desktop_hardware import DesktopHw
+        from robonet.buffers.buffer_objects import ReadSelectionRequest
+
+        mock_run.side_effect = FileNotFoundError()
+        hw = _FakeDesktopHwWithRoot()
+
+        DesktopHw._on_read_selection_request(hw, 'brain-host', ReadSelectionRequest())  # must not raise
+
+        sent = hw.root.radio.burst.call_args.args[0]
+        self.assertEqual(sent.text, 'no text highlighted')
+
+    @patch('robonet.endpoint.desktop_hardware.subprocess.run')
+    def test_xsel_timeout_returns_the_placeholder_not_a_crash(self, mock_run):
+        from robonet.endpoint.desktop_hardware import DesktopHw
+        from robonet.buffers.buffer_objects import ReadSelectionRequest
+        import subprocess as sp
+
+        mock_run.side_effect = sp.TimeoutExpired(cmd='xsel', timeout=2.0)
+        hw = _FakeDesktopHwWithRoot()
+
+        DesktopHw._on_read_selection_request(hw, 'brain-host', ReadSelectionRequest())  # must not raise
+
+        sent = hw.root.radio.burst.call_args.args[0]
+        self.assertEqual(sent.text, 'no text highlighted')
+
+    @patch('robonet.endpoint.desktop_hardware.subprocess.run')
+    def test_long_selection_is_truncated_to_max_chars(self, mock_run):
+        from robonet.endpoint.desktop_hardware import DesktopHw
+        from robonet.buffers.buffer_objects import ReadSelectionRequest
+
+        mock_run.return_value = MagicMock(returncode=0, stdout='x' * 10000)
+        hw = _FakeDesktopHwWithRoot()
+
+        DesktopHw._on_read_selection_request(hw, 'brain-host', ReadSelectionRequest(max_chars=100))
+
+        sent = hw.root.radio.burst.call_args.args[0]
+        self.assertLessEqual(len(sent.text), 100)
+
+    @patch('robonet.endpoint.desktop_hardware.subprocess.run')
+    def test_truncation_marker_shows_the_text_was_cut(self, mock_run):
+        from robonet.endpoint.desktop_hardware import DesktopHw
+        from robonet.buffers.buffer_objects import ReadSelectionRequest
+
+        mock_run.return_value = MagicMock(returncode=0, stdout='x' * 10000)
+        hw = _FakeDesktopHwWithRoot()
+
+        DesktopHw._on_read_selection_request(hw, 'brain-host', ReadSelectionRequest(max_chars=100))
+
+        sent = hw.root.radio.burst.call_args.args[0]
+        self.assertIn('truncated', sent.text)
+
+    @patch('robonet.endpoint.desktop_hardware.subprocess.run')
+    def test_short_selection_is_not_truncated_or_marked(self, mock_run):
+        from robonet.endpoint.desktop_hardware import DesktopHw
+        from robonet.buffers.buffer_objects import ReadSelectionRequest
+
+        mock_run.return_value = MagicMock(returncode=0, stdout='short text')
+        hw = _FakeDesktopHwWithRoot()
+
+        DesktopHw._on_read_selection_request(hw, 'brain-host', ReadSelectionRequest(max_chars=5120))
+
+        sent = hw.root.radio.burst.call_args.args[0]
+        self.assertEqual(sent.text, 'short text')
+
+    @patch('robonet.endpoint.desktop_hardware.subprocess.run')
+    def test_default_max_chars_is_5120(self, mock_run):
+        from robonet.endpoint.desktop_hardware import DesktopHw
+        from robonet.buffers.buffer_objects import ReadSelectionRequest
+
+        mock_run.return_value = MagicMock(returncode=0, stdout='x' * 20000)
+        hw = _FakeDesktopHwWithRoot()
+
+        DesktopHw._on_read_selection_request(hw, 'brain-host', ReadSelectionRequest())
+
+        sent = hw.root.radio.burst.call_args.args[0]
+        self.assertLessEqual(len(sent.text), 5120)

@@ -532,6 +532,37 @@ class MouseEvent(BufferBase):
         self.button = button; self.delta = delta
 
 
+class ReadSelectionRequest(BufferBase):
+    """Brain -> endpoint: run xsel and report back what's currently
+    highlighted (the X11 PRIMARY selection).
+
+    max_chars: hard cap on the returned text -- a huge selection
+    shouldn't be able to blow up context windows or the network. 5120
+    (a few pages) by default; callers that genuinely want more can ask
+    for it.
+    """
+    type_list    = [int]
+    field_codecs = [_uint32]
+
+    def __init__(self, max_chars: int = 5120):
+        self.max_chars = max_chars
+
+
+class SelectionText(BufferBase):
+    """Endpoint -> brain: the result of a ReadSelectionRequest.
+
+    text: always non-empty -- 'no text highlighted' if nothing was
+    selected (or xsel isn't available), since an action producing no
+    observable result doesn't work well for actor-critic-style
+    consumers.
+    """
+    type_list    = [str]
+    field_codecs = [_str_]
+
+    def __init__(self, text: str):
+        self.text = text
+
+
 # ============================================================
 # Identification
 # ============================================================

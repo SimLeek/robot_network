@@ -34,6 +34,7 @@ from robonet.brain.display_system import DisplaySubSystem
 from robonet.brain.main_system import ServerSystem
 from robonet.brain.menu_system import MenuSubSystem
 from robonet.brain.radio_system import RadioSubSystem
+from robonet.bridge.bridge_control import BridgeServer
 from robonet.logging_setup import setup_logging
 
 log = setup_logging()
@@ -55,10 +56,10 @@ class AiPassthroughDemo(AISubSystem):
         self._root = root
 
     def start(self):
-        pass
+        super().start()
 
     def stop(self):
-        pass
+        super().stop()
 
     def async_loops(self, sm):
         return [self._run(), self._diagnostic_loop()]
@@ -130,14 +131,12 @@ class AiPassthroughDemo(AISubSystem):
         handle.end()
         await asyncio.sleep(2.0)  # same settle reasoning as _play_sine_tone
 
+    async def _read_selection_demo(self, desktop: 'DesktopSubSystem'):
+        log.info('[ai-demo] requesting the endpoint\'s highlighted text...')
+        desktop.ai_read_selection()
+        await asyncio.sleep(2.0)
+
     async def _diagnostic_loop(self, interval_s: float = 1.0, sample_rate: int = 48000):
-        """Continually reports two cheap, human-checkable signals that
-        the AI's video/audio really are live and changing: the hue of
-        the center pixel (in_img is RGB, matching this codebase's own
-        test conventions), and the dominant frequency in the most
-        recent audio chunk (assumes the pipeline-wide 48kHz standard).
-        Runs for the demo's whole lifetime, independent of _run()'s
-        specific action sequence."""
         while True:
             await asyncio.sleep(interval_s)
             img = self.in_img
@@ -172,6 +171,7 @@ class AiPassthroughDemo(AISubSystem):
             await asyncio.sleep(0.5)
             await self._play_sine_tone()
             await self._stream_audio_demo()
+            await self._read_selection_demo(desktop)
         finally:
             desktop.set_input_source('human')
         log.info('[ai-demo] demo complete -- handed control back to human input')
@@ -181,6 +181,7 @@ async def main(headless: bool):
     radio = RadioSubSystem()
     menu = MenuSubSystem()
     demo = AiPassthroughDemo()
+    demo.bridge = BridgeServer()  # optional: lets a separate real AI process (e.g. examples/shmem_bridge_ai.py) also attach
     disp = None if headless else DisplaySubSystem()
     serv = ServerSystem(radio, menu, displayer=disp, ai=demo)
     serv.start()

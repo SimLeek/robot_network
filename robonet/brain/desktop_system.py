@@ -14,7 +14,7 @@ from typing import Dict, Optional
 from robonet.brain.util.action_factory import ActionFactory
 from robonet.brain.util.system_base import SubSystem
 from robonet.brain.util.viewport import Viewport
-from robonet.buffers.buffer_objects import KeyEvent, MouseEvent
+from robonet.buffers.buffer_objects import KeyEvent, MouseEvent, ReadSelectionRequest
 from robonet.logging_setup import setup_logging
 
 log = setup_logging()
@@ -56,6 +56,7 @@ AI_TOKEN_PAN_RIGHT = 9
 AI_TOKEN_PAN_UP = 10
 AI_TOKEN_PAN_DOWN = 11
 AI_TOKEN_VIEW_RESET = 12
+AI_TOKEN_READ_SELECTION = 13  # run xsel on the endpoint, read back what's highlighted
 
 AI_ZOOM_FACTOR = 1.1   # per zoom token, matching the human scroll step
 AI_PAN_STEP = 0.05     # per pan token, as a fraction of the visible view
@@ -128,6 +129,7 @@ class DesktopSubSystem(SubSystem):
         self.af_ai.bind_ai_token(lambda: self.ai_pan(0.0, -AI_PAN_STEP), AI_TOKEN_PAN_UP)
         self.af_ai.bind_ai_token(lambda: self.ai_pan(0.0, AI_PAN_STEP), AI_TOKEN_PAN_DOWN)
         self.af_ai.bind_ai_token(self.ai_view_reset, AI_TOKEN_VIEW_RESET)
+        self.af_ai.bind_ai_token(self.ai_read_selection, AI_TOKEN_READ_SELECTION)
 
         if self._root.displayer is None:
             self._bound = True
@@ -330,6 +332,15 @@ class DesktopSubSystem(SubSystem):
         if self.input_source != 'ai':
             return
         self.viewport.reset()
+
+    def ai_read_selection(self, max_chars: int = 5120):
+        """Asks the endpoint to run xsel and report back whatever's
+        currently highlighted, truncated to max_chars. The reply (a
+        SelectionText) arrives asynchronously through the normal
+        receive path -- see RadioSubSystem._selection_text_handler."""
+        if self.input_source != 'ai':
+            return
+        self._root.radio.burst(ReadSelectionRequest(max_chars=max_chars))
 
     def _ai_on_mouse_x(self, value: float):
         self._ai_mouse_x = value

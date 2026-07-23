@@ -406,7 +406,7 @@ class TestActionSpaceDiagnostic(unittest.TestCase):
 
         logged = ' '.join(str(c.args[0]) for c in mock_log.info.call_args_list)
         self.assertIn('2 continuous neurons', logged)   # mouse x, mouse y
-        self.assertIn('13 discrete tokens', logged)      # 6 mouse + 7 view control
+        self.assertIn('14 discrete tokens', logged)      # 6 mouse + 7 view control + 1 read-selection
 
     def test_matches_the_action_factory_s_own_bookkeeping(self):
         # Not a hardcoded number -- must track whatever's actually bound,
@@ -415,5 +415,58 @@ class TestActionSpaceDiagnostic(unittest.TestCase):
         sub.start()
         n_tokens = len(sub.af_ai._token_to_handlers)
         n_neurons = len(sub.af_ai._neuron_to_handler_thresholds)
-        self.assertEqual(n_tokens, 13)
+        self.assertEqual(n_tokens, 14)
         self.assertEqual(n_neurons, 2)
+
+
+class TestAiReadSelection(unittest.TestCase):
+    """The AI-facing trigger for the text-selection feature: gated on
+    input_source like every other AI action, sends a
+    ReadSelectionRequest with the requested max_chars."""
+
+    def test_dropped_while_human_has_priority(self):
+        sub = _make_sub()  # default: human
+        sub.ai_read_selection()
+        sub._root.radio.burst.assert_not_called()
+
+    def test_sends_a_read_selection_request_when_ai_has_control(self):
+        from robonet.buffers.buffer_objects import ReadSelectionRequest
+        sub = _make_sub()
+        sub.set_input_source('ai')
+
+        sub.ai_read_selection()
+
+        sent = sub._root.radio.burst.call_args.args[0]
+        self.assertIsInstance(sent, ReadSelectionRequest)
+
+    def test_default_max_chars_matches_the_request_default(self):
+        sub = _make_sub()
+        sub.set_input_source('ai')
+
+        sub.ai_read_selection()
+
+        sent = sub._root.radio.burst.call_args.args[0]
+        self.assertEqual(sent.max_chars, 5120)
+
+    def test_custom_max_chars_is_passed_through(self):
+        sub = _make_sub()
+        sub.set_input_source('ai')
+
+        sub.ai_read_selection(max_chars=200)
+
+        sent = sub._root.radio.burst.call_args.args[0]
+        self.assertEqual(sent.max_chars, 200)
+
+    def test_bound_as_a_token_with_no_args_uses_the_default(self):
+        # This is exactly how ActionFactory calls it when the token
+        # fires -- no arguments at all. Binds directly rather than
+        # calling start() (which does this plus unrelated setup) --
+        # this test is specifically about the binding contract.
+        sub = _make_sub()
+        sub.set_input_source('ai')
+        sub.af_ai.bind_ai_token(sub.ai_read_selection, 13)  # AI_TOKEN_READ_SELECTION
+
+        sub.af_ai.on_token(13)
+
+        sent = sub._root.radio.burst.call_args.args[0]
+        self.assertEqual(sent.max_chars, 5120)

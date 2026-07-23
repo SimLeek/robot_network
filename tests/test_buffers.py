@@ -2,7 +2,7 @@ import unittest
 import numpy as np
 from robonet.buffers.buffer_handling import pack_obj, unpack_obj
 from robonet.buffers.buffer_objects import WifiSetupInfo, CVCamFrame, AudioBuffer, HumidityWaterBuffer, \
-    TemperatureMonitorBuffer, IMUBuffer, TensorBuffer, MouseEvent
+    TemperatureMonitorBuffer, IMUBuffer, TensorBuffer, MouseEvent, ReadSelectionRequest, SelectionText
 
 
 class TestBufferObjects(unittest.TestCase):
@@ -124,3 +124,26 @@ class TestMouseEventDelta(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestSelectionMessages(unittest.TestCase):
+
+    def test_read_selection_request_round_trip_default(self):
+        original = ReadSelectionRequest()
+        unpacked = unpack_obj(pack_obj(original))
+        self.assertEqual(unpacked.max_chars, 5120)
+
+    def test_read_selection_request_round_trip_custom(self):
+        original = ReadSelectionRequest(max_chars=250)
+        unpacked = unpack_obj(pack_obj(original))
+        self.assertEqual(unpacked.max_chars, 250)
+
+    def test_selection_text_round_trip(self):
+        original = SelectionText(text='some highlighted text')
+        unpacked = unpack_obj(pack_obj(original))
+        self.assertEqual(unpacked.text, 'some highlighted text')
+
+    def test_selection_text_round_trip_with_the_placeholder(self):
+        original = SelectionText(text='no text highlighted')
+        unpacked = unpack_obj(pack_obj(original))
+        self.assertEqual(unpacked.text, 'no text highlighted')

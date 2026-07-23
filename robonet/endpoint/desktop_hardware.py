@@ -7,12 +7,15 @@ Handles typical desktop hardware such as screens, mics, speakers, keyboards, and
 from __future__ import annotations
 
 import logging
+import subprocess
 import threading
 import time
 
 import numpy as np
 
-from robonet.buffers.buffer_objects import KeyEvent, MouseEvent, RobotCapabilities
+from robonet.buffers.buffer_objects import (
+    KeyEvent, MouseEvent, RobotCapabilities, ReadSelectionRequest, SelectionText,
+)
 from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC, AI_SUPPORTED_KEYS
 from robonet.endpoint.desktop_capture import DesktopCaptureError
 from robonet.endpoint.hardware_system import MultiAVRobotHardware
@@ -175,6 +178,7 @@ class DesktopHw(MultiAVRobotHardware):
         return super().handlers | {
             'KeyEvent': self._on_key_event,
             'MouseEvent': self._on_mouse_event,
+            'ReadSelectionRequest': self._on_read_selection_request,
         }
 
     # -- input replay ------------------------------------------------------
@@ -212,6 +216,34 @@ class DesktopHw(MultiAVRobotHardware):
             log.warning('pyautogui failsafe triggered (mouse in corner) -- ignoring mouse event')
         except Exception as e:
             log.error(f'MouseEvent replay failed (type={obj.event_type}): {e}')
+
+    def _on_read_selection_request(self, hostname: str, obj: ReadSelectionRequest):
+        """Runs xsel to read the X11 PRIMARY selection (whatever's
+        currently highlighted, not the clipboard -- that needs an
+        explicit copy). Always sends back a non-empty string: an
+        action producing no observable result doesn't work well for
+        actor-critic-style consumers, so 'no text highlighted' stands
+        in for nothing selected, xsel missing, or any other failure.
+        Truncated to obj.max_chars -- a huge selection shouldn't be
+        able to blow up context windows or the network."""
+        text = 'no text highlighted'
+        try:
+            result = subprocess.run(['xsel', '--primary'], capture_output=True,
+                                   timeout=2.0, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                text = result.stdout
+        except FileNotFoundError:
+            log.error("xsel is not installed -- can't read the selection "
+                    "(try: apt install xsel)")
+        except subprocess.TimeoutExpired:
+            log.error('xsel timed out')
+        except Exception as e:
+            log.error(f'xsel failed: {e}')
+        if len(text) > obj.max_chars:
+            marker = '...[truncated]'
+            text = text[:max(0, obj.max_chars - len(marker))] + marker
+        if self.root is not None:
+            self.root.radio.burst(SelectionText(text=text))
 
     # -- lifecycle -----------------------------------------------------------
 
