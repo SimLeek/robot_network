@@ -235,3 +235,16 @@ class TestWriteTrackingForHealth(unittest.TestCase):
             self.assertLess(reader.seconds_since_write(), 1.0)
         finally:
             reader.close(); writer.close(); writer.unlink()
+
+
+class TestCloseIsIdempotent(unittest.TestCase):
+
+    def test_calling_close_twice_does_not_raise(self):
+        name = _unique_name('double_close')
+        ch = ShmemChannel(name, capacity_bytes=64, create=True)
+        ch.write(b'data')
+        ch.close()
+        ch.close()  # must not raise
+        ch2 = ShmemChannel(name, capacity_bytes=64, create=False)
+        ch2.unlink()
+        ch2.close()

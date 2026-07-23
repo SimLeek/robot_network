@@ -136,12 +136,15 @@ class ShmemChannel:
 
     def close(self) -> None:
         """Detaches this process's view. Safe to call from both the
-        creating and attaching side; only the creator should also call
-        unlink(). Releases the header/payload views first -- the
-        underlying SharedMemory can't close while a numpy array or
-        memoryview still has the buffer exported."""
+        creating and attaching side (only the creator should also
+        call unlink()), and safe to call more than once -- releases
+        the header/payload views first, since the underlying
+        SharedMemory can't close while a numpy array or memoryview
+        still has the buffer exported."""
+        if self._header is None:
+            return  # already closed
         self._payload.release()
-        del self._header
+        self._header = None
         self._shm.close()
 
     def unlink(self) -> None:

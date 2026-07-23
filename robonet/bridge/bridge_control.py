@@ -69,6 +69,7 @@ class BridgeServer:
         self._conn_lock = threading.Lock()
         self._accept_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._stopped = False
         self._inbox: queue.Queue = queue.Queue()
         self.channels: Dict[str, ShmemChannel] = {}
         self._connected_endpoint: Optional[str] = None  # robonet's own remote-endpoint state, not the AI<->bridge connection
@@ -86,6 +87,22 @@ class BridgeServer:
         ch = ShmemChannel(name, capacity_bytes, create=True, label=label)
         self.channels[name] = ch
         return ch
+
+    def write_channel(self, name: str, label: str, data: bytes) -> None:
+        """Writes to a named channel, creating it (or recreating it
+        with more room) automatically the first time, or if a later
+        write outgrows the current capacity -- lets a caller forward
+        data whose byte size isn't known until the first real payload
+        arrives (e.g. AISubSystem.update_frame: frame size depends on
+        actual resolution/dtype), without needing to pre-declare a
+        channel size up front like create_channel does. Sized with 2x
+        slack so typical frame-to-frame jitter (e.g. audio chunk sizes
+        varying slightly) doesn't force a recreation on every write."""
+        ch = self.channels.get(name)
+        if ch is None or len(data) > ch.capacity_bytes:
+            capacity = max(len(data) * 2, 4096)
+            ch = self.create_channel(name, capacity_bytes=capacity, label=label)
+        ch.write(data)
 
     @property
     def connected(self) -> bool:
@@ -232,6 +249,9 @@ class BridgeServer:
         return self.send({'event': 'health', 'channels': channels_health})
 
     def stop(self) -> None:
+        if self._stopped:
+            return
+        self._stopped = True
         self.send({'event': 'shutdown'})  # best-effort -- send() already no-ops safely if nothing's connected
         self._stop_event.set()
         with self._conn_lock:

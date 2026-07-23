@@ -493,3 +493,94 @@ class TestHealthReporting(unittest.TestCase):
             client.close()
         finally:
             server.stop()
+
+
+class TestWriteChannel(unittest.TestCase):
+    """Lazily creates or resizes a channel automatically -- for data
+    whose byte size isn't known until the first real payload arrives
+    (e.g. video frame size, which depends on actual resolution)."""
+
+    def test_creates_the_channel_on_first_write(self):
+        server = BridgeServer()
+        try:
+            server.write_channel('video_frame', 'video', b'x' * 100)
+            self.assertIn('video_frame', server.channels)
+        finally:
+            server.stop()
+
+    def test_written_data_reads_back_correctly(self):
+        server = BridgeServer()
+        try:
+            server.write_channel('video_frame', 'video', b'hello frame')
+            self.assertEqual(server.channels['video_frame'].read(), b'hello frame')
+        finally:
+            server.stop()
+
+    def test_label_is_set_correctly(self):
+        server = BridgeServer()
+        try:
+            server.write_channel('video_frame', 'video', b'data')
+            self.assertEqual(server.channels['video_frame'].label, 'video')
+        finally:
+            server.stop()
+
+    def test_same_size_write_does_not_recreate_the_channel(self):
+        server = BridgeServer()
+        try:
+            server.write_channel('video_frame', 'video', b'x' * 100)
+            first = server.channels['video_frame']
+            server.write_channel('video_frame', 'video', b'y' * 100)
+            self.assertIs(server.channels['video_frame'], first)
+        finally:
+            server.stop()
+
+    def test_smaller_write_does_not_recreate_the_channel(self):
+        server = BridgeServer()
+        try:
+            server.write_channel('video_frame', 'video', b'x' * 1000)
+            first = server.channels['video_frame']
+            server.write_channel('video_frame', 'video', b'y' * 10)
+            self.assertIs(server.channels['video_frame'], first)
+        finally:
+            server.stop()
+
+    def test_larger_write_recreates_with_more_capacity(self):
+        server = BridgeServer()
+        try:
+            server.write_channel('video_frame', 'video', b'x' * 100)
+            first_capacity = server.channels['video_frame'].capacity_bytes
+            server.write_channel('video_frame', 'video', b'y' * 100000)
+            self.assertGreater(server.channels['video_frame'].capacity_bytes, first_capacity)
+            self.assertEqual(server.channels['video_frame'].read(), b'y' * 100000)
+        finally:
+            server.stop()
+
+    def test_two_different_channel_names_stay_independent(self):
+        server = BridgeServer()
+        try:
+            server.write_channel('video_frame', 'video', b'video data')
+            server.write_channel('audio_chunk', 'audio', b'audio data')
+            self.assertEqual(server.channels['video_frame'].read(), b'video data')
+            self.assertEqual(server.channels['audio_chunk'].read(), b'audio data')
+        finally:
+            server.stop()
+
+
+class TestStopIsIdempotent(unittest.TestCase):
+    """unlink() isn't safe to call twice (the OS resource is already
+    gone after the first call) -- stop() must guard against being
+    called more than once, since SubSystem.__del__ can call it again
+    at garbage-collection time after an explicit stop()."""
+
+    def test_calling_stop_twice_does_not_raise(self):
+        server = BridgeServer()
+        server.create_channel('video_ch', capacity_bytes=64, label='video')
+        server.stop()
+        server.stop()  # must not raise
+
+    def test_calling_stop_three_times_does_not_raise(self):
+        server = BridgeServer()
+        server.write_channel('video_frame', 'video', b'data')
+        server.stop()
+        server.stop()
+        server.stop()  # must not raise

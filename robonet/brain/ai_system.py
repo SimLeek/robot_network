@@ -62,10 +62,14 @@ class AISubSystem(SubSystem):
     def update_frame(self, img):
         self.in_img = img
         self.has_video = True
+        if self.bridge is not None:
+            self.bridge.write_channel('video_frame', 'video', img.tobytes())
 
     def update_audio(self, aud):
         self.in_aud = aud
         self.has_audio = True
+        if self.bridge is not None:
+            self.bridge.write_channel('audio_chunk', 'audio', aud.tobytes())
 
     def update_selection_text(self, text: str):
         self.selection_text = text

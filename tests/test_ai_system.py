@@ -168,3 +168,77 @@ class TestUpdateSelectionText(unittest.TestCase):
     def test_does_not_raise_with_no_bridge_attached(self):
         ai = AISubSystem()
         ai.update_selection_text('some text')  # must not raise
+
+
+class TestUpdateFrameAndAudioForwardThroughTheBridge(unittest.TestCase):
+    """update_frame/update_audio now match update_selection_text's own
+    shape: store locally for an in-process AI, forward through the
+    bridge if one's attached -- via the shared memory channels
+    (write_channel), not the control connection, since video/audio is
+    exactly the high-frequency/high-bandwidth data those channels
+    exist for."""
+
+    def test_update_frame_still_sets_in_img_and_has_video(self):
+        ai = AISubSystem()
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        ai.update_frame(frame)
+        self.assertIs(ai.in_img, frame)
+        self.assertTrue(ai.has_video)
+
+    def test_update_audio_still_sets_in_aud_and_has_audio(self):
+        ai = AISubSystem()
+        audio = np.zeros(100, dtype=np.float32)
+        ai.update_audio(audio)
+        self.assertIs(ai.in_aud, audio)
+        self.assertTrue(ai.has_audio)
+
+    def test_no_bridge_does_not_raise_on_update_frame_or_audio(self):
+        ai = AISubSystem()
+        ai.update_frame(np.zeros((4, 4, 3), dtype=np.uint8))  # must not raise
+        ai.update_audio(np.zeros(100, dtype=np.float32))       # must not raise
+
+    def test_update_frame_forwards_bytes_through_the_bridge(self):
+        from unittest.mock import MagicMock
+        ai = AISubSystem()
+        ai.bridge = MagicMock()
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+
+        ai.update_frame(frame)
+
+        ai.bridge.write_channel.assert_called_once_with('video_frame', 'video', frame.tobytes())
+
+    def test_update_audio_forwards_bytes_through_the_bridge(self):
+        from unittest.mock import MagicMock
+        ai = AISubSystem()
+        ai.bridge = MagicMock()
+        audio = np.zeros(100, dtype=np.float32)
+
+        ai.update_audio(audio)
+
+        ai.bridge.write_channel.assert_called_once_with('audio_chunk', 'audio', audio.tobytes())
+
+    def test_real_bridge_round_trips_a_real_frame_correctly(self):
+        from robonet.bridge.bridge_control import BridgeServer
+        ai = AISubSystem()
+        ai.bridge = BridgeServer()
+        try:
+            frame = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+            ai.update_frame(frame)
+            raw = ai.bridge.channels['video_frame'].read()
+            reconstructed = np.frombuffer(raw, dtype=np.uint8).reshape(240, 320, 3)
+            np.testing.assert_array_equal(frame, reconstructed)
+        finally:
+            ai.bridge.stop()
+
+    def test_real_bridge_round_trips_real_audio_correctly(self):
+        from robonet.bridge.bridge_control import BridgeServer
+        ai = AISubSystem()
+        ai.bridge = BridgeServer()
+        try:
+            audio = np.random.uniform(-1, 1, 4800).astype(np.float32)
+            ai.update_audio(audio)
+            raw = ai.bridge.channels['audio_chunk'].read()
+            reconstructed = np.frombuffer(raw, dtype=np.float32)
+            np.testing.assert_array_equal(audio, reconstructed)
+        finally:
+            ai.bridge.stop()
