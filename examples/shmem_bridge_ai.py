@@ -8,8 +8,7 @@ require robonet to already be waiting for it, and vice versa).
 
 Demonstrates RobonetAIClient: subclass it, implement the four required
 lifecycle callbacks, override on_channel_data for the actual per-frame/
-per-chunk work, then connect() and run(). run() owns the loop -- no
-hand-written `while True: ...` needed here at all.
+per-chunk work, then connect() and run().
 """
 
 from __future__ import annotations

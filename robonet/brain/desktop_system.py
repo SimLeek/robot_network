@@ -337,8 +337,7 @@ class DesktopSubSystem(SubSystem):
         """Asks the endpoint to run xsel and report back whatever's
         currently highlighted, truncated to max_chars. The reply (a
         SelectionText) arrives asynchronously through the normal
-        receive path, not as a return value here -- see
-        RadioSubSystem._selection_text_handler."""
+        receive path -- see RadioSubSystem._selection_text_handler."""
         if self.input_source != 'ai':
             return
         self._root.radio.burst(ReadSelectionRequest(max_chars=max_chars))

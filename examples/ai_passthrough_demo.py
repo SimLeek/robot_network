@@ -132,24 +132,11 @@ class AiPassthroughDemo(AISubSystem):
         await asyncio.sleep(2.0)  # same settle reasoning as _play_sine_tone
 
     async def _read_selection_demo(self, desktop: 'DesktopSubSystem'):
-        """Demonstrates DesktopSubSystem.ai_read_selection() -- the
-        result isn't a return value here, it arrives asynchronously as
-        a SelectionText through RadioSubSystem._selection_text_handler
-        (which logs it, and forwards it to an attached AI bridge if
-        there is one). This just triggers the request and gives the
-        reply time to land and log."""
         log.info('[ai-demo] requesting the endpoint\'s highlighted text...')
         desktop.ai_read_selection()
         await asyncio.sleep(2.0)
 
     async def _diagnostic_loop(self, interval_s: float = 1.0, sample_rate: int = 48000):
-        """Continually reports two cheap, human-checkable signals that
-        the AI's video/audio really are live and changing: the hue of
-        the center pixel (in_img is RGB, matching this codebase's own
-        test conventions), and the dominant frequency in the most
-        recent audio chunk (assumes the pipeline-wide 48kHz standard).
-        Runs for the demo's whole lifetime, independent of _run()'s
-        specific action sequence."""
         while True:
             await asyncio.sleep(interval_s)
             img = self.in_img

@@ -8,11 +8,7 @@ works locally, since it's real shared memory, not network transport).
 
 This demonstrates the bridge mechanism itself: two named channels
 ('video', 'audio') carrying continuously-written synthetic data, plus
-bidirectional status messages over the control connection. It does
-NOT yet pull real frames from a live DesktopSubSystem/AISubSystem --
-that wiring, and the actual brain<->AI status signals and lifecycle
-callbacks, are separate, later pieces (see branch_todo.md). This is
-the transport layer they'll all sit on top of.
+bidirectional status messages over the control connection.
 
 Safe to kill and restart at any time -- the bridge keeps listening for
 a fresh AI process if the current one disconnects or crashes, and this
