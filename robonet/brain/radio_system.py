@@ -403,8 +403,8 @@ class RadioSubSystem(SubSystem):
     def _selection_text_handler(self, sm: 'ServerSystem'):
         def handler(hostname: str, obj: SelectionText):
             log.info(f'[selection] {hostname}: {obj.text}')
-            if getattr(sm, 'bridge', None) is not None:
-                sm.bridge.send({'event': 'selection_text', 'text': obj.text})
+            if sm.ai is not None:
+                sm.ai.update_selection_text(obj.text)
         return handler
 
     def _maybe_auto_connect(self, ep: Endpoint):

@@ -24,7 +24,6 @@ class ServerSystem:
         menu: MenuSubSystem,
         displayer: DisplaySubSystem = None,
         ai: AISubSystem = None,
-        bridge: 'BridgeServer' = None,
     ):
         self.radio   = radio
         self.menu = menu
@@ -34,7 +33,6 @@ class ServerSystem:
 
         self.displayer = displayer
         self.ai = ai
-        self.bridge = bridge
         self.active_sub = None
 
         self._shutdown_callbacks: list = []
@@ -74,8 +72,6 @@ class ServerSystem:
         self.menu.start()
         if self.ai is not None:
             self.ai.start()
-        if self.bridge is not None:
-            self.bridge.start()
         if self.active_sub is not None:
             self.active_sub.start()
         if self.displayer is not None:
@@ -84,8 +80,6 @@ class ServerSystem:
     def stop(self):
         if self.ai is not None:
             self.ai.stop()
-        if self.bridge is not None:
-            self.bridge.stop()
         if self.active_sub is not None:
             self.active_sub.stop()
 

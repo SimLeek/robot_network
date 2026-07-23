@@ -20,7 +20,7 @@ lookup with an extra, incorrect condition instead of using it.
 """
 
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from robonet.brain.radio_system import RadioSubSystem
 from robonet.brain.util.network_scanner import Endpoint
@@ -126,44 +126,43 @@ if __name__ == '__main__':
 
 class TestSelectionTextHandler(unittest.TestCase):
     """The brain side of the text-selection feature: always log for a
-    human to see, and forward through the AI bridge (not the endpoint
-    connection -- that's a different, network-facing connection
-    entirely) if one happens to be attached."""
+    human to see, and route through sm.ai (which handles its own
+    optional bridge internally) -- the same pattern MenuSubSystem
+    already uses to fan video/audio out to both displayer and ai,
+    rather than reaching past AISubSystem into a separate sibling."""
 
     def _make_radio_for_selection(self):
         radio = RadioSubSystem.__new__(RadioSubSystem)
         return radio
 
-    def test_forwards_to_the_bridge_when_one_is_attached(self):
+    def test_forwards_to_ai_when_one_is_attached(self):
         radio = self._make_radio_for_selection()
         sm = MagicMock()
-        sm.bridge = MagicMock()
         from robonet.buffers.buffer_objects import SelectionText
 
         handler = radio._selection_text_handler(sm)
         handler('endpoint-host', SelectionText(text='hello from xsel'))
 
-        sm.bridge.send.assert_called_once_with({'event': 'selection_text', 'text': 'hello from xsel'})
+        sm.ai.update_selection_text.assert_called_once_with('hello from xsel')
 
-    def test_does_not_raise_when_no_bridge_is_attached(self):
+    def test_does_not_raise_when_no_ai_is_attached(self):
         radio = self._make_radio_for_selection()
         sm = MagicMock()
-        sm.bridge = None
+        sm.ai = None
         from robonet.buffers.buffer_objects import SelectionText
 
         handler = radio._selection_text_handler(sm)
         handler('endpoint-host', SelectionText(text='hello'))  # must not raise
 
-    def test_does_not_raise_when_server_system_has_no_bridge_attribute_at_all(self):
-        # Defensive getattr fallback -- a ServerSystem-like stand-in
-        # that predates the bridge parameter shouldn't crash this.
+    def test_logs_for_a_human_regardless_of_whether_ai_is_attached(self):
         radio = self._make_radio_for_selection()
-
-        class NoBridgeAttr:
-            pass
-
-        sm = NoBridgeAttr()
+        sm = MagicMock()
+        sm.ai = None
         from robonet.buffers.buffer_objects import SelectionText
 
-        handler = radio._selection_text_handler(sm)
-        handler('endpoint-host', SelectionText(text='hello'))  # must not raise
+        with patch('robonet.brain.radio_system.log') as mock_log:
+            handler = radio._selection_text_handler(sm)
+            handler('endpoint-host', SelectionText(text='some text'))
+
+        logged = ' '.join(str(c.args[0]) for c in mock_log.info.call_args_list)
+        self.assertIn('some text', logged)

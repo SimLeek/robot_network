@@ -56,10 +56,10 @@ class AiPassthroughDemo(AISubSystem):
         self._root = root
 
     def start(self):
-        pass
+        super().start()
 
     def stop(self):
-        pass
+        super().stop()
 
     def async_loops(self, sm):
         return [self._run(), self._diagnostic_loop()]
@@ -181,9 +181,9 @@ async def main(headless: bool):
     radio = RadioSubSystem()
     menu = MenuSubSystem()
     demo = AiPassthroughDemo()
+    demo.bridge = BridgeServer()  # optional: lets a separate real AI process (e.g. examples/shmem_bridge_ai.py) also attach
     disp = None if headless else DisplaySubSystem()
-    bridge = BridgeServer()  # optional: lets a separate real AI process (e.g. examples/shmem_bridge_ai.py) also attach
-    serv = ServerSystem(radio, menu, displayer=disp, ai=demo, bridge=bridge)
+    serv = ServerSystem(radio, menu, displayer=disp, ai=demo)
     serv.start()
 
     loops = serv.async_loops()

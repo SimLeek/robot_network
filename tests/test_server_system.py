@@ -37,7 +37,7 @@ _stub_out_missing_displayarray_font_submodule()
 from robonet.brain.main_system import ServerSystem
 
 
-def _make_server(with_displayer=True, with_ai=False, with_bridge=False):
+def _make_server(with_displayer=True, with_ai=False):
     radio = MagicMock()
     radio.async_loops.return_value = ['radio-loop']
     menu = MagicMock()
@@ -47,8 +47,7 @@ def _make_server(with_displayer=True, with_ai=False, with_bridge=False):
         displayer = MagicMock()
         displayer.run.return_value = 'displayer-loop'
     ai = MagicMock() if with_ai else None
-    bridge = MagicMock() if with_bridge else None
-    return ServerSystem(radio, menu, displayer=displayer, ai=ai, bridge=bridge)
+    return ServerSystem(radio, menu, displayer=displayer, ai=ai)
 
 
 class TestAsyncLoopsHeadless(unittest.TestCase):
@@ -97,30 +96,6 @@ class TestAiSubsystemLifecycle(unittest.TestCase):
 
     def test_no_ai_subsystem_does_not_crash_start_stop_or_async_loops(self):
         server = _make_server(with_displayer=True, with_ai=False)
-        with patch('asyncio.get_running_loop'):
-            server.start()  # must not raise
-        server.async_loops()  # must not raise
-        server.stop()  # must not raise
-
-
-class TestBridgeLifecycle(unittest.TestCase):
-    """Same shape as TestAiSubsystemLifecycle -- an attached bridge
-    needs to actually get started/stopped, and a bridge-less
-    ServerSystem must keep working exactly as before."""
-
-    def test_start_calls_bridge_start(self):
-        server = _make_server(with_displayer=False, with_ai=True, with_bridge=True)
-        with patch('asyncio.get_running_loop'):
-            server.start()
-        server.bridge.start.assert_called_once()
-
-    def test_stop_calls_bridge_stop(self):
-        server = _make_server(with_displayer=False, with_ai=True, with_bridge=True)
-        server.stop()
-        server.bridge.stop.assert_called_once()
-
-    def test_no_bridge_does_not_crash_start_stop_or_async_loops(self):
-        server = _make_server(with_displayer=True, with_ai=False, with_bridge=False)
         with patch('asyncio.get_running_loop'):
             server.start()  # must not raise
         server.async_loops()  # must not raise

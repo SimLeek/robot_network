@@ -14,9 +14,11 @@ from robonet.brain.ai_system import AISubSystem
 
 
 class _ConcreteAISubSystem(AISubSystem):
-    """Minimal concrete subclass -- AISubSystem itself is abstract
-    (start/stop, inherited from SubSystem) and can't be instantiated
-    directly, matching its own docstring."""
+    """A subclass with its own no-op start/stop, for existing tests
+    that predate AISubSystem itself becoming concrete (it gained real
+    start/stop to manage an attached bridge's lifecycle, which
+    incidentally satisfies SubSystem's abstract methods -- AISubSystem()
+    directly works fine now too, see TestBridgeLifecycle below)."""
     def start(self):
         pass
 
@@ -91,3 +93,78 @@ class TestUpdateAudioAcceptsMonoOrStereo(unittest.TestCase):
         ai = _ConcreteAISubSystem()
         ai.update_audio(np.zeros((100, 2), dtype=np.float32))
         self.assertTrue(ai.has_audio)
+
+
+class TestAISubSystemIsConcrete(unittest.TestCase):
+    """Real start()/stop() (managing an attached bridge) incidentally
+    satisfies SubSystem's abstract methods -- AISubSystem itself is
+    now directly instantiable as a "no in-process AI, just a bridge
+    host" configuration."""
+
+    def test_instantiates_directly_with_no_subclass(self):
+        ai = AISubSystem()  # must not raise
+        self.assertIsNone(ai.bridge)
+
+    def test_setup_stores_root(self):
+        ai = AISubSystem()
+        root = object()
+        ai.setup(root)
+        self.assertIs(ai._root, root)
+
+    def test_async_loops_default_is_empty(self):
+        ai = AISubSystem()
+        self.assertEqual(ai.async_loops(None), [])
+
+
+class TestBridgeLifecycle(unittest.TestCase):
+    """AISubSystem owns bridge start/stop now, not ServerSystem --
+    this is the layer that actually needs to test it."""
+
+    def test_start_calls_bridge_start_when_attached(self):
+        from unittest.mock import MagicMock
+        ai = AISubSystem()
+        ai.bridge = MagicMock()
+        ai.start()
+        ai.bridge.start.assert_called_once()
+
+    def test_stop_calls_bridge_stop_when_attached(self):
+        from unittest.mock import MagicMock
+        ai = AISubSystem()
+        ai.bridge = MagicMock()
+        ai.stop()
+        ai.bridge.stop.assert_called_once()
+
+    def test_no_bridge_does_not_crash_start_or_stop(self):
+        ai = AISubSystem()
+        ai.start()  # must not raise
+        ai.stop()   # must not raise
+
+    def test_subclass_must_call_super_to_get_bridge_lifecycle(self):
+        # Documents the contract stated in AISubSystem.start()'s
+        # docstring: a subclass overriding start() without calling
+        # super().start() will NOT get its bridge started.
+        from unittest.mock import MagicMock
+        ai = _ConcreteAISubSystem()  # overrides start()/stop() as bare no-ops
+        ai.bridge = MagicMock()
+        ai.start()
+        ai.bridge.start.assert_not_called()
+
+
+class TestUpdateSelectionText(unittest.TestCase):
+
+    def test_stores_locally_for_an_in_process_ai(self):
+        ai = AISubSystem()
+        ai.update_selection_text('hello from xsel')
+        self.assertEqual(ai.selection_text, 'hello from xsel')
+        self.assertTrue(ai.has_selection_text)
+
+    def test_forwards_through_the_bridge_when_attached(self):
+        from unittest.mock import MagicMock
+        ai = AISubSystem()
+        ai.bridge = MagicMock()
+        ai.update_selection_text('some text')
+        ai.bridge.send.assert_called_once_with({'event': 'selection_text', 'text': 'some text'})
+
+    def test_does_not_raise_with_no_bridge_attached(self):
+        ai = AISubSystem()
+        ai.update_selection_text('some text')  # must not raise
