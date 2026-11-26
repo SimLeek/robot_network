@@ -76,7 +76,9 @@ class DesktopSubSystem(SubSystem):
         self._running = False
         self._bound = False
         self._tasks = []
-        self.handlers = {}
+        self.handlers = {'PointerState': self._on_pointer_state}
+        # last PointerState from the endpoint: screen x, y, cursor shown, when (monotonic)
+        self.pointer: Optional[tuple] = None
 
         self._screen_width, self._screen_height = 1920, 1080
         for s in getattr(endpoint, 'streams', None) or []:
@@ -374,6 +376,20 @@ class DesktopSubSystem(SubSystem):
         dx, dy = round(x1 - x0), round(y1 - y0)  # round once: no truncation drift over many moves
         if dx or dy:
             self._root.radio.burst(MouseMoveRel(dx=dx, dy=dy))
+
+    def _on_pointer_state(self, hostname: str, obj):
+        import time
+        self.pointer = (obj.x, obj.y, bool(obj.visible), time.monotonic())
+
+    def visible_pointer(self, max_age_s: float = 1.0) -> Optional[tuple]:
+        """(screen x, y) if the endpoint recently reported a shown cursor."""
+        import time
+        if self.pointer is None:
+            return None
+        x, y, visible, t = self.pointer
+        if not visible or time.monotonic() - t > max_age_s:
+            return None
+        return x, y
 
     def _ai_frac_to_screen(self, x_frac: float, y_frac: float) -> tuple:
         """Canvas fractions -> screen pixels as floats (no clamping or

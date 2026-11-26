@@ -155,3 +155,15 @@ class Viewport:
 
         return (max(0.0, min(1.0, source_x / source_w)),
                max(0.0, min(1.0, source_y / source_h)))
+
+    def forward_map(self, x_frac: float, y_frac: float, source_w: int, source_h: int,
+                    display_w: int, display_h: int):
+        """Source-frame fraction -> canvas pixel (x, y), the counterpart of
+        inverse_map. None if that point is outside the visible crop."""
+        x0, y0, crop_w, crop_h, out_w, out_h, pad_left, pad_top = compute_crop_and_scale(
+            source_w, source_h, display_w, display_h, self.zoom, self.pan_x, self.pan_y)
+        sx, sy = x_frac * source_w, y_frac * source_h
+        if not (x0 <= sx <= x0 + crop_w and y0 <= sy <= y0 + crop_h):
+            return None
+        actual_scale = min(display_w / source_w, display_h / source_h) * self.zoom
+        return pad_left + (sx - x0) * actual_scale, pad_top + (sy - y0) * actual_scale

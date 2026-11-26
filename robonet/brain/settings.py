@@ -20,6 +20,10 @@ _DEFAULT_SETTINGS: dict[str, Any] = {
 _DEFAULT_ADVANCED_SETTINGS: dict[str, Any] = {
     "ai_res": [640, 480],
     "ai_fps": 30,
+    # Draw a cursor into the AI's frames where the endpoint reports a shown
+    # pointer (menus), ai_cursor_height of the frame height tall.
+    "ai_draw_cursor": True,
+    "ai_cursor_height": 0.04,
     "localhost_enabled": True,
     "our_port": 9999,
     "their_port": 9998,

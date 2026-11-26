@@ -110,6 +110,7 @@ class RobotState(StateMachine):
 
 
 class RobotRadio:
+    _uid_lock = threading.Lock()  # burst ids: bursts can come from more than one thread
     def __init__(self, endpoint_type='robot'):
         self.root = None
         self._sm = RobotState()
@@ -168,9 +169,11 @@ class RobotRadio:
         #log.info(f"burst: {type(obj)}")
         data = pack_obj(obj)
         parts = [data[i: i + 4096] for i in range(0, len(data), 4096)]
-        self._uid = (self._uid + 1) % 256
+        with self._uid_lock:  # bursts can come from more than one thread (e.g. the pointer reporter)
+            self._uid = (self._uid + 1) % 256
+            uid = self._uid
         self._engine.send_burst(
-            self._radio_lock, self._radio, self._uid, parts
+            self._radio_lock, self._radio, uid, parts
         )
 
     def is_streaming(self) -> bool:

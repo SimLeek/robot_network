@@ -553,6 +553,20 @@ class MouseMoveRel(BufferBase):
         self.dy = dy
 
 
+class PointerState(BufferBase):
+    """Desktop client -> server: where the pointer is (screen pixels) and
+    whether a cursor is actually shown. Games that capture the mouse hide
+    it (visible = 0); menus show it. Lets the server draw a cursor the AI
+    can see, whatever the screen capture does with the real one."""
+    type_list    = [SInt32, int]
+    field_codecs = [_int32, _uint32]
+
+    def __init__(self, x: SInt32, y: SInt32, visible: int):
+        self.x = x
+        self.y = y
+        self.visible = visible
+
+
 class ReadSelectionRequest(BufferBase):
     """Brain -> endpoint: run xsel and report back what's currently
     highlighted (the X11 PRIMARY selection).
