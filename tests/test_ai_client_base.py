@@ -135,6 +135,7 @@ class TestOptionalHooks(unittest.TestCase):
         client = HookedClient()
         fake_channel = MagicMock()
         fake_channel.read.side_effect = [b'frame1', None, b'frame2']
+        fake_channel.write_count.side_effect = [1, 2, 3]  # a new write each iteration
         client.bridge.channels = {'video': fake_channel}
         client.bridge.recv = MagicMock(return_value=None)
 
@@ -142,6 +143,33 @@ class TestOptionalHooks(unittest.TestCase):
 
         self.assertEqual(client.channel_data_calls, [('video', b'frame1'), ('video', b'frame2')])
         self.assertEqual(client.tick_count, 3)
+
+    def test_run_does_not_redeliver_an_unchanged_channel(self):
+        from unittest.mock import MagicMock
+
+        delivered = []
+        ticks = []
+
+        class HookedClient(RobonetAIClient):
+            def on_robonet_start(self): pass
+            def on_robonet_shutdown(self): pass
+            def on_robonet_connect(self, n): pass
+            def on_robonet_disconnect(self): pass
+            def on_channel_data(self, label, data): delivered.append(data)
+            def on_tick(self):
+                ticks.append(1)
+                if len(ticks) >= 3:
+                    self.stop()
+
+        client = HookedClient()
+        ch = MagicMock()
+        ch.name = 'video_frame'
+        ch.read.return_value = b'same'
+        ch.write_count.return_value = 7  # writer hasn't written again
+        client.bridge.channels = {'video': ch}
+        client.bridge.recv = MagicMock(return_value=None)
+        client.run(poll_interval_s=0.0)
+        self.assertEqual(delivered, [b'same'])
 
 
 class TestFullLifecycleRealProcesses(unittest.TestCase):
@@ -156,7 +184,7 @@ class TestFullLifecycleRealProcesses(unittest.TestCase):
         server.create_channel('video_ch', capacity_bytes=64, label='video')
         server.start()
 
-        results_queue = mp.Queue()
+        results_queue = mp.get_context("fork").Queue()
 
         def ai_proc():
             client = _RecordingClient(address=address)
@@ -165,7 +193,7 @@ class TestFullLifecycleRealProcesses(unittest.TestCase):
             results_queue.put(client.calls)
             client.close()
 
-        p = mp.Process(target=ai_proc)
+        p = mp.get_context("fork").Process(target=ai_proc)  # local target: forkserver (3.14 default) can't pickle it
         p.start()
 
         t_end = time.time() + 10

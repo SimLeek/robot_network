@@ -1,15 +1,15 @@
 # todo: need to complete subsystem switching
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
-from robonet.brain.display_system import DisplaySubSystem
+if TYPE_CHECKING:  # displayarray is only needed with a window, not headless
+    from robonet.brain.display_system import DisplaySubSystem
 from robonet.brain.ai_system import AISubSystem
 from robonet.brain.menu_system import MenuSubSystem
 from robonet.brain.radio_system import RadioSubSystem
 import robonet.brain.settings as settings_
 from robonet.brain.util.action_factory import ActionFactory
-from robonet.brain.util.desktop_window_config import register_desktop_actions
 from robonet.brain.util.system_base import SubSystem
 from robonet.logging_setup import setup_logging
 import asyncio
@@ -22,7 +22,7 @@ class ServerSystem:
         self,
         radio: RadioSubSystem,
         menu: MenuSubSystem,
-        displayer: DisplaySubSystem = None,
+        displayer: 'DisplaySubSystem' = None,
         ai: AISubSystem = None,
     ):
         self.radio   = radio
@@ -96,6 +96,7 @@ class ServerSystem:
         # Re-register controls with a fresh ActionFactory
 
         if self.displayer:
+            from robonet.brain.util.desktop_window_config import register_desktop_actions
             self.displayer.af_thru.unbind_all()
             self.displayer.af_edit.unbind_all()
             register_desktop_actions(self.displayer.af_thru, self.displayer.af_edit, self)

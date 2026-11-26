@@ -267,9 +267,14 @@ class TestSelectionMenuLocalhostGating(unittest.TestCase):
 
     def test_enter_on_enabled_local_calls_switch_mode(self):
         menu = self._make_menu(localhost_enabled=True)
-        with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=[]):
-            menu._cursor = 0
-            menu._handle_radio_key('enter')
+
+        async def press_enter():  # the menu schedules switch_mode on the running loop
+            with patch.object(SelectionMenu, 'get_unique_endpoints', return_value=[]):
+                menu._cursor = 0
+                menu._handle_radio_key('enter')
+            await asyncio.sleep(0)
+
+        asyncio.run(press_enter())
         menu.root.radio.switch_mode.assert_called_once()
 
 

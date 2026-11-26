@@ -18,6 +18,7 @@ from robonet.buffers.buffer_objects import (
 )
 from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC, AI_SUPPORTED_KEYS
 from robonet.endpoint.desktop_capture import DesktopCaptureError
+from robonet.killswitch import KILL_COMBO  # always blocked: robonet must never fire its own kill switch
 from robonet.endpoint.hardware_system import MultiAVRobotHardware
 from robonet.endpoint.radio_system import HOSTNAME
 from robonet.gst_io.devices import find_camera_devices, get_first_mic_device, get_first_speaker_device, DeviceNotFoundError
@@ -61,6 +62,32 @@ except Exception as _e:
 # abstraction the way it does for Keys, so this is pyglet-specific; a
 # different backend would need revisiting, same as the keycode mapping.
 _MOUSE_BUTTON_NAMES = {1: 'left', 4: 'right', 2: 'middle'}
+
+_KEY_ALIASES = {
+    'shiftleft': 'shift', 'shiftright': 'shift',
+    'ctrlleft': 'ctrl', 'ctrlright': 'ctrl', 'control': 'ctrl',
+    'altleft': 'alt', 'altright': 'alt', 'option': 'alt',
+    'winleft': 'win', 'winright': 'win', 'super': 'win', 'command': 'win',
+}
+
+
+def _norm_key(name: str) -> str:
+    name = name.lower()
+    return _KEY_ALIASES.get(name, name)
+
+
+def completes_blocked_combo(key: str, held, modifiers: str, combos) -> bool:
+    """True if pressing `key` while `held` keys (and the KeyEvent's
+    modifiers string, e.g. 'ctrl,alt') are down completes a combo in
+    `combos` (list of lists of key names)."""
+    k = _norm_key(key)
+    down = {_norm_key(h) for h in held} | {_norm_key(m) for m in modifiers.split(',') if m} | {k}
+    for combo in combos or ():
+        c = {_norm_key(x) for x in combo}
+        if k in c and c <= down:
+            return True
+    return False
+
 
 DESKTOP_VIDEO_ID = 'desktop'
 DESKTOP_AUDIO_IN_ID = 'desktop-audio'
@@ -160,6 +187,13 @@ class DesktopHw(MultiAVRobotHardware):
 
         self._held_keys: dict = {}   # key name -> last refresh time (monotonic)
         self._held_buttons: set = set()
+        self.blocked_presses = 0
+        try:
+            configured = list(settings['blocked_key_combos'] or [])
+        except KeyError:
+            configured = []
+        self.blocked_combos = [*configured, list(KILL_COMBO)]
+        log.info(f'[hardware] blocked key combos: {self.blocked_combos}')
         self._kw_stop = threading.Event()
         self._kw_thread: threading.Thread = None
 
@@ -186,6 +220,12 @@ class DesktopHw(MultiAVRobotHardware):
     def _on_key_event(self, hostname: str, obj: KeyEvent):
         try:
             if obj.pressed:
+                if obj.key not in self._held_keys and completes_blocked_combo(
+                        obj.key, self._held_keys, obj.modifiers or '', self.blocked_combos):
+                    self.blocked_presses += 1
+                    log.warning(f'[hardware] blocked key press {obj.key!r} '
+                                f'(held={sorted(self._held_keys)}, modifiers={obj.modifiers!r})')
+                    return
                 if obj.key not in self._held_keys:
                     pyautogui.keyDown(obj.key)
                 # Already-held keys just refresh their watchdog stamp --

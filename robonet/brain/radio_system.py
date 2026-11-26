@@ -59,6 +59,7 @@ class RadioSubSystem(SubSystem):
 
         self._scanner_task: Optional[asyncio.Task] = None  # put here so init exceptions are cleaner
         self._mode = None
+        self._mode_is_set_up = False  # _setup_mode() has run for self._mode
         self.radio = None
         self.dish = None
 
@@ -169,6 +170,7 @@ class RadioSubSystem(SubSystem):
 
     def _setup_mode(self, mode: NetMode):
         """Synchronous setup for the given mode. Called by start() and switch_mode()."""
+        self._mode_is_set_up = True
         if mode == self.NetMode.LOCALHOST:
             self.connect_additional('127.0.0.1')
         elif mode == self.NetMode.WIFI:
@@ -328,6 +330,10 @@ class RadioSubSystem(SubSystem):
                     #    ep = copy(v)
                     ep = v  # should copy because immutable, probably
                     break
+            if ep is None and self._mode == self.NetMode.LOCALHOST:
+                # The scanner never sees 127.0.0.1 (it reads the ARP cache).
+                ep = Endpoint(ip='127.0.0.1', hostname=hostname, endpoint_type=endpoint_type,
+                              reachable=True)
             if ep is None:
                 log.error("Could not find endpoint with IP. Cannot communicate. Must discard.")
                 return
@@ -423,7 +429,11 @@ class RadioSubSystem(SubSystem):
 
     async def transmit_who_are_you(self):
         """Probe a specific endpoint that we want to connect to."""
-        probe = WhoAreYou(ip=self.our_ip if self.our_ip else '')
+        if self._mode == self.NetMode.LOCALHOST:
+            ip = '127.0.0.1'  # the endpoint replies to whatever IP we give it
+        else:
+            ip = self.our_ip if self.our_ip else ''
+        probe = WhoAreYou(ip=ip)
         self.burst(probe)
 
     async def transmit_capabilities(self, hostname, typename):
@@ -449,7 +459,9 @@ class RadioSubSystem(SubSystem):
 
     async def probe_loop(self):
         while True:
-            if self.is_scanning:
+            # Localhost mode has no subnet scanner, but still has to ask
+            # the endpoint on 127.0.0.1 who it is.
+            if self.is_scanning or self._mode == self.NetMode.LOCALHOST:
                 # currently there's no way to send only to a specific endpoint
                 # So, for now, just send to all
                 # todo: add endpoint specific transmission
@@ -486,6 +498,8 @@ class RadioSubSystem(SubSystem):
         """Make sure we're actually in `mode`."""
         if self._mode != mode:
             await self.switch_mode(mode)
+        elif not self._mode_is_set_up:
+            self._setup_mode(mode)  # the starting mode: nothing has set it up yet
         if mode != self.NetMode.LOCALHOST and not self.is_scanning:
             await self.start_scanner_task()
 

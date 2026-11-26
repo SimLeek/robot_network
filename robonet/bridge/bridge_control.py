@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import socket
 import threading
 import time
 from dataclasses import dataclass
@@ -77,6 +78,7 @@ class BridgeServer:
         self._health_last_time: Optional[float] = None
         self.ai_alive_at: Optional[float] = None    # last heartbeat received from the AI side
         self.ai_wants_control: Optional[str] = None  # last 'ai'/'human' preference reported by the AI side
+        self._sticky: Dict[str, Any] = {}  # key -> last message, replayed to every newly-connected AI
 
     def create_channel(self, name: str, capacity_bytes: int, label: str) -> ShmemChannel:
         """Creates (or recreates) a named shared memory channel this
@@ -102,7 +104,13 @@ class BridgeServer:
         if ch is None or len(data) > ch.capacity_bytes:
             capacity = max(len(data) * 2, 4096)
             ch = self.create_channel(name, capacity_bytes=capacity, label=label)
+            # An AI that connected before this channel existed (or before
+            # it was resized) only saw the old handshake -- re-announce.
+            self.send({'event': 'channels', 'channels': self.channel_specs()})
         ch.write(data)
+
+    def channel_specs(self) -> list:
+        return [ChannelSpec(ch.name, ch.capacity_bytes, ch.label) for ch in self.channels.values()]
 
     @property
     def connected(self) -> bool:
@@ -130,8 +138,7 @@ class BridgeServer:
             with self._conn_lock:
                 self._conn = conn
             try:
-                conn.send({'channels': [ChannelSpec(ch.name, ch.capacity_bytes, ch.label)
-                                        for ch in self.channels.values()]})
+                conn.send({'channels': self.channel_specs()})
                 # The earliest point a freshly-connecting AI can learn
                 # robonet is running -- regardless of whether robonet
                 # actually started 5 seconds or 5 hours before this
@@ -143,6 +150,8 @@ class BridgeServer:
                     # attached -- replay it as a normal connect event,
                     # reusing the exact same callback path.
                     conn.send({'event': 'connect', 'endpoint': self._connected_endpoint})
+                for msg in list(self._sticky.values()):
+                    conn.send(msg)
             except (OSError, EOFError):
                 with self._conn_lock:
                     self._conn = None
@@ -198,6 +207,12 @@ class BridgeServer:
             return True
         except (OSError, EOFError):
             return False
+
+    def send_sticky(self, key: str, message: Any) -> bool:
+        """send(), and also replay this message to any AI that connects
+        later (replacing the previous message under the same key)."""
+        self._sticky[key] = message
+        return self.send(message)
 
     def recv(self, timeout_s: float = 0.0) -> Optional[Any]:
         """Non-blocking by default. Returns None if there's nothing
@@ -262,6 +277,14 @@ class BridgeServer:
             except OSError:
                 pass
         if self._listener is not None:
+            # close() alone doesn't wake a thread blocked in accept() on
+            # Linux; shutting the listening socket down does.
+            sock = getattr(getattr(self._listener, '_listener', None), '_socket', None)
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
             try:
                 self._listener.close()
             except OSError:
@@ -308,7 +331,20 @@ class BridgeClient:
             self._conn = None
             return False
 
-        for spec in handshake.get('channels', []):
+        self.attach(handshake.get('channels', []))
+        return True
+
+    def attach(self, specs) -> None:
+        """Attach to every channel in specs, re-attaching any whose
+        segment name or size changed (the server re-announces after it
+        creates or grows a channel)."""
+        for spec in specs:
+            old = self._specs.get(spec.label)
+            if old is not None and old.name == spec.name and old.capacity_bytes == spec.capacity_bytes \
+                    and spec.label in self.channels:
+                continue
+            if spec.label in self.channels:
+                self.channels.pop(spec.label).close()
             self._specs[spec.label] = spec
             for attempt in range(20):
                 try:
@@ -320,7 +356,6 @@ class BridgeClient:
             else:
                 log.error(f'[bridge] could not attach to channel {spec.name!r} '
                          f'({spec.label}) after repeated retries')
-        return True
 
     def send(self, message: Any) -> bool:
         if self._conn is None:

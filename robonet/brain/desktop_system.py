@@ -377,9 +377,9 @@ class DesktopSubSystem(SubSystem):
         self._root.radio.burst(MouseEvent(event_type=3, x=0, y=0, button=0, delta=int(delta)))
 
     def ai_key_press(self, key: str, modifiers: str = ''):
-        self._held_keys_brain[key] = modifiers  # tracked regardless of gating -- see _on_keyboard
         if self.input_source != 'ai':
-            return
+            return  # not tracked either: the refresh loop would send it anyway
+        self._held_keys_brain[key] = modifiers
         self._root.radio.burst(KeyEvent(key=key, pressed=True, modifiers=modifiers))
 
     def ai_key_release(self, key: str, modifiers: str = ''):

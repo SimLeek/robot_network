@@ -61,6 +61,12 @@ class _FakeRadio:
         self._is_scanning = False
         self.switch_mode_calls = []
         self.start_scanner_calls = 0
+        self._mode_is_set_up = True
+        self.setup_mode_calls = []
+
+    def _setup_mode(self, mode):
+        self.setup_mode_calls.append(mode)
+        self._mode_is_set_up = True
 
     @property
     def is_scanning(self):
@@ -152,6 +158,16 @@ class TestEnsureModeActive(unittest.IsolatedAsyncioTestCase):
         await radio._ensure_mode_active(_NetMode.WIRED)
 
         self.assertEqual(radio.switch_mode_calls, [_NetMode.WIRED])
+
+    async def test_sets_up_the_starting_mode_once_if_nothing_has(self):
+        radio = _FakeRadio(start_mode=_NetMode.LOCALHOST)
+        radio._mode_is_set_up = False  # RadioSubSystem.start() is never called by ServerSystem
+
+        await radio._ensure_mode_active(_NetMode.LOCALHOST)
+        await radio._ensure_mode_active(_NetMode.LOCALHOST)
+
+        self.assertEqual(radio.setup_mode_calls, [_NetMode.LOCALHOST])
+        self.assertEqual(radio.switch_mode_calls, [])
 
     async def test_no_switch_when_already_in_mode(self):
         radio = _FakeRadio(start_mode=_NetMode.WIRED)

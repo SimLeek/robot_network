@@ -34,6 +34,13 @@ _SETTINGS: dict[str, Any] = {
     "camera_device": None,
     "mic_device": None,
     "speaker_device": None,
+
+    # Key combos the endpoint refuses to press, whoever sends them. Each
+    # entry is a list of pyautogui key names; a press is dropped when it
+    # completes a combo (its key is in the list and every other key in
+    # the list is already held). Left/right variants collapse to one
+    # name: shift, ctrl, alt, win. E.g. [["f11"], ["alt", "f4"]].
+    "blocked_key_combos": [],
 }
 
 _DEFAULT_PATH = Path.home() / ".robotar" / "settings.json"

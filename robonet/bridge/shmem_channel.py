@@ -69,7 +69,17 @@ class ShmemChannel:
         if create:
             self._shm = SharedMemory(name=name, create=True, size=total_size)
         else:
-            self._shm = SharedMemory(name=name, create=False)
+            # Attaching side never owns the segment: keep the resource
+            # tracker from unlinking it when this (AI) process exits.
+            try:
+                self._shm = SharedMemory(name=name, create=False, track=False)  # 3.13+
+            except TypeError:
+                self._shm = SharedMemory(name=name, create=False)
+                try:
+                    from multiprocessing import resource_tracker
+                    resource_tracker.unregister(self._shm._name, 'shared_memory')
+                except Exception:
+                    pass
             if self._shm.size < total_size:
                 self._shm.close()
                 raise ValueError(f"shared memory segment {name!r} is smaller "
