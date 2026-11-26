@@ -403,7 +403,8 @@ class TestDesktopSubSystemLifecycle(unittest.TestCase):
         self.assertIsNone(sub._root)
         self.assertFalse(sub._running)
         self.assertFalse(sub._bound)
-        self.assertEqual(sub.handlers, {})
+        self.assertEqual(set(sub.handlers), {'PointerState'})  # the endpoint's pointer reports
+        self.assertIsNone(sub.pointer)
 
     def test_setup_stores_root(self):
         from robonet.brain.desktop_system import DesktopSubSystem

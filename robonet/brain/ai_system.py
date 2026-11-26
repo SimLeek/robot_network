@@ -56,7 +56,7 @@ class AISubSystem(SubSystem):
         self.action_counts: dict = {}
         self.recent_actions = collections.deque(maxlen=50)
 
-    _ACTION_EVENTS = ('key', 'mouse_move', 'mouse_button', 'scroll', 'token')
+    _ACTION_EVENTS = ('key', 'mouse_move', 'mouse_move_rel', 'mouse_button', 'scroll', 'token')
 
     def setup(self, root):
         self._root = root
@@ -136,13 +136,16 @@ class AISubSystem(SubSystem):
                 self._ai_held_keys.discard(msg['key'])
         elif event == 'mouse_move':
             desk.ai_mouse_move(float(msg['x']), float(msg['y']))
+        elif event == 'mouse_move_rel':
+            desk.ai_mouse_move_rel(float(msg['dx']), float(msg['dy']))
         elif event == 'mouse_button':
+            button, at_current = msg.get('button', 'left'), bool(msg.get('at_current', False))
             if msg.get('pressed'):
-                desk.ai_mouse_press(msg.get('button', 'left'))
-                self._ai_held_buttons.add(msg.get('button', 'left'))
+                desk.ai_mouse_press(button, at_current=at_current)
+                self._ai_held_buttons.add(button)
             else:
-                desk.ai_mouse_release(msg.get('button', 'left'))
-                self._ai_held_buttons.discard(msg.get('button', 'left'))
+                desk.ai_mouse_release(button, at_current=at_current)
+                self._ai_held_buttons.discard(button)
         elif event == 'scroll':
             desk.ai_scroll(int(msg['delta']))
         elif event == 'token':
@@ -158,7 +161,7 @@ class AISubSystem(SubSystem):
                 desk.ai_key_release(key)
         for button in list(self._ai_held_buttons):
             if desk is not None:
-                desk.ai_mouse_release(button)
+                desk.ai_mouse_release(button, at_current=True)
         self._ai_held_keys.clear()
         self._ai_held_buttons.clear()
 

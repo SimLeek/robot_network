@@ -11,6 +11,7 @@ import numpy as np
 from robonet.brain.robot_system import RobotSubSystem
 from robonet.brain.desktop_system import DesktopSubSystem
 from robonet.brain.util.action_factory import ActionFactory
+from robonet.brain.util.cursor import draw_cursor
 from robonet.brain.util.selection_menu import SelectionMenu, MenuVisState
 from robonet.brain.util.system_base import SubSystem
 from robonet.brain.util.viewport import Viewport
@@ -273,17 +274,38 @@ class MenuSubSystem(SubSystem):
                 else:
                     img = self._fallback_viewport.apply(img, display_w, display_h)
             img = self._menu.composite(img)
+            ai_img = self._with_cursor(img) if self.root.ai is not None else img
             if self.root.displayer is not None:
                 self.root.displayer.update_frame(img)
                 if self.last_audio is not None:
                     self.root.displayer.update_audio(self.last_audio)
             if self.root.ai is not None:
-                self.root.ai.update_frame(img)
+                self.root.ai.update_frame(ai_img)
                 if self.last_audio is not None:
                     self.root.ai.update_audio(self.last_audio)
             t1 = time.time()
             t_remain = max(0.0, 1.0/self.fps - (t1-t0))
             await asyncio.sleep(t_remain)
+
+    def _with_cursor(self, img):
+        """The AI's copy of the frame with a cursor drawn where the endpoint
+        says the pointer is, when a cursor is shown there (menus, not a game
+        that captures the mouse). Screen captures often leave the real cursor
+        out or make it a few pixels in a downscaled frame."""
+        active = self.root.active_sub
+        if img is None or not settings["ai_draw_cursor"] or not isinstance(active, DesktopSubSystem):
+            return img
+        ptr = active.visible_pointer()
+        src = self.last_img
+        if ptr is None or src is None:
+            return img
+        source_h, source_w = src.shape[:2]
+        display_w, display_h = self.out_res
+        at = active.viewport.forward_map(ptr[0] / active._screen_width, ptr[1] / active._screen_height,
+                                         source_w, source_h, display_w, display_h)
+        if at is None:
+            return img
+        return draw_cursor(img.copy(), at[0], at[1], settings["ai_cursor_height"] * display_h)
 
     def async_loops(self, *args):
         return [self.timeout_loop(), self.send_frames_always()]

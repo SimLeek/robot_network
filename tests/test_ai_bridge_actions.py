@@ -173,3 +173,90 @@ class TestLateChannel(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestRelativeMouse(unittest.TestCase):
+    def test_message_round_trips_with_negative_offsets(self):
+        from robonet.buffers.buffer_handling import pack_obj, unpack_obj
+        from robonet.buffers.buffer_objects import MouseMoveRel
+        obj = unpack_obj(pack_obj(MouseMoveRel(dx=-37, dy=120)))
+        self.assertIsInstance(obj, MouseMoveRel)
+        self.assertEqual((obj.dx, obj.dy), (-37, 120))
+
+    def test_ai_relative_move_sends_pixel_offsets_not_positions(self):
+        from robonet.buffers.buffer_objects import MouseMoveRel
+        ai, desk, root = _ai_with_desktop()
+        ai.handle_bridge_message({'event': 'want_control', 'value': 'ai'})
+        ai._apply_control()
+        for _ in range(3):  # three small moves add up: nothing re-anchors at the centre
+            ai.handle_bridge_message({'event': 'mouse_move_rel', 'dx': 0.01, 'dy': -0.02})
+        sent = [e for e in _bursts(root) if isinstance(e, MouseMoveRel)]
+        self.assertEqual([(e.dx, e.dy) for e in sent], [(19, -22)] * 3)  # 0.01*1920=19.2, -0.02*1080=-21.6
+        self.assertFalse(any(isinstance(e, MouseEvent) and e.event_type == 0 for e in _bursts(root)))
+
+    def test_click_at_current_does_not_move_the_pointer(self):
+        from robonet.buffers.buffer_objects import MOUSE_AT_CURRENT
+        ai, desk, root = _ai_with_desktop()
+        ai.handle_bridge_message({'event': 'want_control', 'value': 'ai'})
+        ai._apply_control()
+        ai.handle_bridge_message({'event': 'mouse_button', 'button': 'left', 'pressed': True, 'at_current': True})
+        e = _bursts(root)[-1]
+        self.assertEqual((e.event_type, e.x, e.y), (1, MOUSE_AT_CURRENT, MOUSE_AT_CURRENT))
+
+    def test_endpoint_moves_relatively_and_clicks_in_place(self):
+        from unittest.mock import patch
+        from robonet.buffers.buffer_objects import MouseMoveRel, MouseEvent as ME, MOUSE_AT_CURRENT
+        from robonet.endpoint import desktop_hardware as dh
+        hw = dh.DesktopHw.__new__(dh.DesktopHw)
+        hw._held_buttons = set()
+        with patch.object(dh, 'pyautogui') as pg:
+            hw._on_mouse_move_rel('brain', MouseMoveRel(dx=5, dy=-7))
+            hw._on_mouse_event('brain', ME(event_type=1, x=MOUSE_AT_CURRENT, y=MOUSE_AT_CURRENT, button=1, delta=0))
+            hw._on_mouse_event('brain', ME(event_type=2, x=10, y=20, button=1, delta=0))
+        pg.moveRel.assert_called_once_with(5, -7)
+        pg.mouseDown.assert_called_once_with(button='left')
+        pg.mouseUp.assert_called_once_with(x=10, y=20, button='left')
+
+
+class TestSpoofedCursor(unittest.TestCase):
+    def test_pointer_state_round_trips(self):
+        from robonet.buffers.buffer_handling import pack_obj, unpack_obj
+        from robonet.buffers.buffer_objects import PointerState
+        o = unpack_obj(pack_obj(PointerState(x=959, y=603, visible=1)))
+        self.assertEqual((o.x, o.y, o.visible), (959, 603, 1))
+
+    def test_forward_map_inverts_inverse_map_with_zoom_and_pan(self):
+        from robonet.brain.util.viewport import Viewport
+        v = Viewport()
+        v.zoom_by(2.0, 1920, 1080, 640, 360)
+        v.pan_by(0.1, -0.05, 1920, 1080, 640, 360)
+        for fx, fy in ((0.5, 0.5), (0.31, 0.62), (0.7, 0.4)):
+            cx, cy = v.forward_map(fx, fy, 1920, 1080, 640, 360)
+            bx, by = v.inverse_map(cx / 640, cy / 360, 1920, 1080, 640, 360)
+            self.assertAlmostEqual(bx, fx, places=3)
+            self.assertAlmostEqual(by, fy, places=3)
+        self.assertIsNone(v.forward_map(0.01, 0.01, 1920, 1080, 640, 360))  # outside the zoomed crop
+
+    def _menu_with_pointer(self, visible, age=0.0):
+        import time
+        import numpy as np
+        from robonet.brain.menu_system import MenuSubSystem
+        m = MenuSubSystem.__new__(MenuSubSystem)
+        m.out_res = (640, 360)
+        m.last_img = np.zeros((1080, 1920, 3), np.uint8)
+        ai, desk, root = _ai_with_desktop()
+        desk._screen_width, desk._screen_height = 1920, 1080
+        desk.pointer = (960, 540, visible, time.monotonic() - age)
+        root.active_sub = desk
+        m.root = root
+        return m
+
+    def test_cursor_drawn_at_the_pointer_only_when_shown_and_recent(self):
+        import numpy as np
+        frame = np.zeros((360, 640, 3), np.uint8)
+        out = self._menu_with_pointer(True)._with_cursor(frame)
+        self.assertTrue((frame == 0).all())  # the original (also the human's frame) is untouched
+        tip_region = out[181:190, 320:325]
+        self.assertGreater(int(tip_region.max()), 200)  # white arrow just below-right of (320, 180)
+        self.assertTrue((self._menu_with_pointer(False)._with_cursor(frame) == 0).all())  # game hides it
+        self.assertTrue((self._menu_with_pointer(True, age=5.0)._with_cursor(frame) == 0).all())  # stale

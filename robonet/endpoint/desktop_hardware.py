@@ -14,7 +14,8 @@ import time
 import numpy as np
 
 from robonet.buffers.buffer_objects import (
-    KeyEvent, MouseEvent, RobotCapabilities, ReadSelectionRequest, SelectionText,
+    KeyEvent, MouseEvent, MouseMoveRel, MOUSE_AT_CURRENT, PointerState, RobotCapabilities, ReadSelectionRequest,
+    SelectionText,
 )
 from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC, AI_SUPPORTED_KEYS
 from robonet.endpoint.desktop_capture import DesktopCaptureError
@@ -194,6 +195,8 @@ class DesktopHw(MultiAVRobotHardware):
         self._held_keys: dict = {}   # key name -> last refresh time (monotonic)
         self._held_buttons: set = set()
         self.blocked_presses = 0
+        self._ptr_thread: threading.Thread = None
+        self._last_pointer = None
         try:
             configured = list(settings['blocked_key_combos'] or [])
         except KeyError:
@@ -208,6 +211,8 @@ class DesktopHw(MultiAVRobotHardware):
         self._kw_stop.clear()
         self._kw_thread = threading.Thread(target=self._key_watchdog_loop, daemon=True)
         self._kw_thread.start()
+        self._ptr_thread = threading.Thread(target=self._pointer_loop, daemon=True)
+        self._ptr_thread.start()
         log.info(f'Desktop hardware started (video source: {self._active_video})')
 
     def build_capabilities(self) -> RobotCapabilities:
@@ -218,6 +223,7 @@ class DesktopHw(MultiAVRobotHardware):
         return super().handlers | {
             'KeyEvent': self._on_key_event,
             'MouseEvent': self._on_mouse_event,
+            'MouseMoveRel': self._on_mouse_move_rel,
             'ReadSelectionRequest': self._on_read_selection_request,
         }
 
@@ -251,10 +257,16 @@ class DesktopHw(MultiAVRobotHardware):
             if obj.event_type == 0:      # move
                 pyautogui.moveTo(obj.x, obj.y)
             elif obj.event_type == 1:    # press
-                pyautogui.mouseDown(x=obj.x, y=obj.y, button=button)
+                if obj.x == MOUSE_AT_CURRENT and obj.y == MOUSE_AT_CURRENT:
+                    pyautogui.mouseDown(button=button)
+                else:
+                    pyautogui.mouseDown(x=obj.x, y=obj.y, button=button)
                 self._held_buttons.add(button)
             elif obj.event_type == 2:    # release
-                pyautogui.mouseUp(x=obj.x, y=obj.y, button=button)
+                if obj.x == MOUSE_AT_CURRENT and obj.y == MOUSE_AT_CURRENT:
+                    pyautogui.mouseUp(button=button)
+                else:
+                    pyautogui.mouseUp(x=obj.x, y=obj.y, button=button)
                 self._held_buttons.discard(button)
             elif obj.event_type == 3:    # scroll
                 pyautogui.scroll(obj.delta)
@@ -262,6 +274,14 @@ class DesktopHw(MultiAVRobotHardware):
             log.warning('pyautogui failsafe triggered (mouse in corner) -- ignoring mouse event')
         except Exception as e:
             log.error(f'MouseEvent replay failed (type={obj.event_type}): {e}')
+
+    def _on_mouse_move_rel(self, hostname: str, obj: MouseMoveRel):
+        try:
+            pyautogui.moveRel(obj.dx, obj.dy)
+        except pyautogui.FailSafeException:
+            log.warning('pyautogui failsafe triggered (mouse in corner) -- ignoring mouse move')
+        except Exception as e:
+            log.error(f'MouseMoveRel replay failed: {e}')
 
     def _on_read_selection_request(self, hostname: str, obj: ReadSelectionRequest):
         """Runs xsel to read the X11 PRIMARY selection (whatever's
@@ -312,6 +332,38 @@ class DesktopHw(MultiAVRobotHardware):
     def halt(self):
         self._release_all_held()
 
+    # -- pointer reporting ---------------------------------------------------
+
+    def _pointer_loop(self, hz: float = 30.0, resend_s: float = 0.5):
+        """Report the pointer position and whether a cursor is shown (XFixes
+        cursor image has any opaque pixel) whenever it changes, and at least
+        every resend_s. Without XFixes, nothing is reported."""
+        try:
+            from Xlib import display as xdisplay
+            d = xdisplay.Display()
+            d.xfixes_query_version()
+            root = d.screen().root
+        except Exception as e:
+            log.info(f'[hardware] no pointer reporting (XFixes unavailable: {e})')
+            return
+        last_sent = 0.0
+        while not self._kw_stop.wait(1.0 / hz):
+            try:
+                img = d.xfixes_get_cursor_image(root)
+                visible = int(any((p >> 24) & 0xFF for p in img.cursor_image))
+                state = (int(img.x), int(img.y), visible)
+            except Exception as e:
+                log.debug(f'[hardware] cursor query failed: {e}')
+                continue
+            now = time.monotonic()
+            if state != self._last_pointer or now - last_sent > resend_s:
+                self._last_pointer, last_sent = state, now
+                loop = getattr(self.root, 'loop', None) if self.root is not None else None
+                if loop is not None:
+                    # the radio is an asyncio zmq socket: send from the event loop's thread
+                    loop.call_soon_threadsafe(self.root.radio.burst,
+                                              PointerState(x=state[0], y=state[1], visible=state[2]))
+
     def _key_watchdog_sweep(self, now: float):
         for key, last in list(self._held_keys.items()):
             if now - last > KEY_WATCHDOG_TIMEOUT_S:
@@ -331,6 +383,8 @@ class DesktopHw(MultiAVRobotHardware):
         self._kw_stop.set()
         if self._kw_thread is not None:
             self._kw_thread.join(timeout=1.0)
+        if self._ptr_thread is not None:
+            self._ptr_thread.join(timeout=1.0)
         self._release_all_held()
         super().stop()
 
