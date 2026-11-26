@@ -173,3 +173,46 @@ class TestLateChannel(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestRelativeMouse(unittest.TestCase):
+    def test_message_round_trips_with_negative_offsets(self):
+        from robonet.buffers.buffer_handling import pack_obj, unpack_obj
+        from robonet.buffers.buffer_objects import MouseMoveRel
+        obj = unpack_obj(pack_obj(MouseMoveRel(dx=-37, dy=120)))
+        self.assertIsInstance(obj, MouseMoveRel)
+        self.assertEqual((obj.dx, obj.dy), (-37, 120))
+
+    def test_ai_relative_move_sends_pixel_offsets_not_positions(self):
+        from robonet.buffers.buffer_objects import MouseMoveRel
+        ai, desk, root = _ai_with_desktop()
+        ai.handle_bridge_message({'event': 'want_control', 'value': 'ai'})
+        ai._apply_control()
+        for _ in range(3):  # three small moves add up: nothing re-anchors at the centre
+            ai.handle_bridge_message({'event': 'mouse_move_rel', 'dx': 0.01, 'dy': -0.02})
+        sent = [e for e in _bursts(root) if isinstance(e, MouseMoveRel)]
+        self.assertEqual([(e.dx, e.dy) for e in sent], [(19, -22)] * 3)  # 0.01*1920=19.2, -0.02*1080=-21.6
+        self.assertFalse(any(isinstance(e, MouseEvent) and e.event_type == 0 for e in _bursts(root)))
+
+    def test_click_at_current_does_not_move_the_pointer(self):
+        from robonet.buffers.buffer_objects import MOUSE_AT_CURRENT
+        ai, desk, root = _ai_with_desktop()
+        ai.handle_bridge_message({'event': 'want_control', 'value': 'ai'})
+        ai._apply_control()
+        ai.handle_bridge_message({'event': 'mouse_button', 'button': 'left', 'pressed': True, 'at_current': True})
+        e = _bursts(root)[-1]
+        self.assertEqual((e.event_type, e.x, e.y), (1, MOUSE_AT_CURRENT, MOUSE_AT_CURRENT))
+
+    def test_endpoint_moves_relatively_and_clicks_in_place(self):
+        from unittest.mock import patch
+        from robonet.buffers.buffer_objects import MouseMoveRel, MouseEvent as ME, MOUSE_AT_CURRENT
+        from robonet.endpoint import desktop_hardware as dh
+        hw = dh.DesktopHw.__new__(dh.DesktopHw)
+        hw._held_buttons = set()
+        with patch.object(dh, 'pyautogui') as pg:
+            hw._on_mouse_move_rel('brain', MouseMoveRel(dx=5, dy=-7))
+            hw._on_mouse_event('brain', ME(event_type=1, x=MOUSE_AT_CURRENT, y=MOUSE_AT_CURRENT, button=1, delta=0))
+            hw._on_mouse_event('brain', ME(event_type=2, x=10, y=20, button=1, delta=0))
+        pg.moveRel.assert_called_once_with(5, -7)
+        pg.mouseDown.assert_called_once_with(button='left')
+        pg.mouseUp.assert_called_once_with(x=10, y=20, button='left')

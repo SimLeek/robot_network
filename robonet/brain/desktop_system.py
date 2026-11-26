@@ -16,7 +16,9 @@ from robonet.brain.util.system_base import SubSystem
 from robonet.brain.util.viewport import Viewport
 import numpy as np
 
-from robonet.buffers.buffer_objects import KeyEvent, MouseEvent, ReadSelectionRequest, SparseVectorBuffer
+from robonet.buffers.buffer_objects import (
+    KeyEvent, MouseEvent, MouseMoveRel, MOUSE_AT_CURRENT, ReadSelectionRequest, SparseVectorBuffer,
+)
 from robonet.logging_setup import setup_logging
 
 log = setup_logging()
@@ -360,19 +362,46 @@ class DesktopSubSystem(SubSystem):
         x, y = self._ai_frac_to_pixel(x_frac, y_frac)
         self._root.radio.burst(MouseEvent(event_type=0, x=x, y=y, button=0, delta=0))
 
-    def ai_mouse_press(self, button: str = 'left'):
+    def ai_mouse_move_rel(self, dx_frac: float, dy_frac: float):
+        """Move the pointer *by* a fraction of the canvas the AI sees (through
+        the same viewport mapping as absolute moves). Unlike ai_mouse_move,
+        repeated small moves add up on screens that don't re-centre the
+        pointer (menus, inventories)."""
         if self.input_source != 'ai':
             return
-        code = {v: k for k, v in self._AI_BUTTON_NAMES.items()}.get(button, 1)
-        x, y = self._ai_frac_to_pixel(self._ai_mouse_x, self._ai_mouse_y)
-        self._root.radio.burst(MouseEvent(event_type=1, x=x, y=y, button=code, delta=0))
+        x0, y0 = self._ai_frac_to_screen(0.5, 0.5)
+        x1, y1 = self._ai_frac_to_screen(0.5 + dx_frac, 0.5 + dy_frac)
+        dx, dy = round(x1 - x0), round(y1 - y0)  # round once: no truncation drift over many moves
+        if dx or dy:
+            self._root.radio.burst(MouseMoveRel(dx=dx, dy=dy))
 
-    def ai_mouse_release(self, button: str = 'left'):
+    def _ai_frac_to_screen(self, x_frac: float, y_frac: float) -> tuple:
+        """Canvas fractions -> screen pixels as floats (no clamping or
+        rounding), through the viewport like _ai_frac_to_pixel."""
+        dims = self._viewport_dims()
+        if dims is not None:
+            x_frac, y_frac = self.viewport.inverse_map(x_frac, y_frac, *dims)
+        return x_frac * self._screen_width, y_frac * self._screen_height
+
+    def _ai_button_event(self, event_type: int, button: str, at_current: bool):
+        code = {v: k for k, v in self._AI_BUTTON_NAMES.items()}.get(button, 1)
+        if at_current:
+            x = y = MOUSE_AT_CURRENT
+        else:
+            x, y = self._ai_frac_to_pixel(self._ai_mouse_x, self._ai_mouse_y)
+        self._root.radio.burst(MouseEvent(event_type=event_type, x=x, y=y, button=code, delta=0))
+
+    def ai_mouse_press(self, button: str = 'left', at_current: bool = False):
+        """at_current: press where the pointer is (after relative moves),
+        instead of first moving it to the last absolute position."""
         if self.input_source != 'ai':
             return
-        code = {v: k for k, v in self._AI_BUTTON_NAMES.items()}.get(button, 1)
-        x, y = self._ai_frac_to_pixel(self._ai_mouse_x, self._ai_mouse_y)
-        self._root.radio.burst(MouseEvent(event_type=2, x=x, y=y, button=code, delta=0))
+        self._ai_button_event(1, button, at_current)
+
+    def ai_mouse_release(self, button: str = 'left', at_current: bool = False):
+        if self.input_source != 'ai':
+            return
+        self._ai_button_event(2, button, at_current)
 
     def ai_scroll(self, delta: int):
         if self.input_source != 'ai':

@@ -519,7 +519,8 @@ class MouseEvent(BufferBase):
     """Server -> desktop client: one mouse event to replay via pyautogui.
 
     event_type: 0=move  1=press(button down)  2=release(button up)  3=scroll
-    x, y: absolute position for move/press/release (ignored for scroll).
+    x, y: absolute position for move/press/release (ignored for scroll);
+          MOUSE_AT_CURRENT for both: press/release where the pointer is.
     button: 0=left 1=right 2=middle (ignored for move/scroll).
     delta: scroll amount for scroll events (ignored otherwise).
     """
@@ -530,6 +531,26 @@ class MouseEvent(BufferBase):
         self.event_type = event_type
         self.x = x; self.y = y
         self.button = button; self.delta = delta
+
+
+# MouseEvent x and y equal to this mean "where the pointer already is"
+# (press/release without moving first).
+MOUSE_AT_CURRENT = 0xFFFFFFFF
+
+
+class MouseMoveRel(BufferBase):
+    """Server -> desktop client: move the pointer *by* (dx, dy) screen pixels.
+
+    Games that capture the mouse re-centre the pointer every frame, so there
+    an absolute move near the centre works too; menus and other GUI screens
+    don't, and only a relative move lets repeated small moves add up there.
+    """
+    type_list    = [SInt32]
+    field_codecs = [_int32]
+
+    def __init__(self, dx: SInt32, dy: SInt32):
+        self.dx = dx
+        self.dy = dy
 
 
 class ReadSelectionRequest(BufferBase):

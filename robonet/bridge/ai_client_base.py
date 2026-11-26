@@ -158,9 +158,18 @@ class RobonetAIClient(ABC):
     def send_mouse_move(self, x_frac: float, y_frac: float) -> bool:
         return self.bridge.send({'event': 'mouse_move', 'x': float(x_frac), 'y': float(y_frac)})
 
-    def send_mouse_button(self, button: str, pressed: bool) -> bool:
-        """button: 'left' | 'right' | 'middle'"""
-        return self.bridge.send({'event': 'mouse_button', 'button': button, 'pressed': bool(pressed)})
+    def send_mouse_move_rel(self, dx_frac: float, dy_frac: float) -> bool:
+        """Move the pointer by a fraction of the frame. Repeated small moves add
+        up on screens that don't re-centre the pointer (menus, inventories);
+        in games that do, it is the same as an absolute move near the centre."""
+        return self.bridge.send({'event': 'mouse_move_rel', 'dx': float(dx_frac), 'dy': float(dy_frac)})
+
+    def send_mouse_button(self, button: str, pressed: bool, at_current: bool = False) -> bool:
+        """button: 'left' | 'right' | 'middle'. at_current: click where the
+        pointer is (use with send_mouse_move_rel) instead of at the last
+        absolute position."""
+        return self.bridge.send({'event': 'mouse_button', 'button': button, 'pressed': bool(pressed),
+                                 'at_current': bool(at_current)})
 
     def send_scroll(self, delta: int) -> bool:
         return self.bridge.send({'event': 'scroll', 'delta': int(delta)})

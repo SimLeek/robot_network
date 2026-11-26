@@ -14,7 +14,7 @@ import time
 import numpy as np
 
 from robonet.buffers.buffer_objects import (
-    KeyEvent, MouseEvent, RobotCapabilities, ReadSelectionRequest, SelectionText,
+    KeyEvent, MouseEvent, MouseMoveRel, MOUSE_AT_CURRENT, RobotCapabilities, ReadSelectionRequest, SelectionText,
 )
 from robonet.desktop_control_spec import DESKTOP_CONTROL_INTERFACE_SPEC, AI_SUPPORTED_KEYS
 from robonet.endpoint.desktop_capture import DesktopCaptureError
@@ -218,6 +218,7 @@ class DesktopHw(MultiAVRobotHardware):
         return super().handlers | {
             'KeyEvent': self._on_key_event,
             'MouseEvent': self._on_mouse_event,
+            'MouseMoveRel': self._on_mouse_move_rel,
             'ReadSelectionRequest': self._on_read_selection_request,
         }
 
@@ -251,10 +252,16 @@ class DesktopHw(MultiAVRobotHardware):
             if obj.event_type == 0:      # move
                 pyautogui.moveTo(obj.x, obj.y)
             elif obj.event_type == 1:    # press
-                pyautogui.mouseDown(x=obj.x, y=obj.y, button=button)
+                if obj.x == MOUSE_AT_CURRENT and obj.y == MOUSE_AT_CURRENT:
+                    pyautogui.mouseDown(button=button)
+                else:
+                    pyautogui.mouseDown(x=obj.x, y=obj.y, button=button)
                 self._held_buttons.add(button)
             elif obj.event_type == 2:    # release
-                pyautogui.mouseUp(x=obj.x, y=obj.y, button=button)
+                if obj.x == MOUSE_AT_CURRENT and obj.y == MOUSE_AT_CURRENT:
+                    pyautogui.mouseUp(button=button)
+                else:
+                    pyautogui.mouseUp(x=obj.x, y=obj.y, button=button)
                 self._held_buttons.discard(button)
             elif obj.event_type == 3:    # scroll
                 pyautogui.scroll(obj.delta)
@@ -262,6 +269,14 @@ class DesktopHw(MultiAVRobotHardware):
             log.warning('pyautogui failsafe triggered (mouse in corner) -- ignoring mouse event')
         except Exception as e:
             log.error(f'MouseEvent replay failed (type={obj.event_type}): {e}')
+
+    def _on_mouse_move_rel(self, hostname: str, obj: MouseMoveRel):
+        try:
+            pyautogui.moveRel(obj.dx, obj.dy)
+        except pyautogui.FailSafeException:
+            log.warning('pyautogui failsafe triggered (mouse in corner) -- ignoring mouse move')
+        except Exception as e:
+            log.error(f'MouseMoveRel replay failed: {e}')
 
     def _on_read_selection_request(self, hostname: str, obj: ReadSelectionRequest):
         """Runs xsel to read the X11 PRIMARY selection (whatever's
