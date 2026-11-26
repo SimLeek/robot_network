@@ -108,6 +108,26 @@ class TestAIActions(unittest.TestCase):
         self.assertEqual(ai.recent_actions[-1]['event'], 'scroll')
 
 
+class TestDesktopKeepalive(unittest.TestCase):
+    def test_refresh_loop_sends_an_empty_sparse_vector_for_the_endpoint_watchdog(self):
+        import asyncio
+        from robonet.buffers.buffer_objects import SparseVectorBuffer
+        ai, desk, root = _ai_with_desktop()
+        desk._running = True
+
+        async def run_briefly():
+            task = asyncio.ensure_future(desk._key_refresh_loop())
+            await asyncio.sleep(0.05)
+            desk._running = False
+            await asyncio.sleep(0.3)
+            task.cancel()
+
+        asyncio.run(run_briefly())
+        sent = [e for e in _bursts(root) if isinstance(e, SparseVectorBuffer)]
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(len(sent[0].val), 0)
+
+
 class _Client(RobonetAIClient):
     def on_robonet_start(self): pass
     def on_robonet_shutdown(self): pass

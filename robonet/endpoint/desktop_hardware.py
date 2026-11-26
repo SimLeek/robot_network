@@ -22,7 +22,8 @@ from robonet.killswitch import KILL_COMBO  # always blocked: robonet must never 
 from robonet.endpoint.hardware_system import MultiAVRobotHardware
 from robonet.endpoint.radio_system import HOSTNAME
 from robonet.gst_io.devices import find_camera_devices, get_first_mic_device, get_first_speaker_device, DeviceNotFoundError
-from robonet.gst_io.streamer_unencrypted import VIDEO_SOURCE_XIMAGESRC, AUDIO_SOURCE_DESKTOP_MIX
+from robonet.gst_io.streamer_unencrypted import (
+    VIDEO_SOURCE_XIMAGESRC, AUDIO_SOURCE_DESKTOP_MIX, AUDIO_SOURCE_DESKTOP_MONITOR)
 import robonet.endpoint.settings as settings_
 
 settings = settings_.get()
@@ -150,7 +151,12 @@ class DesktopHw(MultiAVRobotHardware):
         # stays the default active input. A standalone mic entry is
         # added alongside it as a selectable alternative (mic-only,
         # without desktop audio mixed in).
-        audio_inputs = {DESKTOP_AUDIO_IN_ID: AUDIO_SOURCE_DESKTOP_MIX}
+        try:
+            mix_mic = bool(settings['desktop_audio_include_mic'])
+        except KeyError:
+            mix_mic = True
+        audio_inputs = {DESKTOP_AUDIO_IN_ID: AUDIO_SOURCE_DESKTOP_MIX if mix_mic
+                        else AUDIO_SOURCE_DESKTOP_MONITOR}
         mic_device = mic or settings['mic_device']
         if mic_device is None:
             try:

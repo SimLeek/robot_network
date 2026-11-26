@@ -14,7 +14,9 @@ from typing import Dict, Optional
 from robonet.brain.util.action_factory import ActionFactory
 from robonet.brain.util.system_base import SubSystem
 from robonet.brain.util.viewport import Viewport
-from robonet.buffers.buffer_objects import KeyEvent, MouseEvent, ReadSelectionRequest
+import numpy as np
+
+from robonet.buffers.buffer_objects import KeyEvent, MouseEvent, ReadSelectionRequest, SparseVectorBuffer
 from robonet.logging_setup import setup_logging
 
 log = setup_logging()
@@ -40,6 +42,7 @@ from robonet.desktop_control_spec import (
 # key not refreshed within its KEY_WATCHDOG_TIMEOUT_S (1.0s = 4 missed
 # refreshes).
 KEY_REFRESH_INTERVAL_S = 0.25
+KEEPALIVE_EVERY_N_REFRESHES = 4  # one keepalive per second; endpoint WATCHDOG_TIMEOUT is 10 s
 
 AI_NEURON_MOUSE_X = 0
 AI_NEURON_MOUSE_Y = 1
@@ -436,9 +439,21 @@ class DesktopSubSystem(SubSystem):
         for name, mods_s in list(self._held_keys_brain.items()):
             self._root.radio.burst(KeyEvent(key=name, pressed=True, modifiers=mods_s))
 
+    def _send_keepalive(self):
+        """The endpoint's radio watchdog stops streaming after 10 s
+        without a SparseVectorBuffer (the robot control path) -- the
+        desktop path sends key/mouse events only when something
+        happens, so send an empty one regularly."""
+        self._root.radio.burst(SparseVectorBuffer(np.asarray([], dtype=np.uint32),
+                                                  np.asarray([], dtype=np.float32)))
+
     async def _key_refresh_loop(self):
+        ticks = 0
         while self._running:
             self._refresh_held_keys()
+            if ticks % KEEPALIVE_EVERY_N_REFRESHES == 0:
+                self._send_keepalive()
+            ticks += 1
             await asyncio.sleep(KEY_REFRESH_INTERVAL_S)
 
     def async_loops(self, sm: 'ServerSystem'):

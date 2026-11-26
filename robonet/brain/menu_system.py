@@ -18,7 +18,7 @@ from robonet.buffers.buffer_objects import MJpegCamFrame, RobotStart
 import robonet.brain.settings as settings_
 from robonet.gst_io.devices import get_first_mic_device, DeviceNotFoundError
 from robonet.gst_io.receiver_unencrypted import GstReceiver
-from robonet.gst_io.streamer_unencrypted import GstSender
+from robonet.gst_io.streamer_unencrypted import GstSender, BRAIN_VIDEO_PORT, BRAIN_AUDIO_PORT
 from robonet.logging_setup import setup_logging
 
 log = setup_logging()
@@ -86,7 +86,9 @@ class MenuSubSystem(SubSystem):
 
         self._gst_sender = GstSender(src_device=None,
                                      mic_device=mic,
-                                     sample_rate=48000)
+                                     sample_rate=48000,
+                                     video_port=BRAIN_VIDEO_PORT,
+                                     audio_port=BRAIN_AUDIO_PORT)
         self._gst_receiver = GstReceiver(recv_img_callback=self.on_img,
                                          recv_audio_callback=self.on_audio,
                                          play_locally=settings["play_audio"],

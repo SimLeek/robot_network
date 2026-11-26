@@ -67,6 +67,11 @@ stops sending heartbeats for 5 s.
 and `status.jsonl` every `--monitor-interval` seconds, for watching a
 headless run over ssh.
 
+If the desktop audio arrives silent, the default source (mic) may be
+delivering nothing and starving the mixer: set
+`"desktop_audio_include_mic": false` in `~/.robotar/settings.json` to
+send the default sink's monitor alone.
+
 ### Blocked keys and the kill switch
 
 The endpoint refuses key presses that complete a combo listed in

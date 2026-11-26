@@ -41,6 +41,11 @@ _SETTINGS: dict[str, Any] = {
     # the list is already held). Left/right variants collapse to one
     # name: shift, ctrl, alt, win. E.g. [["f11"], ["alt", "f4"]].
     "blocked_key_combos": [],
+
+    # Mix the default mic into the desktop audio stream. Turn off when the
+    # default source delivers nothing (e.g. an unplugged analog input) --
+    # it starves the mixer and the stream goes silent.
+    "desktop_audio_include_mic": True,
 }
 
 _DEFAULT_PATH = Path.home() / ".robotar" / "settings.json"
