@@ -28,6 +28,7 @@ from robonet.brain.util.network_scanner import Endpoint
 
 def _make_radio(scanner_endpoint_type='unknown'):
     radio = RadioSubSystem.__new__(RadioSubSystem)
+    radio._mode = None
     radio._endpoints = {}
     radio.root = MagicMock()
     radio.burst = MagicMock()
@@ -133,6 +134,7 @@ class TestSelectionTextHandler(unittest.TestCase):
 
     def _make_radio_for_selection(self):
         radio = RadioSubSystem.__new__(RadioSubSystem)
+        radio._mode = None
         return radio
 
     def test_forwards_to_ai_when_one_is_attached(self):

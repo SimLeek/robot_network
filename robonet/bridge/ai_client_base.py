@@ -43,6 +43,8 @@ class RobonetAIClient(ABC):
         self._heartbeat_interval_s = heartbeat_interval_s
         self._last_heartbeat_sent: float = 0.0
         self.brain_health: Optional[dict] = None  # last {'channels': {...}} received via on_robonet_health
+        self._last_counts: dict = {}  # (label, segment) -> write_count last delivered
+        self.channel_info: dict = {}  # label -> {'shape': tuple, 'dtype': str}, from 'frame_info' events
 
     # -- required: every AI implementation must decide what these mean to it --
 
@@ -122,9 +124,13 @@ class RobonetAIClient(ABC):
                 if not self._running:
                     break
 
-            for label, channel in self.bridge.channels.items():
+            for label, channel in list(self.bridge.channels.items()):
+                count = channel.write_count()
+                if count == self._last_counts.get((label, channel.name)):
+                    continue  # nothing new since the last read -- don't redeliver
                 data = channel.read()
                 if data is not None:
+                    self._last_counts[(label, channel.name)] = count
                     self.on_channel_data(label, data)
 
             now = time.time()
@@ -141,8 +147,38 @@ class RobonetAIClient(ABC):
         a signal robonet can act on (or not)."""
         return self.bridge.send({'event': 'want_control', 'value': value})
 
+    # -- actions: carried out by the brain only while this AI has control
+    # (set_want_control('ai')). Mouse positions are fractions (0..1) of
+    # the frame this AI receives on the video channel.
+
+    def send_key(self, key: str, pressed: bool, modifiers: str = '') -> bool:
+        return self.bridge.send({'event': 'key', 'key': key, 'pressed': bool(pressed),
+                                 'modifiers': modifiers})
+
+    def send_mouse_move(self, x_frac: float, y_frac: float) -> bool:
+        return self.bridge.send({'event': 'mouse_move', 'x': float(x_frac), 'y': float(y_frac)})
+
+    def send_mouse_button(self, button: str, pressed: bool) -> bool:
+        """button: 'left' | 'right' | 'middle'"""
+        return self.bridge.send({'event': 'mouse_button', 'button': button, 'pressed': bool(pressed)})
+
+    def send_scroll(self, delta: int) -> bool:
+        return self.bridge.send({'event': 'scroll', 'delta': int(delta)})
+
+    def send_token(self, token: int) -> bool:
+        """One of robonet.brain.desktop_system's AI_TOKEN_* (zoom, pan,
+        view reset, read selection, mouse buttons)."""
+        return self.bridge.send({'event': 'token', 'token': int(token)})
+
     def _dispatch(self, msg) -> None:
         event = msg.get('event') if isinstance(msg, dict) else None
+        if event == 'channels':
+            self.bridge.attach(msg.get('channels', []))
+            return
+        if event == 'frame_info':
+            self.channel_info[msg.get('label')] = {'shape': tuple(msg.get('shape')),
+                                                   'dtype': msg.get('dtype')}
+            return
         if event == 'start':
             self.on_robonet_start()
         elif event == 'shutdown':

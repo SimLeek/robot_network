@@ -40,6 +40,11 @@ log = setup_logging()
 
 VIDEO_PORT  = 5600
 AUDIO_PORT  = 5601
+# What the brain sends to an endpoint (its own audio) goes to different
+# ports, so a brain and an endpoint on the same machine don't both listen
+# on 5601 -- whichever bound first used to receive the other's stream.
+BRAIN_VIDEO_PORT = 5602
+BRAIN_AUDIO_PORT = 5603
 
 BITRATE_DEFAULT = 2_000_000
 
@@ -156,7 +161,8 @@ class _VideoPipeline:
     """
 
     def __init__(self, src_device, enc_name, video_codec,
-                 receiver_ip, width, height, fps, bitrate):
+                 receiver_ip, width, height, fps, bitrate, port: int = VIDEO_PORT):
+        self._port        = port
         self._src_device  = src_device
         self._enc_name    = enc_name
         self._video_codec = video_codec
@@ -192,7 +198,9 @@ class _VideoPipeline:
         capsflt.set_property('caps', Gst.Caps.from_string(
             f'video/x-raw,width={self._width},height={self._height},'
             f'framerate={self._fps}/1'))
-        outcaps.set_property('caps', Gst.Caps.from_string('video/x-raw,format=I420'))
+        # GStreamer >= 1.22's nvcodec encoders take NV12/BGRx/..., not I420.
+        fmt = 'NV12' if self._enc_name in ('nvh264enc', 'nvh265enc') else 'I420'
+        outcaps.set_property('caps', Gst.Caps.from_string(f'video/x-raw,format={fmt}'))
         pay.set_property('pt', 96)
         if self._video_codec == 'h264':
             pay.set_property('config-interval', 1)
@@ -217,8 +225,15 @@ class _VideoPipeline:
                 enc.set_property('zerolatency', True)
             except TypeError:
                 pass  # property availability varies across plugin versions
+        # A keyframe every second: a lost packet corrupts the picture
+        # only until the next one (defaults are 75-90 frames).
+        if self._enc_name in ('nvh264enc', 'nvh265enc', 'openh264enc'):
+            try:
+                enc.set_property('gop-size', max(1, int(self._fps)))
+            except TypeError:
+                pass
         sink.set_property('host', self._receiver_ip)
-        sink.set_property('port', VIDEO_PORT)
+        sink.set_property('port', self._port)
         sink.set_property('sync', False)
 
         for el in (src, scale, capsflt, conv, outcaps, vq, enc, pay, sink):
@@ -314,6 +329,11 @@ class _VideoPipeline:
 
 
 AUDIO_SOURCE_DESKTOP_MIX = 'desktop-audio-mix'
+# The default sink's monitor alone (no mic). A live mic branch that
+# delivers nothing (e.g. an unplugged analog input) starves the
+# audiomixer and the mix comes out silent.
+AUDIO_SOURCE_DESKTOP_MONITOR = 'desktop-audio-monitor'
+_DESKTOP_SOURCES = (AUDIO_SOURCE_DESKTOP_MIX, AUDIO_SOURCE_DESKTOP_MONITOR)
 
 
 def _pactl_get_default(field: str) -> Optional[str]:
@@ -359,7 +379,8 @@ class _AudioPipeline:
     def __init__(self, mic_device, enc_name, audio_codec,
                 server_ip, sample_rate, array_source: Optional[np.ndarray] = None,
                 on_array_complete: Optional[Callable[[], None]] = None,
-                streaming: bool = False, channels: int = 1):
+                streaming: bool = False, channels: int = 1, port: int = AUDIO_PORT):
+        self._port        = port
         self._mic_device  = mic_device
         self._enc_name    = enc_name
         self._audio_codec = audio_codec
@@ -392,13 +413,13 @@ class _AudioPipeline:
         self._feed_stop = threading.Event()
         self._effective_rate = sample_rate
 
-    def _build_desktop_mix_source(self, p: Gst.Pipeline) -> Optional[Gst.Element]:
+    def _build_desktop_mix_source(self, p: Gst.Pipeline, include_mic: bool = True) -> Optional[Gst.Element]:
         """Builds the audiomixer + pulsesrc branches, returns the mixer
         element (the thing the shared chain links from), or None if
         neither a monitor nor a mic could be found."""
         sink = _pactl_get_default('sink')
         monitor = f'{sink}.monitor' if sink else None
-        mic = _pactl_get_default('source')
+        mic = _pactl_get_default('source') if include_mic else None
         if mic and monitor and mic == monitor:
             mic = None  # don't double up if "source" is the monitor itself
 
@@ -436,7 +457,7 @@ class _AudioPipeline:
 
     def build(self) -> bool:
         p = Gst.Pipeline.new('audio-send')
-        is_desktop_mix = (self._mic_device == AUDIO_SOURCE_DESKTOP_MIX)
+        is_desktop_mix = (self._mic_device in _DESKTOP_SOURCES)
 
         capsflt = Gst.ElementFactory.make('capsfilter', 'acaps')
         enc     = Gst.ElementFactory.make(self._enc_name, 'aenc')
@@ -471,7 +492,7 @@ class _AudioPipeline:
         aq.set_property('max-size-bytes', 0)
 
         sink.set_property('host', self._server_ip)
-        sink.set_property('port', AUDIO_PORT)
+        sink.set_property('port', self._port)
         sink.set_property('sync', False)
 
         for el in (capsflt, enc, pay, sink, conv, resample, aq):
@@ -479,7 +500,8 @@ class _AudioPipeline:
 
         # Source selection
         if is_desktop_mix:
-            src_out = self._build_desktop_mix_source(p)
+            src_out = self._build_desktop_mix_source(
+                p, include_mic=(self._mic_device == AUDIO_SOURCE_DESKTOP_MIX))
             if src_out is None:
                 return False
         elif self._array_source is not None or self._streaming:
@@ -670,13 +692,20 @@ class GstSender:
     Unencrypted GStreamer sender. Drop-in replacement for the SRTP version.
     """
 
+    _video_port = VIDEO_PORT  # class defaults; __init__ may override
+    _audio_port = AUDIO_PORT
+
     def __init__(self,
                  src_device:  Optional[str] = '/dev/video0',
                  mic_device:  str           = 'default',
                  sample_rate: int           = 48000,
                  width:       int           = 640,
                  height:      int           = 480,
-                 fps:         int           = 60):
+                 fps:         int           = 60,
+                 video_port:  int           = VIDEO_PORT,
+                 audio_port:  int           = AUDIO_PORT):
+        self._video_port  = video_port
+        self._audio_port  = audio_port
         self._src_device  = src_device
         self._mic_device  = mic_device
         self._sample_rate = sample_rate
@@ -736,8 +765,8 @@ class GstSender:
             hostname    = HOSTNAME,
             video_codec = self._video_codec or '',
             audio_codec = self._audio_codec or '',
-            video_port  = VIDEO_PORT,
-            audio_port  = AUDIO_PORT,
+            video_port  = self._video_port,
+            audio_port  = self._audio_port,
             width       = self._width,
             height      = self._height,
             fps         = self._fps,
@@ -759,7 +788,7 @@ class GstSender:
         self._acked = True
 
         if self._src_device and self._receiver_ip and self._video_candidates:
-            log.info(f'[gst] video send -> {self._receiver_ip}:{VIDEO_PORT} from {self._src_device}')
+            log.info(f'[gst] video send -> {self._receiver_ip}:{self._video_port} from {self._src_device}')
             self._vpipe = self._start_video_pipeline()
             if self._vpipe is None:
                 log.error('[gst] all video encoders failed probe -- no video will be sent')
@@ -769,7 +798,7 @@ class GstSender:
                      f'device={self._src_device!r}, server={self._receiver_ip!r})')
 
         if self._receiver_ip and self._audio_candidates:
-            log.info(f'[gst] audio send -> {self._receiver_ip}:{AUDIO_PORT} from {self._mic_device}')
+            log.info(f'[gst] audio send -> {self._receiver_ip}:{self._audio_port} from {self._mic_device}')
             self._apipe = self._start_audio_pipeline()
             if self._apipe is None:
                 log.error('[gst] all audio encoders failed probe -- no audio will be sent')
@@ -784,7 +813,8 @@ class GstSender:
             pipe = _VideoPipeline(
                 self._src_device, enc_name, codec,
                 self._receiver_ip,
-                self._width, self._height, self._fps, self._bitrate)
+                self._width, self._height, self._fps, self._bitrate,
+                port=self._video_port)
             if not pipe.build():
                 log.warning(f'[gst] {enc_name}: build failed, trying next')
                 continue
@@ -834,13 +864,14 @@ class GstSender:
         # desktop is typically stereo) with automatic fallback to mono
         # if 2 channels genuinely can't be negotiated. Everything else
         # (a specific mic device, brain-side sending) stays mono.
-        channel_candidates = [2, 1] if self._mic_device == AUDIO_SOURCE_DESKTOP_MIX else [1]
+        channel_candidates = [2, 1] if self._mic_device in _DESKTOP_SOURCES else [1]
         for channels in channel_candidates:
             for enc_name, codec in self._audio_candidates:
                 log.info(f'[gst] trying audio encoder: {enc_name} ({channels}ch)')
                 pipe = _AudioPipeline(
                     self._mic_device, enc_name, codec,
-                    self._receiver_ip, self._sample_rate, channels=channels)
+                    self._receiver_ip, self._sample_rate, channels=channels,
+                    port=self._audio_port)
                 if not pipe.build():
                     log.warning(f'[gst] {enc_name}: build failed, trying next')
                     continue
@@ -906,7 +937,8 @@ class GstSender:
 
         pipe = _AudioPipeline(
             self._mic_device, enc_name, codec, self._receiver_ip, sample_rate,
-            array_source=samples, on_array_complete=resume_cb, channels=channels)
+            array_source=samples, on_array_complete=resume_cb, channels=channels,
+            port=self._audio_port)
         if not pipe.build():
             log.error(f'[gst] play_array: {enc_name} build failed')
             return False
@@ -931,7 +963,8 @@ class GstSender:
 
         pipe = _AudioPipeline(
             self._mic_device, enc_name, codec, self._receiver_ip, sample_rate,
-            on_array_complete=resume_cb, streaming=True, channels=channels)
+            on_array_complete=resume_cb, streaming=True, channels=channels,
+            port=self._audio_port)
         if not pipe.build():
             log.error(f'[gst] start_audio_stream: {enc_name} build failed')
             return None

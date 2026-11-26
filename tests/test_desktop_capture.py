@@ -75,8 +75,23 @@ class TestDesktopHwConstruction(unittest.TestCase):
 
     def test_construction_uses_desktop_audio_mix_directly(self):
         from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_DESKTOP_MIX
-        hw = self._construct()
+        orig = self._settings['desktop_audio_include_mic']
+        self._settings['desktop_audio_include_mic'] = True
+        try:
+            hw = self._construct()
+        finally:
+            self._settings['desktop_audio_include_mic'] = orig
         self.assertEqual(hw._audio_inputs['desktop-audio'], AUDIO_SOURCE_DESKTOP_MIX)
+
+    def test_construction_uses_the_monitor_alone_when_the_mic_is_excluded(self):
+        from robonet.gst_io.streamer_unencrypted import AUDIO_SOURCE_DESKTOP_MONITOR
+        orig = self._settings['desktop_audio_include_mic']
+        self._settings['desktop_audio_include_mic'] = False
+        try:
+            hw = self._construct()
+        finally:
+            self._settings['desktop_audio_include_mic'] = orig
+        self.assertEqual(hw._audio_inputs['desktop-audio'], AUDIO_SOURCE_DESKTOP_MONITOR)
 
     def test_construction_raises_clear_error_when_pyautogui_unavailable(self):
         with patch('robonet.endpoint.desktop_hardware.pyautogui', None), \

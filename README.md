@@ -45,9 +45,47 @@ every key and its default).
 
 ### AI Control
 
-A default AI interface hasn't been created yet. 
-It would require modifying main, 
-and then would need to be modified for any specific AIs
+The brain hosts a shared-memory bridge (`robonet/bridge/`) that a separate
+AI process attaches to. Run the brain headless and point it at the
+endpoint on the same machine:
+
+```
+# ~/.robobrain/settings.json: {"auto_connect_priority": ["localhost"]}
+python -m examples.desktop.desktop_endpoint                     # on the X display
+python -m robonet.brain.main --headless --monitor-dir ~/robonet_monitor
+python -m examples.bridge_ai_smoke                              # or your AI
+```
+
+An AI subclasses `RobonetAIClient` (`robonet/bridge/ai_client_base.py`):
+frames arrive in `on_channel_data` (shape/dtype in `self.channel_info`),
+and `set_want_control('ai')` + `send_key` / `send_mouse_move` /
+`send_mouse_button` / `send_scroll` / `send_token` drive the endpoint.
+Control returns to the human (and held keys are released) if the AI
+stops sending heartbeats for 5 s.
+
+`--monitor-dir` writes `frame.png` (what the AI sees), `status.json`
+and `status.jsonl` every `--monitor-interval` seconds, for watching a
+headless run over ssh.
+
+If the desktop audio arrives silent, the default source (mic) may be
+delivering nothing and starving the mixer: set
+`"desktop_audio_include_mic": false` in `~/.robotar/settings.json` to
+send the default sink's monitor alone.
+
+### Blocked keys and the kill switch
+
+The endpoint refuses key presses that complete a combo listed in
+`~/.robotar/settings.json`, e.g.
+
+```
+{"blocked_key_combos": [["f11"], ["alt", "f4"], ["ctrl", "alt", "f2"]]}
+```
+
+`python -m robonet.killswitch` (in the endpoint's X session) stops every
+robot_network python process when Ctrl+Alt+Shift+F12 is pressed on the
+physical keyboard, then releases all keys and mouse buttons. The endpoint
+always blocks that combo, so nothing sent through robonet can trigger it.
+`python -m robonet.killswitch --now` does the same from a shell (e.g. ssh).
 
 ## Running -- endpoint side
 

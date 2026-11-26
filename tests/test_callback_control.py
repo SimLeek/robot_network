@@ -149,11 +149,13 @@ class TestRobotControlPath(unittest.TestCase):
 
 
 class _FakeDesktopHw:
-    """Minimal DesktopHw stand-in: just the two attributes
+    """Minimal DesktopHw stand-in: just the attributes
     _on_key_event/_on_mouse_event actually touch."""
     def __init__(self):
         self._held_keys = {}
         self._held_buttons = set()
+        self.blocked_combos = []
+        self.blocked_presses = 0
 
 
 class TestDesktopControlPath(unittest.TestCase):

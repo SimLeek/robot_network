@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 from robonet.buffers.buffer_objects import GstStreamInfo, GstStreamInfoAck
 from robonet.logging_setup import setup_logging
 
+VIDEO_RECV_BUFFER_BYTES = 4 * 1024 * 1024
+
 log = setup_logging()
 
 
@@ -111,6 +113,11 @@ class _VideoRecvPipeline:
             return False
 
         src.set_property('port', self._info.video_port)
+        # A 1080p keyframe is many UDP packets at once; the default
+        # ~200 KB socket buffer drops some, and the decoder then shows
+        # corrupt frames until the next keyframe. (Capped by
+        # net.core.rmem_max.)
+        src.set_property('buffer-size', VIDEO_RECV_BUFFER_BYTES)
         src.set_property('caps', Gst.Caps.from_string(
             f'application/x-rtp,media=video,clock-rate=90000,'
             f'encoding-name={codec.upper()},payload=96'))
